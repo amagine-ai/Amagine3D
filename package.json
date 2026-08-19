@@ -1,0 +1,36 @@
+{
+  "name": "amagine3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "architecture:check": "node scripts/check-architecture.mjs",
+    "browser-security:check": "node scripts/check-browser-security.mjs",
+    "build": "pnpm --recursive --if-present run build",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run policy:check && pnpm run licenses:check && pnpm run typecheck && pnpm run test && pnpm run build",
+    "dev": "pnpm --filter @amagine3d/web dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "licenses:check": "node scripts/check-licenses.mjs",
+    "licenses:generate": "node scripts/generate-npm-license-report.mjs",
+    "lint": "eslint .",
+    "policy:check": "pnpm run architecture:check && pnpm run browser-security:check",
+    "smoke:deterministic": "vitest run packages/cad-agent/src/server/cad-agent.test.ts packages/cad-execution-browser/src/golden-fixtures.test.ts packages/cad-storage-opfs/src/execution-persistence.test.ts packages/cad-viewer/src/viewer-model.test.ts",
+    "test": "vitest run",
+    "typecheck": "pnpm --recursive --if-present run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.2.0",
+    "eslint": "10.8.1",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.9.6",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.10"
+  }
+}

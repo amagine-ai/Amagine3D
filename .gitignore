@@ -1,0 +1,18 @@
+node_modules/
+.pnpm-store/
+dist/
+.next/
+coverage/
+.devtools/
+apps/web/public/cad-runtime/
+apps/web/public/cad-worker.mjs
+apps/web/public/showcase/amagine3d-pomodoro/
+test-results/
+/tests/
+*.tsbuildinfo
+.env*
+!.env.example
+.DS_Store
+
+# Local design-review evidence and feasibility notes
+

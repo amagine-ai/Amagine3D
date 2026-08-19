@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+
+catalog:
+  ai: 7.0.62
+  zod: 4.4.3
+
+minimumReleaseAge: 1440
+
+autoInstallPeers: false
+
+allowBuilds:
+  esbuild: true

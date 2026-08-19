@@ -1,0 +1,40 @@
+{
+  "name": "@amagine3d/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "bundled-projects:prepare": "node scripts/prepare-bundled-projects.mjs",
+    "cad-runtime:assets": "node scripts/prepare-cad-runtime.mjs",
+    "cad-runtime:prepare": "pnpm run bundled-projects:prepare && pnpm run cad-runtime:assets && pnpm run cad-worker:build",
+    "cad-worker:build": "node scripts/build-cad-worker.mjs",
+    "prebuild": "pnpm run cad-runtime:prepare",
+    "predev": "pnpm run cad-runtime:prepare",
+    "build": "next build",
+    "dev": "node scripts/run-next.mjs dev",
+    "start": "node scripts/run-next.mjs start",
+    "test": "vitest run --root ../.. --config vitest.config.ts --passWithNoTests apps/web/src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "4.0.65",
+    "@amagine3d/cad-agent": "workspace:*",
+    "@amagine3d/cad-execution-browser": "workspace:*",
+    "@amagine3d/cad-protocol": "workspace:*",
+    "@amagine3d/cad-storage-opfs": "workspace:*",
+    "@amagine3d/cad-viewer": "workspace:*",
+    "@amagine3d/web-research": "workspace:*",
+    "@fontsource-variable/ibm-plex-sans": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "ai": "catalog:",
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@ai-sdk/devtools": "1.0.11",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "esbuild": "0.28.2"
+  }
+}

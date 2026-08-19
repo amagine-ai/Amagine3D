@@ -1,0 +1,86 @@
+/* Amagine3D visual system · precise neutral workspace */
+:root {
+  --font-display:
+    'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', ui-sans-serif, sans-serif;
+  --font-body: var(--font-display);
+  --font-mono:
+    'Geist Mono', 'JetBrains Mono Variable', 'SFMono-Regular', Consolas,
+    ui-monospace, monospace;
+
+  --color-paper: #fafafa;
+  --color-paper-raised: #ffffff;
+  --color-paper-sunken: #f5f5f5;
+  --color-shell: #ebebeb;
+  --color-shell-highlight: rgb(255 255 255 / 0.9);
+  --color-elevated: #ffffff;
+  --color-canvas: #fafafa;
+  --color-canvas-grid: #e8e8e8;
+  --color-ink: #171717;
+  --color-ink-soft: #4d4d4d;
+  --color-muted: #888888;
+  --color-rule: #ebebeb;
+  --color-rule-strong: #a1a1a1;
+  --color-fill: #f5f5f5;
+  --color-fill-strong: #ebebeb;
+  --color-bubble: #f5f5f5;
+  --color-primary: #171717;
+  --color-primary-hover: #333333;
+  --color-primary-ink: #ffffff;
+  --color-accent: #0070f3;
+  --color-accent-soft: #eef6ff;
+  --color-accent-ink: #ffffff;
+  --color-accent-selection: #d3e5ff;
+  --color-focus: #0070f3;
+  --color-selection: #0070f3;
+  --color-error: #ee0000;
+  --color-error-soft: #fff1f1;
+  --color-success: #0a7d38;
+  --color-success-soft: #edf9f1;
+  --color-loading: var(--color-accent);
+  --color-loading-soft: var(--color-accent-soft);
+  --color-overlay: rgb(0 0 0 / 0.28);
+  --color-shadow: rgb(0 0 0 / 0.09);
+  --color-shadow-soft: rgb(0 0 0 / 0.055);
+  --color-shadow-deep: rgb(0 0 0 / 0.14);
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-md: 1.25rem;
+  --text-lg: 1.5625rem;
+  --text-xl: 1.9531rem;
+  --text-display: clamp(2.25rem, 5vw + 0.5rem, 4.5rem);
+
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.76, 0, 0.24, 1);
+  --ease-standard: cubic-bezier(0.22, 0.68, 0, 1);
+  --dur-micro: 180ms;
+  --dur-short: 320ms;
+  --dur-long: 700ms;
+
+  --rule-thin: 1px;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-pill: 999rem;
+
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+}

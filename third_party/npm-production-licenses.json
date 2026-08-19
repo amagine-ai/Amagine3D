@@ -1,0 +1,492 @@
+{
+  "schemaVersion": 2,
+  "source": "pnpm list --prod plus installed package manifests for the release target",
+  "packages": [
+    {
+      "name": "@ai-sdk/gateway",
+      "version": "4.0.49",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "@ai-sdk/mcp",
+      "version": "2.0.31",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "@ai-sdk/openai-compatible",
+      "version": "3.0.30",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "@ai-sdk/provider-utils",
+      "version": "5.0.27",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "@ai-sdk/provider",
+      "version": "4.0.7",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "@ai-sdk/react",
+      "version": "4.0.65",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "@fontsource-variable/ibm-plex-sans",
+      "version": "5.3.0",
+      "license": "OFL-1.1",
+      "homepage": "https://fontsource.org/fonts/ibm-plex-sans"
+    },
+    {
+      "name": "@fontsource-variable/jetbrains-mono",
+      "version": "5.3.0",
+      "license": "OFL-1.1",
+      "homepage": "https://fontsource.org/fonts/jetbrains-mono"
+    },
+    {
+      "name": "@img/colour",
+      "version": "1.1.0",
+      "license": "MIT",
+      "homepage": "https://github.com/lovell/colour"
+    },
+    {
+      "name": "@img/sharp-darwin-arm64",
+      "version": "0.35.3",
+      "license": "Apache-2.0",
+      "homepage": "https://sharp.pixelplumbing.com"
+    },
+    {
+      "name": "@img/sharp-libvips-darwin-arm64",
+      "version": "1.3.2",
+      "license": "LGPL-3.0-or-later",
+      "homepage": "https://sharp.pixelplumbing.com"
+    },
+    {
+      "name": "@next/env",
+      "version": "16.3.0",
+      "license": "MIT",
+      "homepage": "https://github.com/vercel/next.js"
+    },
+    {
+      "name": "@next/swc-darwin-arm64",
+      "version": "16.3.0",
+      "license": "MIT",
+      "homepage": "https://github.com/vercel/next.js"
+    },
+    {
+      "name": "@standard-schema/spec",
+      "version": "1.1.0",
+      "license": "MIT",
+      "homepage": "https://standardschema.dev"
+    },
+    {
+      "name": "@swc/helpers",
+      "version": "0.5.15",
+      "license": "Apache-2.0",
+      "homepage": "https://swc.rs"
+    },
+    {
+      "name": "@tavily/core",
+      "version": "0.7.7",
+      "license": "MIT",
+      "homepage": "https://tavily.com"
+    },
+    {
+      "name": "@types/emscripten",
+      "version": "1.41.5",
+      "license": "MIT",
+      "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/emscripten"
+    },
+    {
+      "name": "@types/node",
+      "version": "26.2.0",
+      "license": "MIT",
+      "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node"
+    },
+    {
+      "name": "@vercel/oidc",
+      "version": "3.2.0",
+      "license": "Apache-2.0",
+      "homepage": "https://vercel.com"
+    },
+    {
+      "name": "@workflow/serde",
+      "version": "4.1.0",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/vercel/workflow"
+    },
+    {
+      "name": "agent-base",
+      "version": "6.0.2",
+      "license": "MIT",
+      "homepage": "https://github.com/TooTallNate/node-agent-base"
+    },
+    {
+      "name": "agent-base",
+      "version": "7.1.4",
+      "license": "MIT",
+      "homepage": "https://github.com/TooTallNate/proxy-agents"
+    },
+    {
+      "name": "ai",
+      "version": "7.0.62",
+      "license": "Apache-2.0",
+      "homepage": "https://ai-sdk.dev/docs"
+    },
+    {
+      "name": "asynckit",
+      "version": "0.4.0",
+      "license": "MIT",
+      "homepage": "https://github.com/alexindigo/asynckit#readme"
+    },
+    {
+      "name": "axios",
+      "version": "1.19.0",
+      "license": "MIT",
+      "homepage": "https://axios-http.com"
+    },
+    {
+      "name": "base64-js",
+      "version": "1.5.1",
+      "license": "MIT",
+      "homepage": "https://github.com/beatgammit/base64-js"
+    },
+    {
+      "name": "baseline-browser-mapping",
+      "version": "2.11.13",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/web-platform-dx/baseline-browser-mapping"
+    },
+    {
+      "name": "call-bind-apply-helpers",
+      "version": "1.0.2",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/call-bind-apply-helpers#readme"
+    },
+    {
+      "name": "caniuse-lite",
+      "version": "1.0.30001809",
+      "license": "CC-BY-4.0",
+      "homepage": "browserslist/caniuse-lite"
+    },
+    {
+      "name": "client-only",
+      "version": "0.0.1",
+      "license": "MIT",
+      "homepage": "https://reactjs.org/"
+    },
+    {
+      "name": "combined-stream",
+      "version": "1.0.8",
+      "license": "MIT",
+      "homepage": "https://github.com/felixge/node-combined-stream"
+    },
+    {
+      "name": "debug",
+      "version": "4.4.3",
+      "license": "MIT",
+      "homepage": "https://github.com/debug-js/debug"
+    },
+    {
+      "name": "delayed-stream",
+      "version": "1.0.0",
+      "license": "MIT",
+      "homepage": "https://github.com/felixge/node-delayed-stream"
+    },
+    {
+      "name": "dequal",
+      "version": "2.0.3",
+      "license": "MIT",
+      "homepage": "lukeed/dequal"
+    },
+    {
+      "name": "detect-libc",
+      "version": "2.1.2",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/lovell/detect-libc"
+    },
+    {
+      "name": "dunder-proto",
+      "version": "1.0.1",
+      "license": "MIT",
+      "homepage": "https://github.com/es-shims/dunder-proto#readme"
+    },
+    {
+      "name": "es-define-property",
+      "version": "1.0.1",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/es-define-property#readme"
+    },
+    {
+      "name": "es-errors",
+      "version": "1.3.0",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/es-errors#readme"
+    },
+    {
+      "name": "es-object-atoms",
+      "version": "1.1.2",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/es-object-atoms#readme"
+    },
+    {
+      "name": "es-set-tostringtag",
+      "version": "2.1.0",
+      "license": "MIT",
+      "homepage": "https://github.com/es-shims/es-set-tostringtag#readme"
+    },
+    {
+      "name": "eventsource-parser",
+      "version": "3.1.1",
+      "license": "MIT",
+      "homepage": "https://github.com/rexxars/eventsource-parser#readme"
+    },
+    {
+      "name": "follow-redirects",
+      "version": "1.16.0",
+      "license": "MIT",
+      "homepage": "https://github.com/follow-redirects/follow-redirects"
+    },
+    {
+      "name": "form-data",
+      "version": "4.0.6",
+      "license": "MIT",
+      "homepage": "https://github.com/form-data/form-data"
+    },
+    {
+      "name": "function-bind",
+      "version": "1.1.2",
+      "license": "MIT",
+      "homepage": "https://github.com/Raynos/function-bind"
+    },
+    {
+      "name": "get-intrinsic",
+      "version": "1.3.0",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/get-intrinsic#readme"
+    },
+    {
+      "name": "get-proto",
+      "version": "1.0.1",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/get-proto#readme"
+    },
+    {
+      "name": "gopd",
+      "version": "1.2.0",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/gopd#readme"
+    },
+    {
+      "name": "has-symbols",
+      "version": "1.1.0",
+      "license": "MIT",
+      "homepage": "https://github.com/ljharb/has-symbols#readme"
+    },
+    {
+      "name": "has-tostringtag",
+      "version": "1.0.2",
+      "license": "MIT",
+      "homepage": "https://github.com/inspect-js/has-tostringtag#readme"
+    },
+    {
+      "name": "hasown",
+      "version": "2.0.4",
+      "license": "MIT",
+      "homepage": "https://github.com/inspect-js/hasOwn#readme"
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "5.0.1",
+      "license": "MIT",
+      "homepage": "https://github.com/TooTallNate/node-https-proxy-agent"
+    },
+    {
+      "name": "https-proxy-agent",
+      "version": "7.0.6",
+      "license": "MIT",
+      "homepage": "https://github.com/TooTallNate/proxy-agents"
+    },
+    {
+      "name": "js-tiktoken",
+      "version": "1.0.21",
+      "license": "MIT",
+      "homepage": "https://github.com/dqbd/tiktoken"
+    },
+    {
+      "name": "json-schema",
+      "version": "0.4.0",
+      "license": "(AFL-2.1 OR BSD-3-Clause)",
+      "homepage": "http://github.com/kriszyp/json-schema"
+    },
+    {
+      "name": "math-intrinsics",
+      "version": "1.1.0",
+      "license": "MIT",
+      "homepage": "https://github.com/es-shims/math-intrinsics#readme"
+    },
+    {
+      "name": "mime-db",
+      "version": "1.52.0",
+      "license": "MIT",
+      "homepage": "jshttp/mime-db"
+    },
+    {
+      "name": "mime-types",
+      "version": "2.1.35",
+      "license": "MIT",
+      "homepage": "jshttp/mime-types"
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "license": "MIT",
+      "homepage": "vercel/ms"
+    },
+    {
+      "name": "nanoid",
+      "version": "3.3.18",
+      "license": "MIT",
+      "homepage": "ai/nanoid"
+    },
+    {
+      "name": "next",
+      "version": "16.3.0",
+      "license": "MIT",
+      "homepage": "https://nextjs.org"
+    },
+    {
+      "name": "picocolors",
+      "version": "1.1.1",
+      "license": "ISC",
+      "homepage": "alexeyraspopov/picocolors"
+    },
+    {
+      "name": "pkce-challenge",
+      "version": "5.0.1",
+      "license": "MIT",
+      "homepage": "https://github.com/crouchcd/pkce-challenge#readme"
+    },
+    {
+      "name": "postcss",
+      "version": "8.5.23",
+      "license": "MIT",
+      "homepage": "https://postcss.org/"
+    },
+    {
+      "name": "proxy-from-env",
+      "version": "2.1.0",
+      "license": "MIT",
+      "homepage": "https://github.com/Rob--W/proxy-from-env#readme"
+    },
+    {
+      "name": "pyodide",
+      "version": "314.0.3",
+      "license": "MPL-2.0",
+      "homepage": "https://github.com/pyodide/pyodide"
+    },
+    {
+      "name": "react-dom",
+      "version": "19.2.8",
+      "license": "MIT",
+      "homepage": "https://react.dev/"
+    },
+    {
+      "name": "react",
+      "version": "19.2.8",
+      "license": "MIT",
+      "homepage": "https://react.dev/"
+    },
+    {
+      "name": "scheduler",
+      "version": "0.27.0",
+      "license": "MIT",
+      "homepage": "https://react.dev/"
+    },
+    {
+      "name": "semver",
+      "version": "7.8.5",
+      "license": "ISC",
+      "homepage": "https://github.com/npm/node-semver"
+    },
+    {
+      "name": "sharp",
+      "version": "0.35.3",
+      "license": "Apache-2.0",
+      "homepage": "https://sharp.pixelplumbing.com"
+    },
+    {
+      "name": "source-map-js",
+      "version": "1.2.1",
+      "license": "BSD-3-Clause",
+      "homepage": "https://github.com/7rulnik/source-map-js"
+    },
+    {
+      "name": "styled-jsx",
+      "version": "5.1.6",
+      "license": "MIT",
+      "homepage": "vercel/styled-jsx"
+    },
+    {
+      "name": "swr",
+      "version": "2.5.1",
+      "license": "MIT",
+      "homepage": "https://swr.vercel.app"
+    },
+    {
+      "name": "three",
+      "version": "0.182.0",
+      "license": "MIT",
+      "homepage": "https://threejs.org/"
+    },
+    {
+      "name": "throttleit",
+      "version": "2.1.0",
+      "license": "MIT",
+      "homepage": "sindresorhus/throttleit"
+    },
+    {
+      "name": "tslib",
+      "version": "2.8.1",
+      "license": "0BSD",
+      "homepage": "https://www.typescriptlang.org/"
+    },
+    {
+      "name": "undici-types",
+      "version": "8.3.0",
+      "license": "MIT",
+      "homepage": "https://undici.nodejs.org"
+    },
+    {
+      "name": "undici",
+      "version": "7.29.0",
+      "license": "MIT",
+      "homepage": "https://undici.nodejs.org"
+    },
+    {
+      "name": "use-sync-external-store",
+      "version": "1.6.0",
+      "license": "MIT",
+      "homepage": "https://github.com/facebook/react"
+    },
+    {
+      "name": "ws",
+      "version": "8.21.3",
+      "license": "MIT",
+      "homepage": "https://github.com/websockets/ws"
+    },
+    {
+      "name": "zod",
+      "version": "4.4.3",
+      "license": "MIT",
+      "homepage": "https://zod.dev"
+    }
+  ]
+}

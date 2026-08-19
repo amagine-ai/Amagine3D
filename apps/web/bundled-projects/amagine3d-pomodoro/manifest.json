@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "name": "focus-bar-logical-assembly",
+  "units": "mm",
+  "colors": {
+    "warm-white": "#EEEDE7",
+    "screen-black": "#111418",
+    "signal-orange": "#F05A35",
+    "control-gray": "#C9C8C2"
+  },
+  "parts": {
+    "housing-shell": [
+      {
+        "file": "housing-shell.stl",
+        "color": "#EEEDE7"
+      }
+    ],
+    "bottom-cover": [
+      {
+        "file": "bottom-cover.stl",
+        "color": "#EEEDE7"
+      }
+    ],
+    "led-module": [
+      {
+        "file": "led-panel.stl",
+        "color": "#111418"
+      },
+      {
+        "file": "led-pixels-white.stl",
+        "color": "#EEEDE7"
+      },
+      {
+        "file": "led-pixels-orange.stl",
+        "color": "#F05A35"
+      }
+    ],
+    "start-button": [
+      {
+        "file": "start-button-gray.stl",
+        "color": "#C9C8C2"
+      },
+      {
+        "file": "start-button-orange.stl",
+        "color": "#F05A35"
+      }
+    ],
+    "mode-selector": [
+      {
+        "file": "mode-selector-gray.stl",
+        "color": "#C9C8C2"
+      },
+      {
+        "file": "mode-selector-orange.stl",
+        "color": "#F05A35"
+      }
+    ],
+    "timer-knob": [
+      {
+        "file": "timer-knob-gray.stl",
+        "color": "#C9C8C2"
+      },
+      {
+        "file": "timer-knob-orange.stl",
+        "color": "#F05A35"
+      }
+    ],
+    "back-button": [
+      {
+        "file": "back-button-orange.stl",
+        "color": "#F05A35"
+      }
+    ]
+  },
+  "exploded_offsets_mm": {
+    "housing-shell": [0, 0, 0],
+    "bottom-cover": [0, 20, -45],
+    "led-module": [0, -70, 0],
+    "start-button": [0, 0, 50],
+    "mode-selector": [-20, 0, 42],
+    "timer-knob": [24, 0, 52],
+    "back-button": [0, -12, 38]
+  },
+  "animation_order": ["assembled", "explode", "hold", "reassemble", "rotate"]
+}

@@ -1,0 +1,462 @@
+/* Amagine3D · floating control island */
+.page {
+  width: 100%;
+  max-width: none;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+}
+
+.appBar {
+  position: relative;
+  z-index: var(--z-sticky);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-md);
+  width: calc(100% - 1.5rem);
+  min-height: 4rem;
+  margin: var(--space-sm) var(--space-sm) 0;
+  padding: var(--space-xs) var(--space-sm) var(--space-xs) var(--space-md);
+  border: 4px solid var(--color-shell);
+  border-radius: var(--radius-xl);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  box-shadow:
+    inset 0 1px 0 var(--color-shell-highlight),
+    0 12px 36px var(--color-shadow-soft);
+  animation: island-enter var(--dur-long) var(--ease-out) both;
+}
+
+.wordmark {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wordmark::before {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  border-radius: 0.3rem;
+  background:
+    linear-gradient(145deg, var(--color-paper-raised), transparent),
+    var(--color-primary);
+  box-shadow:
+    inset 0 1px 1px var(--color-shell-highlight),
+    0 3px 8px var(--color-shadow-deep);
+  content: '';
+  transform: rotate(45deg) scale(0.76);
+}
+
+.routeTitle {
+  display: none;
+  min-width: 0;
+  justify-items: start;
+  padding-inline-start: var(--space-md);
+}
+
+.routeTitle span {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routeTitle span {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.appBar nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.languageMenu {
+  position: relative;
+}
+
+.languageButton,
+.storageButton,
+.downloadButton,
+.licenseLink {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-fill);
+  color: var(--color-ink-soft);
+  box-shadow:
+    inset 0 1px 0 var(--color-shell-highlight),
+    inset 0 0 0 1px var(--color-rule);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 520;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    transform var(--dur-micro) var(--ease-out),
+    background-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out),
+    box-shadow var(--dur-short) var(--ease-out);
+}
+
+.downloadButton:not(:disabled) {
+  padding-inline: var(--space-md);
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
+  box-shadow:
+    inset 0 1px 0 oklch(100% 0 0 / 0.18),
+    0 4px 12px var(--color-shadow-deep);
+}
+
+.languageChevron {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  color: currentcolor;
+  opacity: 0.62;
+}
+
+.languageChevron svg {
+  width: 1rem;
+  height: 1rem;
+  overflow: visible;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.languageDropdown {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  inset-block-start: calc(100% + var(--space-sm));
+  inset-inline-end: 0;
+  display: grid;
+  min-width: 9.5rem;
+  padding: var(--space-2xs);
+  border: 4px solid var(--color-shell);
+  border-radius: var(--radius-lg);
+  background: var(--color-elevated);
+  box-shadow:
+    inset 0 1px 0 var(--color-shell-highlight),
+    0 18px 48px var(--color-shadow-deep);
+  transform-origin: top right;
+  animation: menu-enter var(--dur-short) var(--ease-out) both;
+}
+
+.languageDropdown button {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+  transition:
+    transform var(--dur-micro) var(--ease-out),
+    background-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out);
+}
+
+.languageDropdown button[aria-checked='true'] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 620;
+}
+
+.storageButton svg,
+.downloadButton svg,
+.licenseLink svg {
+  width: 1rem;
+  height: 1rem;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
+.storageButton[aria-expanded='true'] {
+  background: var(--color-fill-strong);
+  color: var(--color-ink);
+  box-shadow:
+    inset 0 1px 0 var(--color-shell-highlight),
+    inset 0 0 0 1px var(--color-rule-strong);
+}
+
+.downloadButton:disabled,
+.storageButton:disabled,
+.languageButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.languageButton:focus-visible,
+.storageButton:focus-visible,
+.downloadButton:focus-visible,
+.licenseLink:focus-visible,
+.languageDropdown button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .languageButton:hover,
+  .storageButton:hover,
+  .licenseLink:hover {
+    background: var(--color-paper-raised);
+    color: var(--color-ink);
+    box-shadow:
+      inset 0 1px 0 var(--color-shell-highlight),
+      0 5px 14px var(--color-shadow-soft);
+    transform: translateY(-1px);
+  }
+
+  .downloadButton:not(:disabled):hover {
+    background: var(--color-primary-hover);
+    box-shadow:
+      inset 0 1px 0 oklch(100% 0 0 / 0.22),
+      0 7px 18px var(--color-shadow-deep);
+    transform: translateY(-1px);
+  }
+
+  .languageDropdown button:hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+    transform: translateX(2px);
+  }
+}
+
+.languageButton:active,
+.storageButton:active,
+.licenseLink:active,
+.downloadButton:not(:disabled):active,
+.languageDropdown button:active {
+  transform: scale(0.98);
+}
+
+@keyframes island-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-0.75rem) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (min-width: 40rem) {
+  .appBar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .routeTitle {
+    display: grid;
+  }
+
+  .appBar nav {
+    gap: var(--space-sm);
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .appBar {
+    width: calc(100% - 1rem);
+    margin: var(--space-xs) var(--space-xs) 0;
+    padding-inline: var(--space-sm) var(--space-xs);
+    border-width: 3px;
+  }
+
+  .storageButton span,
+  .downloadButton span,
+  .licenseLink span {
+    display: none;
+  }
+
+  .languageButton,
+  .storageButton,
+  .downloadButton,
+  .licenseLink {
+    min-width: 2.5rem;
+    padding-inline: var(--space-xs);
+  }
+}
+
+/* Precise application chrome: one quiet divider, no floating container. */
+.appBar {
+  width: 100%;
+  min-height: 4.25rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 0;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  border-radius: 0;
+  background: rgb(255 255 255 / 0.94);
+  box-shadow: none;
+  backdrop-filter: blur(16px);
+  animation: none;
+}
+
+.wordmark {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.wordmark::before {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 0.125rem;
+  background: var(--color-ink);
+  box-shadow: none;
+  transform: rotate(45deg) scale(0.72);
+}
+
+.routeTitle {
+  border-inline-start: var(--rule-thin) solid var(--color-rule);
+}
+
+.routeTitle span {
+  font-weight: 560;
+}
+
+.appBar nav {
+  gap: 0.375rem;
+}
+
+.languageButton,
+.storageButton,
+.downloadButton,
+.licenseLink {
+  min-height: 2.25rem;
+  padding: 0.4375rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.8125rem;
+  font-weight: 520;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-micro) var(--ease-out);
+}
+
+.downloadButton:not(:disabled) {
+  padding-inline: 0.875rem;
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
+  box-shadow: none;
+}
+
+.storageButton[aria-expanded='true'],
+.languageButton[aria-expanded='true'] {
+  background: var(--color-fill);
+  color: var(--color-ink);
+  box-shadow: none;
+}
+
+.languageDropdown {
+  inset-block-start: calc(100% + 0.5rem);
+  padding: 0.25rem;
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-elevated);
+  box-shadow:
+    0 12px 24px rgb(0 0 0 / 0.08),
+    0 2px 6px rgb(0 0 0 / 0.06);
+}
+
+.languageDropdown button {
+  min-height: 2.25rem;
+  border-radius: var(--radius-sm);
+}
+
+.languageDropdown button[aria-checked='true'] {
+  background: var(--color-fill);
+  color: var(--color-ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .languageButton:hover,
+  .storageButton:hover,
+  .licenseLink:hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .downloadButton:not(:disabled):hover {
+    background: var(--color-primary-hover);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .languageDropdown button:hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+    transform: none;
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .appBar {
+    width: 100%;
+    margin: 0;
+    padding-inline: 0.75rem;
+    border-width: 0 0 1px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .appBar,
+  .languageDropdown {
+    animation: none;
+  }
+
+  .languageButton,
+  .storageButton,
+  .downloadButton,
+  .licenseLink,
+  .languageDropdown button {
+    transition-duration: 1ms;
+  }
+}

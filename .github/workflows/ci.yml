@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AMAGINE3D_MODEL_GATEWAY_API_KEY: deterministic-ci-placeholder
+      AMAGINE3D_MODEL_GATEWAY_BASE_URL: https://example.invalid/v1
+      AMAGINE3D_CAD_MODEL: deterministic-fixture
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore CAD runtime bundle
+        uses: actions/cache@v4
+        with:
+          path: apps/web/public/cad-runtime
+          key: cad-runtime-${{ runner.os }}-${{ hashFiles('packages/cad-execution-browser/runtime-assets.json', 'packages/cad-execution-browser/runtime-python/**', 'apps/web/scripts/prepare-cad-runtime.mjs') }}
+
+      - name: Format
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Architecture and browser security policy
+        run: pnpm policy:check
+
+      - name: License policy
+        run: pnpm licenses:check
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      - name: Deterministic smoke test
+        run: pnpm smoke:deterministic
+
+      - name: Production build
+        run: pnpm build
