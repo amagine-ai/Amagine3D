@@ -1,0 +1,15 @@
+build123d
+Copyright (c) 2022–2025 The build123d Contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+-------------------------------------------------------------------------------
+
+This project was originally derived from portions of the CadQuery codebase
+(https://github.com/CadQuery/cadquery) but has since been extensively
+refactored and restructured into an independent system.
+CadQuery is licensed under the Apache License, Version 2.0.

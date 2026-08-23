@@ -18,9 +18,9 @@
 
 <p>
   <img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/Node.js-24%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 24+" />
-  <img src="https://img.shields.io/badge/Next.js-16.3-000000.svg?logo=next.js&amp;logoColor=white" alt="Next.js 16.3" />
-  <img src="https://img.shields.io/badge/Runtime-build123d%20%2B%20OCP.wasm-5B5BD6.svg" alt="build123d + OCP.wasm" />
+  <img src="https://img.shields.io/badge/Node.js-20.19%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 20.19+" />
+  <img src="https://img.shields.io/badge/Vite-7.3.6-646CFF.svg?logo=vite&amp;logoColor=white" alt="Vite 7.3.6" />
+  <img src="https://img.shields.io/badge/Runtime-build123d%20%2B%20OCP-5B5BD6.svg" alt="build123d + OCP" />
 </p>
 
 <p>
@@ -114,40 +114,45 @@ CAD 是 Amagine3D 的起点。完整的硬件创造还需要理解现实中的�
 
 ### 环境要求
 
-- Node.js 24 或更新版本
-- pnpm
-- 较新的桌面版 Google Chrome 或 Microsoft Edge
-- 兼容 OpenAI 接口并能可靠执行结构化工具调用的模型服务
+- Node.js 20.19 或更新版本
+- Python 3.10 至 3.13
+- npm
+- 现代桌面浏览器
+- 兼容 PI SDK 所支持协议的模型网关
 
-宿主电脑无需安装 Python、Open CASCADE 或桌面 CAD 软件。
+初始化脚本会在仓库内创建 `.venv`，并安装锁定版本的 build123d、
+OCP、trimesh 和 lib3mf。宿主电脑不需要安装桌面 CAD 软件。
 
 ### 安装并运行
 
 ```bash
-git clone https://github.com/Cang-yan/Amagine3D.git
+git clone https://github.com/amagine-ai/Amagine3D.git
 cd Amagine3D
-pnpm install --frozen-lockfile
-cp apps/web/.env.example apps/web/.env.local
-pnpm dev
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-配置 `apps/web/.env.local` 后，在桌面 Chrome 或 Edge 中打开 `http://127.0.0.1:6160`。
+配置 `.env` 后打开 `http://127.0.0.1:6160`。本地 API 默认监听
+`http://127.0.0.1:6161`。首次启动会准备 `.venv`；依赖指纹没有变化时，
+后续启动会直接复用。
 
 ### 服务端配置
 
 ```dotenv
-PORT=6160
-AMAGINE3D_MODEL_GATEWAY_API_KEY=...
-AMAGINE3D_MODEL_GATEWAY_BASE_URL=https://gateway.example.com/v1
-AMAGINE3D_CAD_MODEL=model-id
+LLM_API_KEY=...
+LLM_MODEL=openai/gpt-5.5
+LLM_BASE_URL=https://gateway.example.com/v1
+LLM_API_TYPE=openai-responses
+LLM_THINKING_LEVEL=medium
 
-# 可选网络调研
-AMAGINE3D_WEB_SEARCH_MODEL=model-id
-TAVILY_API_KEY=...
-TAVILY_BASE_URL=https://api.tavily.com
+PORT=6161
+WEB_PORT=6160
+AGENT_RUN_TIMEOUT_MS=1800000
 ```
 
-这些值只保存在 Next.js 服务端。请勿通过客户端环境变量暴露 API 密钥。
+这些值只由本地 Express 服务端读取。请勿通过客户端环境变量暴露 API 密钥，
+也不要提交 `.env`。
 
 ## 系统架构
 
@@ -167,7 +172,9 @@ TAVILY_BASE_URL=https://api.tavily.com
     └── 模型配置验证
 ```
 
-项目、生成源码、附件、运行历史和产物保存在浏览器 OPFS 中。模型与搜索凭据留在服务端。清除浏览器站点数据前，请先导出 ZIP 备份。
+PI 对话保存在 `.amagine-state/sessions/`，上传文件保存在
+`.amagine-state/uploads/<sessionId>/`，生成源码、模型、报告和预览保存在
+`workspace/sessions/<sessionId>/`。模型与搜索凭据留在服务端。
 
 生成的 Python 会先经过宿主源码策略与 Python AST 检查，再进入专用 Worker 执行。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
 
@@ -175,14 +182,14 @@ TAVILY_BASE_URL=https://api.tavily.com
 
 Amagine3D 正在持续迭代。当前公开版本聚焦智能硬件外壳的单色和多色参数化 CAD，完整工作流已在 Chrome 与 Edge 桌面浏览器中测试。
 
-首次执行几何任务时，浏览器会下载带版本的 WebAssembly 与 Python 运行环境。项目默认保存在本地 OPFS 中，可以导出为 ZIP；清除浏览器站点数据前应先完成导出。
-
 ## 参与贡献
 
 欢迎提交范围清楚的 issue 和 pull request。提交改动前请阅读 [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)，并运行仓库检查：
 
 ```bash
-pnpm check
+npm run typecheck
+npm test
+npm run build
 ```
 
 安全问题请按照 [SECURITY.zh-CN.md](./SECURITY.zh-CN.md) 中的私密流程上报。
@@ -193,15 +200,16 @@ Amagine3D 建立在以下开源项目之上：
 
 | 项目                                                                                                      | 用途                   |
 | --------------------------------------------------------------------------------------------------------- | ---------------------- |
-| [build123d](https://github.com/gumyr/build123d)                                                           | 参数化 CAD 建模        |
-| [Open CASCADE Technology](https://dev.opencascade.org/) 与 [OCP.wasm](https://github.com/yeicor/OCP.wasm) | 浏览器中的精确几何内核 |
-| [Pyodide](https://pyodide.org/)                                                                           | 浏览器 Python 运行环境 |
-| [Three.js](https://github.com/mrdoob/three.js)                                                            | 3D 预览、选择与测量    |
-| [trimesh](https://github.com/mikedh/trimesh)                                                              | mesh 处理与检查        |
-| [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                         | 3MF 写入与回读         |
-| [Vercel AI SDK](https://github.com/vercel/ai)                                                             | Agent 与模型工具调用   |
+| [build123d](https://github.com/gumyr/build123d)                                                            | 参数化 CAD 建模           |
+| [Open CASCADE Technology](https://dev.opencascade.org/) 与 [CadQuery OCP](https://github.com/CadQuery/OCP) | 精确几何内核与 Python 绑定 |
+| [Three.js](https://github.com/mrdoob/three.js)                                                             | 3D 预览、选择与测量       |
+| [trimesh](https://github.com/mikedh/trimesh)                                                               | mesh 处理与检查           |
+| [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF 写入与回读            |
+| [PI coding agent](https://github.com/earendil-works/pi)                                                    | Agent session、流式响应与工具调用 |
 
-完整的第三方署名、许可证文本和修改记录见 [`third_party/NOTICES.zh-CN.md`](../third_party/NOTICES.zh-CN.md) 与 [`third_party/README.zh-CN.md`](../third_party/README.zh-CN.md)。
+应用运行后可通过 `/licenses` 查看许可证页面。仓库内的许可证文本和生产 npm
+依赖清单位于 [`public/licenses/`](../public/licenses/)。源码仓库的分发边界与
+第三方署名说明见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 

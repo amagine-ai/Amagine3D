@@ -581,6 +581,47 @@
   color: var(--color-ink-soft);
 }
 
+.chatStages {
+  display: grid;
+  gap: var(--space-2xs);
+  margin: 0;
+  padding: var(--space-xs) 0;
+  list-style: none;
+}
+
+.chatStages li {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.chatStages li[data-status='running'] {
+  color: var(--color-ink);
+}
+
+.chatStages li[data-status='failed'],
+.chatStages li[data-status='cancelled'] {
+  color: var(--color-error);
+}
+
+.chatStageMarker {
+  display: inline-grid;
+  width: 0.875rem;
+  height: 0.875rem;
+  place-items: center;
+  color: var(--color-success);
+  font-size: var(--text-xs);
+}
+
+.chatStages li[data-status='failed'] .chatStageMarker,
+.chatStages li[data-status='cancelled'] .chatStageMarker {
+  color: var(--color-error);
+}
+
 .loadingSpinner {
   display: inline-block;
   width: 0.875rem;
@@ -1328,7 +1369,7 @@
   padding: var(--space-sm) var(--space-md);
 }
 
-.opfsGroup {
+.folderGroup {
   display: grid;
   gap: var(--space-xs);
 }
@@ -1400,7 +1441,7 @@
   white-space: nowrap;
 }
 
-.opfsFileList {
+.folderFileList {
   display: grid;
   gap: var(--space-2xs);
   margin: 0;
@@ -1408,7 +1449,7 @@
   list-style: none;
 }
 
-.opfsFileList li {
+.folderFileList li {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -1423,23 +1464,23 @@
     color var(--dur-micro) var(--ease-out);
 }
 
-.opfsFileList li:hover {
+.folderFileList li:hover {
   background: var(--color-fill);
 }
 
-.opfsFileCheckbox {
+.folderFileCheckbox {
   display: grid;
   place-items: center;
   cursor: pointer;
 }
 
-.opfsFileList input {
+.folderFileList input {
   width: 1rem;
   height: 1rem;
   accent-color: var(--color-accent);
 }
 
-.opfsFileList .storageFileIdentity {
+.folderFileList .storageFileIdentity {
   display: grid;
   min-width: 0;
   border: 0;
@@ -1450,7 +1491,7 @@
   text-align: start;
 }
 
-.opfsFileList .storageFileIdentity:focus-visible {
+.folderFileList .storageFileIdentity:focus-visible {
   border-radius: var(--radius-sm);
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
@@ -1692,9 +1733,7 @@
 }
 
 .composerFooter,
-.composerTools,
-.runOptionsHeading,
-.optionToggle {
+.composerTools {
   display: flex;
   align-items: center;
 }
@@ -1737,8 +1776,7 @@
 }
 
 .composerTool,
-.sendButton,
-.runOptionsHeading button {
+.sendButton {
   display: inline-grid;
   width: 2rem;
   min-width: 2rem;
@@ -1815,59 +1853,6 @@
   font-size: var(--text-xs);
 }
 
-.runOptionsPopover {
-  position: absolute;
-  inset-inline: var(--space-xs);
-  inset-block-end: calc(2rem + var(--space-lg));
-  z-index: var(--z-modal);
-  display: grid;
-  gap: var(--space-sm);
-  padding: var(--space-md);
-  border: var(--rule-thin) solid var(--color-rule);
-  border-radius: var(--radius-md);
-  background: var(--color-elevated);
-  color: var(--color-ink);
-  box-shadow: 0 8px 24px var(--color-shadow);
-}
-
-.runOptionsHeading {
-  justify-content: space-between;
-  gap: var(--space-sm);
-}
-
-.runOptionsHeading strong {
-  font-size: var(--text-sm);
-}
-
-.optionToggle {
-  align-items: flex-start;
-  gap: var(--space-sm);
-  color: var(--color-ink-soft);
-  cursor: pointer;
-}
-
-.optionToggle input {
-  width: 1rem;
-  height: 1rem;
-  margin-block-start: var(--space-2xs);
-  accent-color: var(--color-accent);
-}
-
-.optionToggle span {
-  display: grid;
-  gap: var(--space-2xs);
-}
-
-.optionToggle strong {
-  color: var(--color-ink);
-  font-size: var(--text-sm);
-}
-
-.optionToggle small {
-  color: var(--color-muted);
-  line-height: 1.45;
-}
-
 .modelProfilePanel {
   display: grid;
   gap: var(--space-xs);
@@ -1919,39 +1904,6 @@
   border: 0;
 }
 
-.workflowChoice {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2xs);
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.workflowChoice legend {
-  margin-block-end: var(--space-xs);
-  color: var(--color-muted);
-  font-size: var(--text-xs);
-}
-
-.workflowChoice label {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2xs);
-  min-width: 0;
-  min-height: 2.75rem;
-  padding: var(--space-xs);
-  border: var(--rule-thin) solid var(--color-rule);
-  border-radius: var(--radius-sm);
-  color: var(--color-ink-soft);
-  font-size: var(--text-xs);
-  line-height: 1.25;
-  text-align: center;
-  white-space: normal;
-}
-
-.workflowChoice input,
 .switchControl input {
   accent-color: var(--color-accent);
 }
@@ -2250,7 +2202,6 @@
   position: static;
 }
 
-.reviewPrompt,
 .diffPanel {
   position: absolute;
   inset-inline: var(--space-md);
@@ -2714,7 +2665,7 @@
 @media (hover: hover) and (pointer: fine) {
   .workspace button:not(:disabled):hover,
   .fileTree button:not(:disabled):hover,
-  .opfsFileList label:hover {
+  .folderFileList label:hover {
     background: var(--color-fill);
     color: var(--color-ink);
   }
@@ -2790,7 +2741,7 @@
 
 .workspace button:focus-visible,
 .workspace summary:focus-visible,
-.opfsFileList input:focus-visible,
+.folderFileList input:focus-visible,
 .panelResizer:focus-visible,
 .logResizer:focus-visible {
   outline: 2px solid var(--color-focus);
@@ -2988,11 +2939,11 @@
   padding-inline: var(--space-md);
 }
 
-.opfsFileList {
+.folderFileList {
   gap: var(--space-3xs);
 }
 
-.opfsFileList li {
+.folderFileList li {
   grid-template-columns: 1.125rem minmax(0, 1fr) auto;
   gap: var(--space-2xs);
   min-height: 3.5rem;
@@ -3000,12 +2951,12 @@
   align-items: center;
 }
 
-.opfsFileCheckbox {
+.folderFileCheckbox {
   width: 1.125rem;
   min-width: 1.125rem;
 }
 
-.opfsFileList .storageFileIdentity {
+.folderFileList .storageFileIdentity {
   display: grid;
   grid-template-rows: auto auto;
   align-content: center;
@@ -3067,7 +3018,7 @@
     color: var(--color-ink);
   }
 
-  .workspace .opfsFileList .storageFileIdentity:not(:disabled):hover {
+  .workspace .folderFileList .storageFileIdentity:not(:disabled):hover {
     background: transparent;
     box-shadow: none;
     transform: none;
@@ -3277,8 +3228,7 @@
 }
 
 .composerTool,
-.sendButton,
-.runOptionsHeading button {
+.sendButton {
   width: 2.25rem;
   min-width: 2.25rem;
   height: 2.25rem;
@@ -3305,9 +3255,7 @@
 }
 
 .executionMenu,
-.runOptionsPopover,
 .modelDialog,
-.reviewPrompt,
 .diffPanel {
   border: 4px solid var(--color-shell);
   border-radius: var(--radius-xl);
@@ -3318,7 +3266,6 @@
 }
 
 .executionMenuItem,
-.workflowChoice,
 .modelDialogCheckRow {
   border-radius: var(--radius-md);
 }
@@ -3413,7 +3360,7 @@
 @media (hover: hover) and (pointer: fine) {
   .workspace button:not(:disabled):hover,
   .fileTree button:not(:disabled):hover,
-  .opfsFileList label:hover {
+  .folderFileList label:hover {
     background: var(--color-paper-raised);
     color: var(--color-ink);
     box-shadow:
@@ -3524,7 +3471,7 @@
 
 .fileSection,
 .storageSection,
-.opfsGroup {
+.folderGroup {
   min-height: 0;
   margin: 0;
   padding: 0;
@@ -3618,13 +3565,13 @@
   padding: var(--space-xs) var(--space-lg) var(--space-lg);
 }
 
-.opfsGroup {
+.folderGroup {
   display: grid;
   gap: var(--space-xs);
   padding-block: var(--space-sm) var(--space-lg);
 }
 
-.opfsGroup + .opfsGroup {
+.folderGroup + .folderGroup {
   padding-block-start: var(--space-lg);
 }
 
@@ -3656,18 +3603,18 @@
   box-shadow: none;
 }
 
-.opfsFileList {
+.folderFileList {
   gap: 0;
 }
 
-.opfsFileList li {
+.folderFileList li {
   grid-template-columns: 1.5rem minmax(0, 1fr) auto;
   min-height: 3rem;
   padding: var(--space-2xs) var(--space-xs);
   border-radius: var(--radius-sm);
 }
 
-.opfsFileList .storageFileIdentity {
+.folderFileList .storageFileIdentity {
   min-height: 2.5rem;
   padding: var(--space-2xs) var(--space-xs);
   border-radius: var(--radius-sm);
@@ -3682,13 +3629,13 @@
 
 @media (hover: hover) and (pointer: fine) {
   .fileTree li:hover,
-  .opfsFileList li:hover {
+  .folderFileList li:hover {
     background: var(--color-fill);
   }
 
   .workspace .fileTree button:not(:disabled):hover,
-  .workspace .opfsFileList .storageFileIdentity:not(:disabled):hover,
-  .workspace .opfsFileList label:hover {
+  .workspace .folderFileList .storageFileIdentity:not(:disabled):hover,
+  .workspace .folderFileList label:hover {
     background: transparent;
     box-shadow: none;
     transform: none;
@@ -3799,11 +3746,11 @@
   padding-inline: var(--space-sm);
 }
 
-.opfsFileList {
+.folderFileList {
   gap: var(--space-2xs);
 }
 
-.opfsFileList li {
+.folderFileList li {
   isolation: isolate;
   contain: paint;
   grid-template-columns: 1rem minmax(0, 1fr) auto;
@@ -3813,12 +3760,12 @@
   overflow: clip;
 }
 
-.opfsFileCheckbox {
+.folderFileCheckbox {
   width: 1rem;
   min-width: 1rem;
 }
 
-.opfsFileList .storageFileIdentity {
+.folderFileList .storageFileIdentity {
   display: flex;
   min-height: 3.25rem;
   flex-direction: column;
@@ -3938,8 +3885,8 @@
   gap: var(--space-xs);
 }
 
-.opfsGroup,
-.opfsGroup + .opfsGroup {
+.folderGroup,
+.folderGroup + .folderGroup {
   position: relative;
   isolation: isolate;
   contain: layout paint;
@@ -4070,12 +4017,12 @@
   scrollbar-gutter: stable;
 }
 
-.opfsGroup .opfsFileList {
+.folderGroup .folderFileList {
   margin-inline-start: var(--space-lg);
 }
 
 @media (max-width: 39.99rem) {
-  .opfsGroup .opfsFileList {
+  .folderGroup .folderFileList {
     margin-inline-start: var(--space-md);
   }
 }
@@ -4144,8 +4091,8 @@
   overflow: visible;
 }
 
-.storageDrawer .opfsGroup,
-.storageDrawer .opfsGroup + .opfsGroup {
+.storageDrawer .folderGroup,
+.storageDrawer .folderGroup + .folderGroup {
   position: relative;
   isolation: auto;
   contain: none;
@@ -4154,7 +4101,7 @@
   overflow: visible;
 }
 
-.storageDrawer .opfsGroup + .opfsGroup {
+.storageDrawer .folderGroup + .folderGroup {
   border-block-start: var(--rule-thin) solid var(--color-rule);
 }
 
@@ -4261,7 +4208,7 @@
   box-shadow: none;
 }
 
-.storageDrawer .opfsGroup .opfsFileList {
+.storageDrawer .folderGroup .folderFileList {
   margin: 0 0 var(--space-xs) 2.5rem;
   padding-inline-end: var(--space-2xs);
 }
@@ -4304,12 +4251,12 @@
     grid-template-columns: 1.25rem minmax(0, 1fr) auto;
   }
 
-  .storageDrawer .opfsGroup .opfsFileList {
+  .storageDrawer .folderGroup .folderFileList {
     margin-inline-start: 2rem;
   }
 }
 
-.storageDrawer .opfsFileList[hidden] {
+.storageDrawer .folderFileList[hidden] {
   display: none;
 }
 
@@ -4435,8 +4382,7 @@
 }
 
 .composerTool,
-.sendButton,
-.runOptionsHeading button {
+.sendButton {
   width: 2.125rem;
   min-width: 2.125rem;
   height: 2.125rem;
@@ -4452,9 +4398,7 @@
 }
 
 .executionMenu,
-.runOptionsPopover,
 .modelDialog,
-.reviewPrompt,
 .diffPanel {
   border: var(--rule-thin) solid var(--color-rule);
   border-radius: var(--radius-md);
@@ -4465,7 +4409,6 @@
 }
 
 .executionMenuItem,
-.workflowChoice,
 .modelDialogCheckRow {
   border-radius: var(--radius-sm);
 }
@@ -4523,7 +4466,7 @@
   padding: 0.5rem 0.875rem 1.25rem;
 }
 
-.storageDrawer .opfsGroup + .opfsGroup {
+.storageDrawer .folderGroup + .folderGroup {
   border-block-start: 0;
 }
 
@@ -4538,20 +4481,20 @@
   border-radius: var(--radius-sm);
 }
 
-.storageDrawer .opfsGroup .opfsFileList {
+.storageDrawer .folderGroup .folderFileList {
   margin: 0.25rem 0 0.5rem 2.25rem;
 }
 
-.opfsFileList {
+.folderFileList {
   gap: 0;
 }
 
-.opfsFileList li {
+.folderFileList li {
   min-height: 3rem;
   border-radius: var(--radius-sm);
 }
 
-.opfsFileList .storageFileIdentity {
+.folderFileList .storageFileIdentity {
   min-height: 3rem;
   padding-block: 0.375rem;
 }
@@ -4583,7 +4526,7 @@
 @media (hover: hover) and (pointer: fine) {
   .workspace button:not(:disabled):hover,
   .fileTree button:not(:disabled):hover,
-  .opfsFileList label:hover {
+  .folderFileList label:hover {
     background: var(--color-fill);
     color: var(--color-ink);
     box-shadow: none;
@@ -4600,7 +4543,7 @@
 
   .workspace .storageGroupHeading .projectSummary:not(:disabled):hover,
   .fileTree li:hover,
-  .opfsFileList li:hover {
+  .folderFileList li:hover {
     background: var(--color-fill);
   }
 }

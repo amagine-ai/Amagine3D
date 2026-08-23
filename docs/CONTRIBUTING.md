@@ -2,26 +2,29 @@
 
 > **简体中文**：[查看中文版](./CONTRIBUTING.zh-CN.md)
 
-Use Node.js 24 or newer and the pnpm version pinned in `package.json`.
+Use Node.js 20.19 or newer, Python 3.10 through 3.13, and npm.
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm smoke:deterministic
-pnpm check
+npm ci
+npm run python:setup
+npm run typecheck
+npm test
+npm run build
 ```
 
-Keep each package's public surface at its root entry point; cross-package deep
-imports are rejected by `pnpm architecture:check`. React must not operate OPFS, Pyodide,
-or provider SDKs directly.
+Keep browser code behind the local API boundary. React must not access model
+credentials, PI session JSONL files, uploads, or session workspaces directly.
+Server artifact routes must keep every path inside the selected PI session's
+`workspace/sessions/<sessionId>/` directory.
 
 Submit one focused change with tests and documentation for new public behavior.
-Use fake models/search for automated tests. Real providers and desktop Chrome
-paths are manual smoke tests and must not commit credentials or unstable golden
-text. Normal changes run `pnpm licenses:check`, which rejects unknown,
-prohibited, or not-yet-reviewed production license expressions. Release builds
-run `pnpm licenses:generate` on their target platform and review the generated
-inventory and notices.
+Automated tests must not call real model providers. Provider-backed CAD runs are
+manual checks and must not commit credentials, private prompts, uploads,
+generated workspaces, or unstable golden text. Keep `.env`, `.amagine-state/`,
+`workspace/`, and `.venv/` out of commits.
 
-For browser changes, record the Chrome version, exact route, screenshots or
-artifact evidence, and known limitations. Security issues follow
+For UI changes, record the browser version, exact route, screenshots or artifact
+evidence, and known limitations. Changes to skills or CAD execution should
+include focused tests for discovery, path isolation, and generated-artifact
+validation. Security issues follow
 [`SECURITY.md`](./SECURITY.md), not a public issue.

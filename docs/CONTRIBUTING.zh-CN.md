@@ -2,16 +2,25 @@
 
 > **English**: [View the English version](./CONTRIBUTING.md)
 
-使用 Node.js 24 或更新版本，以及 `package.json` 中固定的 pnpm 版本。
+使用 Node.js 20.19 或更新版本、Python 3.10 至 3.13 和 npm。
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm smoke:deterministic
-pnpm check
+npm ci
+npm run python:setup
+npm run typecheck
+npm test
+npm run build
 ```
 
-请保持每个包的公开入口只在根导出中；跨包深层导入会被 `pnpm architecture:check` 拒绝。React 不得直接操作 OPFS、Pyodide 或提供商 SDK。
+请保持浏览器代码与本地 API 之间的边界。React 不得直接访问模型凭据、
+PI session JSONL、上传目录或 session 工作区。服务端产物路由必须把所有路径
+限制在所选 PI session 的 `workspace/sessions/<sessionId>/` 目录内。
 
-每次提交一个聚焦的改动，并为新的公开行为附带测试和文档。自动化测试使用 fake 模型/搜索。真实的提供商和桌面 Chrome 路径属于手动冒烟测试，不得提交凭据或不稳定的黄金文本。普通改动运行 `pnpm licenses:check`，拒绝未知、禁止或尚未审阅的生产依赖许可证表达式。发布构建在目标平台运行 `pnpm licenses:generate`，并审阅生成的清单和声明文件。
+每次提交一个聚焦的改动，并为新的公开行为附带测试和文档。自动化测试
+不得调用真实模型提供商。连接真实提供商的 CAD 运行属于手动检查，不得提交
+凭据、私有提示词、上传文件、生成工作区或不稳定的黄金文本。不要提交 `.env`、
+`.amagine-state/`、`workspace/` 和 `.venv/`。
 
-对于浏览器相关改动，请记录 Chrome 版本、精确路由、截图或产物证据，以及已知局限。安全问题请遵循 [`SECURITY.md`](./SECURITY.zh-CN.md)，而不是通过公开 issue 上报。
+对于 UI 改动，请记录浏览器版本、精确路由、截图或产物证据，以及已知局限。
+修改 skill 或 CAD 执行流程时，应补充覆盖发现、路径隔离和产物验证的聚焦测试。
+安全问题请遵循 [`SECURITY.zh-CN.md`](./SECURITY.zh-CN.md)，而不是通过公开 issue 上报。

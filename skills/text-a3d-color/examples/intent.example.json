@@ -1,0 +1,40 @@
+{
+  "schema": "evidence-color-intent/v2",
+  "part": "example-two-color-tile",
+  "representation": "relief",
+  "dimensions_mm": {
+    "x": {"value": 40, "source": "user", "confidence": "high"},
+    "y": {"value": 20, "source": "user", "confidence": "high"},
+    "z": {"value": 4, "source": "inferred", "confidence": "medium"}
+  },
+  "color_regions": [
+    {
+      "name": "left_field",
+      "hex": "#CC2233",
+      "purpose": "Primary identity field",
+      "boundary": "Left half of the parent volume split at X=0",
+      "evidence": "Reference left field is red."
+    },
+    {
+      "name": "right_field",
+      "hex": "#2255CC",
+      "purpose": "Secondary identity field",
+      "boundary": "Right half of the parent volume split at X=0",
+      "evidence": "Reference right field is blue."
+    }
+  ],
+  "palette_reduction": {
+    "applied": false,
+    "reason": "The two semantic colors map directly to two filaments."
+  },
+  "visual": {
+    "required": true,
+    "reference_view": "top",
+    "landmarks": [
+      "The red and blue fields meet at the center line."
+    ]
+  },
+  "assumptions": [
+    "The color boundary is vertical through the full thickness."
+  ]
+}

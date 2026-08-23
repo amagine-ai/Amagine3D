@@ -1,6 +1,0 @@
-Amagine3D
-Copyright 2026 amagine-ai
-
-This product uses the Vercel AI SDK under the Apache License 2.0 and the
-browser CAD runtime components listed in third_party/NOTICES.md. Software
-merely listed as reference-only is not included in the product.

@@ -1,18 +1,14 @@
 node_modules/
-.pnpm-store/
 dist/
-.next/
+.venv/
+.amagine-state/
+workspace/*
+!workspace/.gitkeep
+.env
+.env.local
 coverage/
-.devtools/
-apps/web/public/cad-runtime/
-apps/web/public/cad-worker.mjs
-apps/web/public/showcase/amagine3d-pomodoro/
-test-results/
-/tests/
 *.tsbuildinfo
-.env*
-!.env.example
+__pycache__/
+*.py[cod]
 .DS_Store
-
-# Local design-review evidence and feasibility notes
 

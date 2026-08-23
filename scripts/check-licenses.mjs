@@ -1,98 +1,134 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { access, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
-import { readProductionLicenseInventory } from './lib/npm-licenses.mjs';
-import { createCheck, listFiles, repositoryRoot } from './lib/repository.mjs';
+const root = resolve(import.meta.dirname, '..');
+const publicLicenseRoot = join(root, 'public', 'licenses');
 
-const check = createCheck('LICENSES');
-const requiredFiles = [
-  'LICENSE',
-  'NOTICE',
-  'third_party/NOTICES.md',
-  'third_party/README.md',
-  'third_party/npm-production-licenses.json',
-  'third_party/npm-production-notices.txt',
-];
-
-for (const path of requiredFiles) {
-  if (!existsSync(resolve(repositoryRoot, path))) {
-    check.fail(`Required license file is missing: ${path}`);
-  }
-}
-
-const mirroredFiles = [
-  ...listFiles('third_party/licenses').map((path) => ({
-    source: `third_party/licenses/${path}`,
-    publicCopy: `apps/web/public/licenses/${path}`,
-  })),
-  {
-    source: 'third_party/npm-production-licenses.json',
-    publicCopy: 'apps/web/public/licenses/npm-production-licenses.json',
-  },
-  {
-    source: 'third_party/npm-production-notices.txt',
-    publicCopy: 'apps/web/public/licenses/npm-production-notices.txt',
-  },
-  {
-    source: 'NOTICE',
-    publicCopy: 'apps/web/public/licenses/amagine3d-notice.txt',
-  },
-  {
-    source: 'LICENSE',
-    publicCopy: 'apps/web/public/licenses/apache-2.0.txt',
-  },
-];
-
-for (const { source, publicCopy } of mirroredFiles) {
-  const sourcePath = resolve(repositoryRoot, source);
-  const publicPath = resolve(repositoryRoot, publicCopy);
-  if (!existsSync(sourcePath)) continue;
-  if (!existsSync(publicPath)) {
-    check.fail(`Public application license copy is missing: ${publicCopy}`);
-  } else if (!readFileSync(sourcePath).equals(readFileSync(publicPath))) {
-    check.fail(`Public application license copy differs: ${publicCopy}`);
-  }
-}
-
-const reviewedLicenseExpressions = new Set([
+const allowedProductionLicenses = new Set([
   '0BSD',
-  '(AFL-2.1 OR BSD-3-Clause)',
   'Apache-2.0',
+  'BSD-2-Clause',
   'BSD-3-Clause',
-  'CC-BY-4.0',
+  'BlueOak-1.0.0',
   'ISC',
-  'LGPL-3.0-or-later',
   'MIT',
-  'MPL-2.0',
   'OFL-1.1',
 ]);
-const prohibitedLicensePattern = /(?:^|\W)(?:AGPL|GPL)(?:\W|$)/iu;
 
-try {
-  const { groupedReport, packages } = readProductionLicenseInventory();
-  const licenseExpressions = Object.keys(groupedReport);
-  for (const license of licenseExpressions) {
-    if (/unknown|unlicensed|undefined/iu.test(license)) {
-      check.fail(`Unknown production dependency license: ${license}`);
-    } else if (prohibitedLicensePattern.test(license)) {
-      check.fail(`Prohibited production dependency license: ${license}`);
-    } else if (!reviewedLicenseExpressions.has(license)) {
-      check.fail(
-        `Unreviewed production dependency license: ${license}. Review it before adding it to the allowlist.`,
-      );
-    }
-  }
-  console.log(
-    `Production dependency policy: ${packages.length} packages under ${licenseExpressions.length} reviewed license expressions.`,
-  );
-} catch (error) {
-  check.fail(
-    `Unable to inspect production dependency licenses: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
+const requiredFiles = [
+  'amagine3d-notice.txt',
+  'apache-2.0.txt',
+  'build123d-notice.txt',
+  'build123d.txt',
+  'ibm-plex-sans.txt',
+  'jetbrains-mono.txt',
+  'lib3mf.txt',
+  'npm-production-licenses.json',
+  'opencascade-exception.txt',
+  'opencascade-lgpl-2.1.txt',
+  'pi.txt',
+  'react.txt',
+  'three.txt',
+  'trimesh.txt',
+];
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function readJson(path) {
+  return JSON.parse(await readFile(path, 'utf8'));
+}
+
+const packageJson = await readJson(join(root, 'package.json'));
+const packageLock = await readJson(join(root, 'package-lock.json'));
+const inventory = await readJson(
+  join(publicLicenseRoot, 'npm-production-licenses.json'),
+);
+
+assert(
+  packageJson.license === 'Apache-2.0',
+  'package.json must declare Apache-2.0',
+);
+
+const inventoryByName = new Map(
+  inventory.packages.map((entry) => [entry.name, entry]),
+);
+for (const dependency of Object.keys(packageJson.dependencies ?? {})) {
+  const entry = inventoryByName.get(dependency);
+  assert(entry, `${dependency} is missing from the production license inventory`);
+  const locked = packageLock.packages?.[`node_modules/${dependency}`]?.version;
+  assert(
+    !locked || entry.version === locked,
+    `${dependency} license inventory version does not match package-lock.json`,
   );
 }
 
-check.finish(
-  'License check passed: repository copies match and dependency licenses are reviewed.',
+const expectedProductionPackages = new Map();
+for (const [path, metadata] of Object.entries(packageLock.packages ?? {})) {
+  if (!path.includes('node_modules/') || metadata.dev) continue;
+  const name = path.split('node_modules/').at(-1);
+  const key = `${name}@${metadata.version}`;
+  assert(metadata.license, `${key} has no license metadata in package-lock.json`);
+  expectedProductionPackages.set(key, {
+    license: metadata.license,
+    name,
+    version: metadata.version,
+  });
+}
+
+const actualProductionPackages = new Map(
+  inventory.packages.map((entry) => [`${entry.name}@${entry.version}`, entry]),
+);
+assert(
+  actualProductionPackages.size === expectedProductionPackages.size,
+  'production license inventory package count does not match package-lock.json',
+);
+for (const [key, expected] of expectedProductionPackages) {
+  const actual = actualProductionPackages.get(key);
+  assert(actual, `${key} is missing from the production license inventory`);
+  assert(
+    actual.license === expected.license,
+    `${key} license does not match package-lock.json`,
+  );
+}
+
+for (const entry of inventory.packages) {
+  assert(
+    allowedProductionLicenses.has(entry.license),
+    `${entry.name}@${entry.version} uses unreviewed license ${entry.license}`,
+  );
+}
+
+for (const filename of requiredFiles) {
+  await access(join(publicLicenseRoot, filename));
+}
+
+const notice = await readFile(join(root, 'NOTICE'), 'utf8');
+const publicNotice = await readFile(
+  join(publicLicenseRoot, 'amagine3d-notice.txt'),
+  'utf8',
+);
+assert(notice === publicNotice, 'NOTICE and its public copy must remain identical');
+assert(
+  notice.includes('Copyright (c) 2022–2025 The build123d Contributors'),
+  'NOTICE must retain the build123d attribution',
+);
+
+const gitignore = await readFile(join(root, '.gitignore'), 'utf8');
+for (const ignoredPath of [
+  '.amagine-state/',
+  '.venv/',
+  'dist/',
+  'node_modules/',
+  'workspace/*',
+]) {
+  assert(
+    gitignore.split(/\r?\n/u).includes(ignoredPath),
+    `${ignoredPath} must remain outside the source distribution`,
+  );
+}
+
+console.log(
+  `License compliance checks passed for ${inventory.packages.length} production npm packages.`,
 );

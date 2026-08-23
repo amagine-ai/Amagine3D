@@ -18,9 +18,9 @@
 
 <p>
   <img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/Node.js-24%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 24+" />
-  <img src="https://img.shields.io/badge/Next.js-16.3-000000.svg?logo=next.js&amp;logoColor=white" alt="Next.js 16.3" />
-  <img src="https://img.shields.io/badge/Runtime-build123d%20%2B%20OCP.wasm-5B5BD6.svg" alt="build123d + OCP.wasm" />
+  <img src="https://img.shields.io/badge/Node.js-20.19%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 20.19+" />
+  <img src="https://img.shields.io/badge/Vite-7.3.6-646CFF.svg?logo=vite&amp;logoColor=white" alt="Vite 7.3.6" />
+  <img src="https://img.shields.io/badge/Runtime-build123d%20%2B%20OCP-5B5BD6.svg" alt="build123d + OCP" />
 </p>
 
 <p>
@@ -114,40 +114,46 @@ Our goal is to let a hardware concept begin with reference images, physical comp
 
 ### Requirements
 
-- Node.js 24 or newer
-- pnpm
-- A recent desktop version of Google Chrome or Microsoft Edge
-- An OpenAI-compatible model endpoint with reliable structured tool calling
+- Node.js 20.19 or newer
+- Python 3.10 through 3.13
+- npm
+- A modern desktop browser
+- A model gateway compatible with one of the PI SDK protocols
 
-Python, Open CASCADE, and a desktop CAD application are not required on the host computer.
+The setup script creates a repository-local `.venv` and installs the pinned
+build123d, OCP, trimesh, and lib3mf dependencies. A desktop CAD application is
+not required.
 
 ### Install and Run
 
 ```bash
-git clone https://github.com/Cang-yan/Amagine3D.git
+git clone https://github.com/amagine-ai/Amagine3D.git
 cd Amagine3D
-pnpm install --frozen-lockfile
-cp apps/web/.env.example apps/web/.env.local
-pnpm dev
+npm install
+cp .env.example .env
+npm run dev
 ```
 
-Configure `apps/web/.env.local`, then open `http://127.0.0.1:6160` in Chrome or Edge on desktop.
+Configure `.env`, then open `http://127.0.0.1:6160`. The local API listens on
+`http://127.0.0.1:6161` by default. The first start prepares `.venv`; later
+starts reuse it when the dependency fingerprint is unchanged.
 
 ### Server Configuration
 
 ```dotenv
-PORT=6160
-AMAGINE3D_MODEL_GATEWAY_API_KEY=...
-AMAGINE3D_MODEL_GATEWAY_BASE_URL=https://gateway.example.com/v1
-AMAGINE3D_CAD_MODEL=model-id
+LLM_API_KEY=...
+LLM_MODEL=openai/gpt-5.5
+LLM_BASE_URL=https://gateway.example.com/v1
+LLM_API_TYPE=openai-responses
+LLM_THINKING_LEVEL=medium
 
-# Optional Web Research
-AMAGINE3D_WEB_SEARCH_MODEL=model-id
-TAVILY_API_KEY=...
-TAVILY_BASE_URL=https://api.tavily.com
+PORT=6161
+WEB_PORT=6160
+AGENT_RUN_TIMEOUT_MS=1800000
 ```
 
-These values remain on the Next.js server. Do not expose API keys through client-side environment variables.
+These values are read only by the local Express server. Do not expose API keys
+through client-side environment variables or commit `.env`.
 
 ## System Architecture
 
@@ -167,7 +173,10 @@ Desktop browser and Next.js UI
     └── model configuration validation
 ```
 
-Projects, generated source, attachments, run history, and artifacts are stored in browser OPFS. Model and search credentials remain on the server. Export a ZIP backup before clearing browser site data.
+PI conversations are stored under `.amagine-state/sessions/`, uploads under
+`.amagine-state/uploads/<sessionId>/`, and generated source, models, reports,
+and previews under `workspace/sessions/<sessionId>/`. Model and search
+credentials remain on the server.
 
 Generated Python passes through host source policies and Python AST checks before it runs in a dedicated Worker. For more detail, see the [threat model](./docs/threat-model.md), and [security reporting policy](./docs/SECURITY.md).
 
@@ -175,14 +184,14 @@ Generated Python passes through host source policies and Python AST checks befor
 
 Amagine3D is under active development. The current public release focuses on single-color and multi-color parametric CAD for intelligent hardware enclosures. The complete workflow has been tested in desktop Chrome and Edge.
 
-The first geometry task downloads a versioned WebAssembly and Python runtime. Projects are stored in local OPFS by default and can be exported as ZIP files. Export your projects before clearing browser site data.
-
 ## Contributing
 
 Focused issues and pull requests are welcome. Before submitting changes, read [CONTRIBUTING.md](./docs/CONTRIBUTING.md) and run the repository checks:
 
 ```bash
-pnpm check
+npm run typecheck
+npm test
+npm run build
 ```
 
 Report security issues through the private process in [SECURITY.md](./docs/SECURITY.md).
@@ -194,14 +203,17 @@ Amagine3D is built on the following open-source projects:
 | Project                                                                                                    | Purpose                                |
 | ---------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | [build123d](https://github.com/gumyr/build123d)                                                            | Parametric CAD modeling                |
-| [Open CASCADE Technology](https://dev.opencascade.org/) and [OCP.wasm](https://github.com/yeicor/OCP.wasm) | Exact geometry kernel in the browser   |
-| [Pyodide](https://pyodide.org/)                                                                            | Python runtime in the browser          |
+| [Open CASCADE Technology](https://dev.opencascade.org/) and [CadQuery OCP](https://github.com/CadQuery/OCP) | Exact geometry kernel and Python bindings |
 | [Three.js](https://github.com/mrdoob/three.js)                                                             | 3D preview, selection, and measurement |
 | [trimesh](https://github.com/mikedh/trimesh)                                                               | Mesh processing and checks             |
 | [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF writing and readback               |
-| [Vercel AI SDK](https://github.com/vercel/ai)                                                              | Agent and model tool calls             |
+| [PI coding agent](https://github.com/earendil-works/pi)                                                    | Agent sessions, streaming, and tool calls |
 
-Complete third-party attributions, license texts, and modification records are available in [`third_party/NOTICES.md`](./third_party/NOTICES.md) and [`third_party/README.md`](./third_party/README.md).
+The running application exposes its license page at `/licenses`. Checked-in
+license texts and the production npm inventory are available under
+[`public/licenses/`](./public/licenses/). The source-only distribution boundary
+and third-party attributions are documented in
+[`THIRD_PARTY_NOTICES.md`](./docs/THIRD_PARTY_NOTICES.md).
 
 ## License
 
