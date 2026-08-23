@@ -1,0 +1,406 @@
+/* Interaction, overlay and storage alignment corrections. */
+.leftPanel[data-menu-open='true'] {
+  z-index: var(--z-tooltip);
+  overflow: visible;
+}
+
+.leftPanel[data-menu-open='true'] .panelHeader,
+.leftPanel[data-menu-open='true'] .panelTitle,
+.leftPanel[data-menu-open='true'] .panelTitleSelect {
+  overflow: visible;
+}
+
+.executionMenu {
+  z-index: var(--z-tooltip);
+  left: 0;
+  width: min(30rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+}
+
+.panelTitleChevron svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 1.35;
+  transform: none;
+  transition: none;
+}
+
+.leftPanel .panelCollapseButton,
+.rightPanel .panelCollapseButton {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.centerPanel {
+  border-width: 4px;
+}
+
+.storageDrawerHeader,
+.storageDrawerHeader .sectionHeading {
+  align-items: center;
+}
+
+.storageDrawerHeader .storageRefreshButton,
+.storageDrawerHeader .storageDrawerClose {
+  display: inline-grid;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  box-shadow: none;
+}
+
+.storageDrawerHeader .storageRefreshButton svg,
+.storageDrawerHeader .storageDrawerClose svg {
+  width: 1rem;
+  height: 1rem;
+  overflow: visible;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
+.storageGroups {
+  padding-inline: var(--space-sm);
+}
+
+.folderFileList li {
+  isolation: isolate;
+  contain: paint;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  gap: var(--space-3xs);
+  padding: var(--space-3xs) var(--space-2xs);
+  overflow: clip;
+}
+
+.folderFileList .storageFileIdentity {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0.1875rem;
+  padding: var(--space-xs) var(--space-2xs);
+  overflow: hidden;
+  transform: none;
+}
+
+.storageFileIdentity strong,
+.storageFileIdentity small {
+  position: relative;
+  display: block;
+  min-width: 0;
+  margin: 0;
+  text-shadow: none;
+}
+
+.storageFileIdentity strong {
+  line-height: 1.25;
+}
+
+.storageFileIdentity small {
+  line-height: 1.2;
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .workspace .storageDrawerHeader .storageRefreshButton:not(:disabled):hover,
+.workspace .storageDrawerHeader .storageDrawerClose:not(:disabled):hover {
+    background: transparent;
+    color: var(--color-ink);
+    box-shadow: none;
+    transform: none;
+  }
+}
+
+@media (min-width: 64rem) {
+  .rightPanel.collapsedPanel .panelCollapseButton {
+    inset-block-start: var(--space-2xs);
+    width: 2rem;
+    min-width: 2rem;
+    height: 2rem;
+    min-height: 2rem;
+  }
+}
+
+/* The center header now owns the viewer readout and camera controls. */
+.leftPanel,
+.centerPanel,
+.rightPanel {
+  margin-block-start: 0;
+}
+
+.centerPanel {
+  align-self: stretch;
+  animation-delay: 0ms;
+}
+
+.centerPanel .canvasToolbar {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) auto;
+  gap: var(--space-md);
+  min-height: 3.625rem;
+  padding-block: var(--space-2xs);
+}
+
+.canvasToolbar .canvasHeading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.canvasHeadingCopy {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--space-3xs);
+}
+
+.canvasMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+@media (max-width: 63.99rem) {
+  .centerPanel .canvasToolbar {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: var(--space-xs);
+    padding-block: var(--space-xs);
+  }
+
+  .canvasMeta {
+    overflow-x: auto;
+  }
+}
+
+/* Storage projects are independent disclosure groups, never sticky layers. */
+.storageGroups {
+  gap: var(--space-xs);
+}
+
+.folderGroup,
+.folderGroup + .folderGroup {
+  position: relative;
+  isolation: isolate;
+  contain: layout paint;
+  gap: var(--space-xs);
+  padding-block: var(--space-xs);
+  overflow: clip;
+}
+
+.storageGroupHeading {
+  position: relative;
+  inset: auto;
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: 2.75rem;
+  padding-inline: var(--space-2xs);
+}
+
+@media (max-width: 39.99rem) {
+  .storageGroupHeading {
+    grid-template-columns: 2rem minmax(0, 1fr);
+  }
+}
+
+/* Panel disclosure feedback changes appearance without changing position. */
+.rightPanel .panelCollapseButton:active {
+  transform: none !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .workspace .rightPanel .panelCollapseButton:not(:disabled):hover {
+    background: var(--color-fill-strong);
+    color: var(--color-ink);
+    transform: none !important;
+  }
+}
+
+@media (min-width: 64rem) {
+  .rightPanel.collapsedPanel .panelCollapseButton,
+.workspace
+    .rightPanel.collapsedPanel
+    .panelCollapseButton:not(:disabled):hover,
+.rightPanel.collapsedPanel .panelCollapseButton:active {
+    transform: translateX(-50%) !important;
+  }
+}
+
+/* Storage owns one scroll region; project files sit one hierarchy level in. */
+.storageDrawer {
+  overflow: hidden;
+}
+
+.storageDrawer .storageSection {
+  flex: 1 1 auto;
+}
+
+.storageDrawerHeader,
+.storageActions {
+  flex: 0 0 auto;
+}
+
+.storageGroups {
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.folderGroup .folderFileList {
+  margin-inline-start: var(--space-lg);
+}
+
+@media (max-width: 39.99rem) {
+  .folderGroup .folderFileList {
+    margin-inline-start: var(--space-md);
+  }
+}
+
+/* Force a real flex scroll viewport for the project tree. */
+
+.storageDrawer .storageGroups {
+  flex: 1 1 0;
+  overflow-x: clip;
+  overflow-y: auto;
+  scroll-behavior: auto;
+  overflow-anchor: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.storageDrawer .storageGroupHeading {
+  position: relative;
+  z-index: auto;
+  inset-block-start: auto;
+  box-shadow: none;
+}
+
+/* Storage page v2: fixed chrome, one explicit viewport, flat project tree. */
+.storageDrawer .storageSection {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.storageDrawerHeader {
+  position: relative;
+  z-index: var(--z-raised);
+}
+
+.storageViewport {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.storageDrawer .storageGroups {
+  display: grid;
+  width: auto;
+  block-size: auto;
+  min-height: auto;
+  align-content: start;
+  gap: 0;
+  overflow: visible;
+}
+
+.storageDrawer .folderGroup,
+.storageDrawer .folderGroup + .folderGroup {
+  position: relative;
+  isolation: auto;
+  contain: none;
+  gap: 0;
+  padding-block: 0;
+  overflow: visible;
+}
+
+.storageDrawer .storageGroupHeading {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.storageGroupHeading .projectSummary {
+  display: flex;
+  min-width: 0;
+  min-height: 3rem;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  box-shadow: none;
+  text-align: start;
+}
+
+.storageDrawer .folderGroup .folderFileList {
+  padding-inline-end: var(--space-2xs);
+}
+
+.storageViewport > .fileEmpty,
+.storageViewport > .emptyState {
+  margin: var(--space-md);
+}
+
+.storageActions {
+  position: relative;
+  z-index: var(--z-raised);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .workspace .storageGroupHeading .projectSummary:not(:disabled):hover {
+    color: var(--color-ink);
+    box-shadow: none;
+    transform: none;
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .storageDrawer .storageGroups {
+    padding-inline: var(--space-sm);
+  }
+
+  .storageDrawer .storageGroupHeading {
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  }
+
+  .storageDrawer .folderGroup .folderFileList {
+    margin-inline-start: 2rem;
+  }
+}
+
+.storageDrawer .folderFileList[hidden] {
+  display: none;
+}

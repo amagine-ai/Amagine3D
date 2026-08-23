@@ -1,0 +1,276 @@
+.fileWorkspace {
+  flex: 1 1 auto;
+}
+
+.storageSection {
+  display: flex;
+  flex-direction: column;
+}
+
+.storageDrawer {
+  position: absolute;
+  z-index: var(--z-modal);
+  display: flex;
+  width: min(32rem, calc(100% - 1rem));
+  min-width: min(20rem, calc(100% - 1rem));
+}
+
+.storageDrawerHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-xs);
+}
+
+.storageDrawerHeader .sectionHeading {
+  min-width: 0;
+}
+
+.storageDrawerHeader .sectionHeading {
+  padding: 0;
+}
+
+.storageDrawerClose {
+  display: inline-grid;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: 2.75rem;
+  min-height: 2.75rem;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.storageDrawerClose:hover {
+  background: var(--color-fill-strong);
+  color: var(--color-ink);
+}
+
+.storageSection > .sectionHeading {
+  align-items: center;
+  padding: var(--space-md);
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+}
+
+.storageSection > .sectionHeading > div {
+  display: grid;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+.storageSection > .sectionHeading small {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageSection > .sectionHeading button,
+.storageActions button {
+  min-height: 2.75rem;
+  padding: var(--space-xs) var(--space-sm);
+  border: var(--rule-thin) solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-fill);
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.storageGroups {
+  display: grid;
+  overflow: auto;
+}
+
+.storageGroupHeading {
+  justify-content: space-between;
+}
+
+.storageGroupHeading h3 {
+  margin: 0;
+}
+
+.storageGroupHeading button {
+  flex: 0 0 auto;
+  min-height: 2rem;
+  padding: var(--space-2xs) var(--space-xs);
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.storageGroupHeading button:not(:disabled):hover {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.storageGroupHeading button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.storageGroupHeading span,
+.storageFileSize {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.folderFileList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.folderFileList li {
+  display: grid;
+  color: var(--color-ink-soft);
+  transition:
+    transform var(--dur-micro) var(--ease-out),
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.folderFileList li:hover {
+  background: var(--color-fill);
+}
+
+.folderFileList input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--color-accent);
+}
+
+.folderFileList .storageFileIdentity {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.folderFileList .storageFileIdentity:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.storageFileIdentity strong,
+.storageFileIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageFileIdentity strong {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+}
+
+.storageFileIdentity small {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.storageActions {
+  display: grid;
+  gap: var(--space-xs);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.storageSelectionBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.storageSelectionBar > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storageSelectionBar button {
+  flex: 0 0 auto;
+}
+
+.fileEmpty {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.fileTree,
+.exports ul {
+  display: grid;
+  gap: var(--space-2xs);
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fileTree button {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-xs);
+  width: 100%;
+  border: 0;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.fileTree button[aria-current='true'] {
+  color: var(--color-ink);
+}
+
+.fileTree button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileTree li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.fileTreeCheckbox {
+  display: inline-grid;
+  place-items: center;
+  padding: var(--space-2xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.fileTreeCheckbox input {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  accent-color: var(--color-accent);
+}
+
+.fileIcon {
+  text-align: center;
+}

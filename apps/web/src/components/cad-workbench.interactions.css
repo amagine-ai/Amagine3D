@@ -1,0 +1,163 @@
+.workspace button:disabled,
+.workspace input:disabled,
+.workspace textarea:disabled,
+.workspace fieldset:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (hover: hover) and (pointer: fine) {
+
+  .composer textarea:not(:disabled):hover {
+    background: var(--color-fill);
+  }
+
+  .panelResizer:not([aria-disabled='true']):hover > span {
+    background: var(--color-accent);
+    opacity: 1;
+    transform: scaleY(1.15);
+  }
+
+  .logResizer:not([aria-disabled='true']):hover > span {
+    background: var(--color-accent);
+    opacity: 1;
+    transform: scaleX(1.15);
+  }
+
+  .composerTool:hover::after {
+    opacity: 1;
+    transition-delay: 800ms;
+  }
+
+  .workspace .sendButton[data-state='stop']:not(:disabled):hover {
+    background: var(--color-error-soft);
+    color: var(--color-error);
+  }
+}
+
+.workspace button,
+.fileTree button {
+  transition:
+    transform var(--dur-micro) var(--ease-out),
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.composerShell:focus-within {
+  outline-offset: 1px;
+}
+
+.composer textarea:focus-visible {
+  outline: 0;
+}
+
+.workspace button:focus-visible,
+.workspace summary:focus-visible,
+.folderFileList input:focus-visible,
+.panelResizer:focus-visible,
+.logResizer:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.logResizer:focus-visible > span,
+.workspace[data-resizing='log'] .logResizer > span {
+  background: var(--color-accent);
+  opacity: 1;
+  transform: scaleX(1.25);
+}
+
+@media (min-width: 64rem) {
+
+  .leftPanel {
+    border-block-end: 0;
+  }
+
+  .rightPanel {
+    border-block-start: 0;
+  }
+
+  .panelResizer {
+    position: relative;
+    z-index: var(--z-raised);
+    display: grid;
+    min-width: 0;
+    place-items: center;
+    border: 0;
+    cursor: col-resize;
+    touch-action: none;
+  }
+
+  .panelResizer > span {
+    border-radius: var(--radius-pill);
+    opacity: 0.55;
+    transition:
+      opacity var(--dur-micro) var(--ease-out),
+      transform var(--dur-micro) var(--ease-out);
+  }
+
+  .panelResizer[aria-disabled='true'] {
+    cursor: default;
+  }
+
+  .panelResizer[aria-disabled='true'] > span {
+    opacity: 0.18;
+  }
+
+  .panelResizer:focus-visible > span,
+.workspace[data-resizing='left'] .panelResizer[data-side='left'] > span,
+.workspace[data-resizing='right'] .panelResizer[data-side='right'] > span {
+    background: var(--color-accent);
+    opacity: 1;
+    transform: scaleY(1.25);
+  }
+
+  .collapsedPanel .panelHeader {
+    flex-direction: column;
+    justify-content: flex-start;
+    height: 100%;
+  }
+
+  .collapsedPanel .panelTitle {
+    display: none;
+  }
+
+  .rightPanel.collapsedPanel .panelTitle {
+    display: flex;
+  }
+
+  .rightPanel.collapsedPanel .panelTitle > div {
+    display: none;
+  }
+}
+
+@media (max-width: 63.99rem) {
+  .storageDrawer {
+    width: min(32rem, calc(100% - 0.5rem));
+    min-width: min(18rem, calc(100% - 0.5rem));
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .executionMenu {
+    left: calc(-1 * var(--space-md));
+    width: min(22rem, calc(100vw - 1rem));
+  }
+
+  .executionMenuItem {
+    gap: var(--space-sm);
+  }
+
+  .storageDrawer {
+    inset-inline: 0;
+    width: 100%;
+    min-width: 100%;
+    border-inline-start: 0;
+  }
+}

@@ -1,0 +1,309 @@
+/* Vercel-inspired restraint layer: whitespace and tone replace nested frames. */
+.workspace {
+  gap: 0.5rem;
+  min-height: calc(100dvh - 4.25rem);
+  padding: 0.5rem;
+  background: var(--color-paper);
+}
+
+.leftPanel,
+.rightPanel,
+.centerPanel {
+  overflow: clip;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-paper-raised);
+  box-shadow: 0 1px 2px var(--color-shadow-soft);
+  animation: none;
+}
+
+.centerPanel {
+  background: var(--color-canvas);
+  box-shadow: none;
+}
+
+.panelHeader,
+.canvasToolbar {
+  min-height: 3.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+  box-shadow: none;
+}
+
+.panelTitle strong,
+.canvasToolbar h2 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.projectMark {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 0.125rem;
+  box-shadow: none;
+}
+
+.panelControls button,
+.panelCollapseButton,
+.sectionHeading button,
+.exports button,
+.fileHeadingActions button,
+.activityLogHeader button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+.leftTabs {
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  border-radius: 0;
+  background: var(--color-paper-raised);
+  box-shadow: none;
+}
+
+.leftTabs button {
+  min-height: 2.25rem;
+  border-radius: var(--radius-sm);
+  font-weight: 540;
+}
+
+.leftTabs button[aria-selected='true'] {
+  background: var(--color-fill);
+  box-shadow: none;
+}
+
+.conversation {
+  padding: 0.75rem 0.875rem 0;
+}
+
+.messageList {
+  gap: 1.125rem;
+}
+
+.messageList li[data-role='user'] .messageBubble {
+  border-radius: var(--radius-md) var(--radius-md) 0.1875rem var(--radius-md);
+  background: var(--color-fill);
+  box-shadow: none;
+}
+
+.composer {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+.composerShell {
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-raised);
+  box-shadow: 0 1px 2px var(--color-shadow-soft);
+  transition:
+    border-color var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-micro) var(--ease-out);
+}
+
+.composerShell:focus-within {
+  border-color: var(--color-rule-strong);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  transform: none;
+}
+
+.composerTool,
+.sendButton {
+  width: 2.125rem;
+  min-width: 2.125rem;
+  height: 2.125rem;
+  min-height: 2.125rem;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.sendButton {
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
+  box-shadow: none;
+}
+
+.executionMenu {
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-elevated);
+  box-shadow:
+    0 16px 32px rgb(0 0 0 / 0.1),
+    0 2px 8px rgb(0 0 0 / 0.06);
+}
+
+.executionMenuItem {
+  border-radius: var(--radius-sm);
+}
+
+.canvasBody {
+  margin: 0;
+  border-radius: 0;
+  background: var(--color-canvas);
+  box-shadow: none;
+}
+
+.canvasBody > section {
+  border-radius: 0;
+}
+
+.activityLog,
+.activityLogHeader {
+  box-shadow: none;
+}
+
+.activityLog {
+  border-block-start: var(--rule-thin) solid var(--color-rule);
+}
+
+.activityLogBody {
+  background: var(--color-paper-raised);
+}
+
+.storageDrawer {
+  inset-block: 0;
+  inset-inline-end: 0;
+  border: 0;
+  border-inline-start: var(--rule-thin) solid var(--color-rule);
+  border-radius: 0;
+  background: var(--color-elevated);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 0.08);
+}
+
+.storageDrawerHeader {
+  padding: 0.875rem 1rem;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  box-shadow: none;
+}
+
+.storageDrawer .storageGroups {
+  padding: 0.5rem 0.875rem 1.25rem;
+}
+
+.storageDrawer .folderGroup + .folderGroup {
+  border-block-start: 0;
+}
+
+.storageDrawer .storageGroupHeading {
+  min-height: 3.75rem;
+  padding: 0.375rem 0.25rem;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-elevated);
+}
+
+.storageGroupHeading .projectSummary {
+  border-radius: var(--radius-sm);
+}
+
+.storageDrawer .folderGroup .folderFileList {
+  margin: 0.25rem 0 0.5rem 2.25rem;
+}
+
+.folderFileList {
+  gap: 0;
+}
+
+.folderFileList li {
+  min-height: 3rem;
+  border-radius: var(--radius-sm);
+}
+
+.folderFileList .storageFileIdentity {
+  min-height: 3rem;
+  padding-block: 0.375rem;
+}
+
+.storageActions {
+  padding: 0.75rem 1rem;
+  border-block-start: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+  box-shadow: none;
+}
+
+.parameterActions > button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .workspace button:not(:disabled):hover,
+.fileTree button:not(:disabled):hover,
+.folderFileList label:hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .workspace .sendButton[data-state='send']:not(:disabled):hover {
+    background: var(--color-primary-hover);
+    color: var(--color-primary-ink);
+  }
+
+  .workspace .storageGroupHeading .projectSummary:not(:disabled):hover,
+.fileTree li:hover,
+.folderFileList li:hover {
+    background: var(--color-fill);
+  }
+}
+
+@media (min-width: 64rem) {
+  .workspace {
+    grid-template-columns:
+      var(--workspace-left) 0.375rem minmax(20rem, 1fr) 0.375rem
+      var(--workspace-right);
+  }
+
+  .leftPanel,
+.rightPanel,
+.centerPanel,
+.panelResizer {
+    min-height: calc(100dvh - 5.25rem);
+    max-height: calc(100dvh - 5.25rem);
+  }
+
+  .panelResizer {
+    background: transparent;
+  }
+
+  .panelResizer > span {
+    width: 1px;
+    height: 2.5rem;
+    background: var(--color-rule-strong);
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .workspace {
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .leftPanel,
+.rightPanel,
+.centerPanel {
+    border-width: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .composerShell {
+    border-width: 1px;
+  }
+
+  .storageDrawer {
+    inset: 0;
+    border: 0;
+    border-radius: 0;
+  }
+}

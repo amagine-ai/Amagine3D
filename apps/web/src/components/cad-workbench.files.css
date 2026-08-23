@@ -1,0 +1,159 @@
+/* File surfaces use hierarchy and row rhythm instead of nested frames. */
+.fileWorkspace {
+  display: grid;
+  align-content: start;
+  gap: var(--space-lg);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-md);
+}
+
+.fileSection,
+.storageSection,
+.folderGroup {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.fileSection .sectionHeading {
+  min-height: 2rem;
+  align-items: center;
+  padding-inline: var(--space-xs);
+}
+
+.fileSection .sectionHeading h2 {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-weight: 620;
+  letter-spacing: 0.04em;
+}
+
+.fileSection .fileTree {
+  gap: 0;
+  margin-block-start: var(--space-xs);
+}
+
+.fileTree li {
+  min-height: 2.75rem;
+  padding: var(--space-3xs) var(--space-2xs);
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out);
+}
+
+.fileTree li:has(button[aria-current='true']) {
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+}
+
+.fileTree button,
+.fileTree button[aria-current='true'] {
+  min-height: 2.5rem;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+.fileIcon {
+  display: inline-grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 0.375rem;
+  background: var(--color-fill);
+  color: var(--color-ink-soft);
+  font-size: 0.625rem;
+  font-weight: 620;
+}
+
+.fileTree li:has(button[aria-current='true']) .fileIcon {
+  background: var(--color-paper-raised);
+  color: var(--color-accent);
+}
+
+.storageDrawerHeader {
+  background: var(--color-elevated);
+}
+
+.storageDrawer .storageSection {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.storageGroups {
+  padding: var(--space-xs) var(--space-lg) var(--space-lg);
+}
+
+.folderGroup {
+  display: grid;
+}
+
+.folderGroup + .folderGroup {
+  padding-block-start: var(--space-lg);
+}
+
+.storageGroupHeading {
+  z-index: var(--z-base);
+  inset-block-start: 0;
+  background: var(--color-elevated);
+}
+
+.storageGroupHeading h3 {
+  font-size: var(--text-sm);
+  font-weight: 620;
+  letter-spacing: -0.015em;
+}
+
+.storageGroupHeading span,
+.storageFileSize,
+.storageFileIdentity small {
+  font-family: var(--font-mono);
+}
+
+.storageGroupHeading button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+.folderFileList .storageFileIdentity {
+  border-radius: var(--radius-sm);
+}
+
+@media (hover: hover) and (pointer: fine) {
+
+  .workspace .fileTree button:not(:disabled):hover,
+.workspace .folderFileList .storageFileIdentity:not(:disabled):hover,
+.workspace .folderFileList label:hover {
+    background: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .fileTree li:has(button[aria-current='true']):hover {
+    background: var(--color-accent-soft);
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .fileWorkspace {
+    padding: var(--space-sm);
+  }
+
+  .storageDrawerHeader,
+.storageGroups,
+.storageActions {
+    padding-inline: var(--space-md);
+  }
+}

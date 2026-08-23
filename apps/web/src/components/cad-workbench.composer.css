@@ -1,0 +1,162 @@
+.composerForm,
+.composerShell {
+  min-width: 0;
+}
+
+.composerShell {
+  position: relative;
+  display: grid;
+}
+
+.composer textarea {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  outline-offset: 1px;
+  font: inherit;
+}
+
+.composer textarea {
+  min-height: 5rem;
+  max-height: 14rem;
+  padding: var(--space-sm);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  overflow-y: auto;
+  resize: none;
+}
+
+.composerFooter,
+.composerTools {
+  display: flex;
+  align-items: center;
+}
+
+.composerFooter {
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.attachmentStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 0;
+}
+
+.attachmentChip {
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: 999px;
+  background: var(--color-paper-raised);
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  padding: 4px 8px;
+}
+
+.attachmentChip img {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  object-fit: cover;
+  vertical-align: middle;
+  margin-right: 5px;
+}
+
+.composerTools {
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 0.125rem;
+}
+
+.composerTool,
+.sendButton {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.composerTool {
+  position: relative;
+}
+
+.composerTool svg,
+.sendButton svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  overflow: visible;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+}
+
+.composerTool[data-active='true'],
+.composerTool[aria-expanded='true'] {
+  border: var(--rule-thin) solid transparent;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.composerTool::after {
+  position: absolute;
+  inset-block-end: calc(100% + var(--space-xs));
+  inset-inline-start: 50%;
+  z-index: var(--z-modal);
+  width: max-content;
+  max-width: 12rem;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
+  content: attr(data-tooltip);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity var(--dur-short) var(--ease-out);
+}
+
+.composerTool:focus-visible::after {
+  opacity: 1;
+}
+
+.sendButton {
+  flex: 0 0 auto;
+  font-size: var(--text-lg);
+}
+
+.sendButton[data-state='stop'] {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  font-size: var(--text-xs);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.parameterActions > button {
+  min-height: 2.75rem;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
