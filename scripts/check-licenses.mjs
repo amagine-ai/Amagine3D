@@ -67,13 +67,19 @@ for (const dependency of Object.keys(packageJson.dependencies ?? {})) {
 const expectedProductionPackages = new Map();
 for (const [path, metadata] of Object.entries(packageLock.packages ?? {})) {
   if (!path.includes('node_modules/') || metadata.dev) continue;
+  const packageMetadata = metadata.link
+    ? packageLock.packages?.[metadata.resolved]
+    : metadata;
   const name = path.split('node_modules/').at(-1);
-  const key = `${name}@${metadata.version}`;
-  assert(metadata.license, `${key} has no license metadata in package-lock.json`);
+  const key = `${name}@${packageMetadata?.version}`;
+  assert(
+    packageMetadata?.license,
+    `${key} has no license metadata in package-lock.json`,
+  );
   expectedProductionPackages.set(key, {
-    license: metadata.license,
+    license: packageMetadata.license,
     name,
-    version: metadata.version,
+    version: packageMetadata.version,
   });
 }
 

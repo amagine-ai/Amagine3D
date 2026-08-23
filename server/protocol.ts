@@ -6,15 +6,12 @@ import {
   type ImageAttachment,
 } from '../src/types.ts';
 
+export { parseModelSpec, type ModelSpec } from '@amagine3d/a3d-runtime';
+
 export interface ChatRequest {
   images?: ImageAttachment[];
   message: string;
   sessionId: string;
-}
-
-export interface ModelSpec {
-  id: string;
-  provider: string;
 }
 
 const acceptedImageTypes = new Set<string>(ACCEPTED_IMAGE_TYPES);
@@ -61,15 +58,4 @@ export function isChatRequest(value: unknown): value is ChatRequest {
       candidate.sessionId,
     )
   );
-}
-
-export function parseModelSpec(value: string): ModelSpec {
-  const separator = value.indexOf('/');
-  if (separator <= 0 || separator === value.length - 1) {
-    throw new Error('LLM_MODEL must use provider/model format.');
-  }
-  return {
-    provider: value.slice(0, separator),
-    id: value.slice(separator + 1),
-  };
 }

@@ -54,9 +54,7 @@ export async function assertWritablePath(
   return candidate;
 }
 
-export function createRestrictedToolDefinitions(
-  writableRoot: string,
-) {
+export function createRestrictedToolDefinitions(writableRoot: string) {
   const editOperations = {
     async access(path: string) {
       await access(await assertWritablePath(writableRoot, path), constants.R_OK | constants.W_OK);

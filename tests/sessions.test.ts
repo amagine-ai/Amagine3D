@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { CURRENT_SESSION_VERSION } from '@earendil-works/pi-coding-agent';
+import { CURRENT_SESSION_VERSION } from '@amagine3d/a3d-runtime';
 
 import {
   listSessionCatalog,

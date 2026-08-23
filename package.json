@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@amagine3d/a3d-runtime": "file:packages/a3d-runtime",
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "dotenv": "17.2.1",

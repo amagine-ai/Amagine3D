@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
-import { loadSkillsFromDir } from '@earendil-works/pi-coding-agent';
+import { loadSkillsFromDir } from '@amagine3d/a3d-runtime';
 
 import { isChatRequest, parseModelSpec } from '../server/protocol.ts';
 

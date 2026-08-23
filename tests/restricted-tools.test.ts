@@ -15,7 +15,7 @@ import { test } from 'node:test';
 import {
   assertWritablePath,
   createRestrictedToolDefinitions,
-} from '../server/restricted-tools.ts';
+} from '@amagine3d/a3d-runtime';
 
 test('PI mutation tools only target the current session directory', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-tool-boundary-'));

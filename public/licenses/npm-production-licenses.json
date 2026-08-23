@@ -1,6 +1,11 @@
 {
   "packages": [
     {
+      "name": "@amagine3d/a3d-runtime",
+      "version": "0.1.0",
+      "license": "Apache-2.0"
+    },
+    {
       "name": "@anthropic-ai/sdk",
       "version": "0.91.1",
       "license": "MIT"

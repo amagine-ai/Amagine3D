@@ -5,7 +5,7 @@ import {
   SessionManager,
   parseSessionEntries,
   type SessionInfo,
-} from '@earendil-works/pi-coding-agent';
+} from '@amagine3d/a3d-runtime';
 
 import {
   BUNDLED_POMODORO_SESSION_ID,

@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { PiRuntime } from './pi-runtime.ts';
+import { PiRuntime } from '@amagine3d/a3d-runtime';
 import { activateProjectPython } from './python-runtime.ts';
 
 const serverDirectory = dirname(fileURLToPath(import.meta.url));

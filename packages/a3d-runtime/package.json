@@ -1,0 +1,13 @@
+{
+  "name": "@amagine3d/a3d-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2"
+  }
+}
