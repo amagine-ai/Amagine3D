@@ -1,15 +1,15 @@
 .fileWorkspace {
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   flex: 1 1 auto;
-  align-content: start;
-  gap: var(--space-lg);
-  padding: var(--space-md);
-  overflow: auto;
+  overflow: hidden;
 }
 
 .fileSection {
   min-height: 0;
+  padding: var(--space-md);
+  overflow: auto;
 }
 
 .sectionHeading {
@@ -42,18 +42,30 @@
   font-size: var(--text-xs);
 }
 
-.fileHeadingActions button {
+.fileHeadingActions .fileRefreshButton {
+  display: inline-grid;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
   min-height: 2rem;
-  padding: var(--space-2xs) var(--space-xs);
+  place-items: center;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-ink-soft);
   cursor: pointer;
   font: inherit;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  white-space: nowrap;
+}
+
+.fileRefreshButton svg {
+  width: 1rem;
+  height: 1rem;
+  overflow: visible;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
 }
 
 .fileEmpty {
@@ -115,18 +127,43 @@
 }
 
 .fileTreeCheckbox {
-  display: inline-grid;
-  place-items: center;
-  padding: var(--space-2xs);
-  border-radius: var(--radius-sm);
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--color-primary);
   cursor: pointer;
 }
 
-.fileTreeCheckbox input {
-  width: 1rem;
-  height: 1rem;
+.fileActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-block-start: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.fileActions > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileActions button {
+  min-height: 2.25rem;
   flex: 0 0 auto;
-  accent-color: var(--color-accent);
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-fill);
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
 }
 
 .fileWorkspace :is(button, input):disabled {
@@ -136,6 +173,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .fileHeadingActions button:not(:disabled):hover,
+  .fileActions button:not(:disabled):hover,
   .fileTree li:not(:has(button[aria-current='true'])):hover {
     background: var(--color-fill);
     color: var(--color-ink);
@@ -148,6 +186,10 @@
 
 @media (max-width: 39.99rem) {
   .fileWorkspace {
+    padding: 0;
+  }
+
+  .fileSection {
     padding: var(--space-sm);
   }
 }

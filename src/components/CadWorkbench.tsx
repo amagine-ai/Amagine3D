@@ -2,9 +2,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
-  forwardRef,
   useEffect,
-  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -31,11 +29,13 @@ import {
 } from './cad-workbench/utils';
 import { useWorkbenchLayout } from './cad-workbench/useWorkbenchLayout';
 import {
+  fetchArtifactArchive,
   fetchArtifacts,
   fetchHealth,
   fetchSessionCatalog,
   fetchSessionDetail,
   streamAgent,
+  trashArtifacts,
 } from '../lib/agent-api';
 import { preferredPreviewArtifact } from '../lib/artifact-selection';
 import { finishChatStages, startChatStage } from '../lib/chat-stages';
@@ -56,26 +56,16 @@ import {
 
 interface CadWorkbenchProps {
   language: Language;
-  onDownloadTargetChange?: (target: ArtifactSummary | undefined) => void;
   onStorageOpenChange?: (open: boolean) => void;
   storageOpen: boolean;
 }
 
-export interface CadWorkbenchHandle {
-  downloadCurrent: () => void;
-}
-
 const acceptedImageTypes = new Set<string>(ACCEPTED_IMAGE_TYPES);
-export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
-  function CadWorkbench(
-    {
-      language,
-      onDownloadTargetChange,
-      onStorageOpenChange,
-      storageOpen,
-    },
-    ref,
-  ) {
+export function CadWorkbench({
+  language,
+  onStorageOpenChange,
+  storageOpen,
+}: CadWorkbenchProps) {
     const text = translator(language);
     const [activity, setActivity] = useState('');
     const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
@@ -204,23 +194,41 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
       }
     }
 
-    function downloadArtifact(artifact: ArtifactSummary | undefined) {
-      if (!artifact) return;
+    function triggerDownload(url: string, name: string) {
       const anchor = document.createElement('a');
-      anchor.download = artifact.name;
-      anchor.href = artifact.url;
+      anchor.download = name;
+      anchor.href = url;
       anchor.click();
     }
 
-    useImperativeHandle(
-      ref,
-      () => ({ downloadCurrent: () => downloadArtifact(selectedArtifact) }),
-      [selectedArtifact],
-    );
+    async function downloadArtifacts(selectedArtifacts: ArtifactSummary[]) {
+      if (selectedArtifacts.length === 0) return;
+      if (selectedArtifacts.length === 1) {
+        const artifact = selectedArtifacts[0];
+        if (artifact) triggerDownload(artifact.url, artifact.name);
+        return;
+      }
+      const archive = await fetchArtifactArchive(
+        sessionId,
+        selectedArtifacts.map(({ path }) => path),
+      );
+      const url = URL.createObjectURL(archive);
+      triggerDownload(url, `${artifactWorkspace.id}-files.zip`);
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
 
-    useEffect(() => {
-      onDownloadTargetChange?.(selectedArtifact);
-    }, [onDownloadTargetChange, selectedArtifact]);
+    async function deleteArtifacts(selectedArtifacts: ArtifactSummary[]) {
+      if (artifactWorkspace.readOnly || selectedArtifacts.length === 0) return;
+      await trashArtifacts(
+        sessionId,
+        selectedArtifacts.map(({ path }) => path),
+      );
+      try {
+        await refreshArtifacts();
+      } catch (error) {
+        addRuntimeEntry(errorText(error, language), 'files', 'error');
+      }
+    }
 
     function selectInitialArtifact(nextArtifacts: ArtifactSummary[]) {
       setSelectedPath(
@@ -660,8 +668,11 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
           files={{
             artifacts,
             language,
+            loading: storageLoading,
+            onDownload: downloadArtifacts,
             onRefresh: () => void refreshArtifacts(),
             onSelect: selectArtifact,
+            selectionScope: sessionId,
             selectedPath,
             workspaceName: artifactWorkspaceName,
           }}
@@ -719,11 +730,8 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
         </div>
 
         <ParametersPanel
-          artifactWorkspace={artifactWorkspace}
-          artifacts={artifacts}
           collapsed={rightCollapsed}
           language={language}
-          onDownload={downloadArtifact}
           onToggle={() => setRightCollapsed((collapsed) => !collapsed)}
         />
         {storageOpen ? (
@@ -733,6 +741,8 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
             language={language}
             loading={storageLoading}
             onClose={() => onStorageOpenChange?.(false)}
+            onDelete={deleteArtifacts}
+            onDownload={downloadArtifacts}
             onRefresh={() => void refreshArtifacts()}
             onSelect={(artifact) => {
               selectArtifact(artifact);
@@ -743,5 +753,4 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
         ) : null}
       </div>
     );
-  },
-);
+}
