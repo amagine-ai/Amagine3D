@@ -1,8 +1,9 @@
 import styles from './StorageDrawer.module.css';
 import type { ArtifactSummary, ArtifactWorkspace } from '../../types';
+import { formatBytes } from '../../lib/format';
 import type { Language } from './types';
 import { translator } from './types';
-import { fileGlyph, formatBytes } from './utils';
+import { fileGlyph } from './utils';
 import { LoadingSpinner } from './WorkbenchPrimitives';
 
 interface StorageDrawerProps {

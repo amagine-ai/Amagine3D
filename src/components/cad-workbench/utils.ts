@@ -52,12 +52,6 @@ export function errorText(error: unknown, language: Language): string {
       : 'The agent run failed. Check the server log.';
 }
 
-export function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${String(bytes)} B`;
-  if (bytes < 1_024 * 1_024) return `${String(Math.round(bytes / 1_024))} KB`;
-  return `${(bytes / 1_024 / 1_024).toFixed(1)} MB`;
-}
-
 export function fileGlyph(artifact: ArtifactSummary): string {
   if (artifact.kind === 'model') return '3D';
   if (artifact.kind === 'source') return 'PY';

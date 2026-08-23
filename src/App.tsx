@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import appStyles from './App.module.css';
 import { CadWorkbench, type CadWorkbenchHandle } from './components/CadWorkbench';
+import { useDismissibleLayer } from './hooks/useDismissibleLayer';
 import type { ArtifactSummary } from './types';
 
 type Language = 'en' | 'zh';
@@ -36,7 +37,10 @@ export function App() {
   const [language, setLanguage] = useState<Language>('zh');
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
-  const languageMenuRef = useRef<HTMLDivElement>(null);
+  const languageMenuRef = useDismissibleLayer<HTMLDivElement>({
+    onDismiss: () => setLanguageMenuOpen(false),
+    open: languageMenuOpen,
+  });
   const workbenchRef = useRef<CadWorkbenchHandle>(null);
   const t = copy[language];
 
@@ -48,24 +52,6 @@ export function App() {
   useEffect(() => {
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
   }, [language]);
-
-  useEffect(() => {
-    if (!languageMenuOpen) return;
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!languageMenuRef.current?.contains(event.target as Node)) {
-        setLanguageMenuOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setLanguageMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', closeOnOutsideClick);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsideClick);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [languageMenuOpen]);
 
   return (
     <main className={appStyles.page}>

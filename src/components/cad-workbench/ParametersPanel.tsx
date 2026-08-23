@@ -1,8 +1,8 @@
 import styles from './ParametersPanel.module.css';
 import type { ArtifactSummary, ArtifactWorkspace } from '../../types';
+import { formatBytes } from '../../lib/format';
 import type { Language } from './types';
 import { translator } from './types';
-import { formatBytes } from './utils';
 
 interface ParametersPanelProps {
   artifactWorkspace: ArtifactWorkspace;

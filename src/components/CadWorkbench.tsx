@@ -39,6 +39,7 @@ import {
 } from '../lib/agent-api';
 import { preferredPreviewArtifact } from '../lib/artifact-selection';
 import { finishChatStages, startChatStage } from '../lib/chat-stages';
+import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import {
   ACCEPTED_IMAGE_TYPES,
   BUNDLED_POMODORO_SESSION_ID,
@@ -103,7 +104,10 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
     const abortRef = useRef<AbortController | undefined>(undefined);
     const artifactSnapshotRef = useRef<ArtifactSummary[]>([]);
     const conversationRef = useRef<HTMLElement>(null);
-    const sessionMenuRef = useRef<HTMLDivElement>(null);
+    const sessionMenuRef = useDismissibleLayer<HTMLDivElement>({
+      onDismiss: () => setSessionMenuOpen(false),
+      open: sessionMenuOpen,
+    });
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const {
       beginLogResize,
@@ -328,24 +332,6 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
         live = false;
       };
     }, []);
-
-    useEffect(() => {
-      if (!sessionMenuOpen) return;
-      const closeOnOutsidePointer = (event: PointerEvent) => {
-        if (!sessionMenuRef.current?.contains(event.target as Node)) {
-          setSessionMenuOpen(false);
-        }
-      };
-      const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-        if (event.key === 'Escape') setSessionMenuOpen(false);
-      };
-      document.addEventListener('pointerdown', closeOnOutsidePointer);
-      document.addEventListener('keydown', closeOnEscape);
-      return () => {
-        document.removeEventListener('pointerdown', closeOnOutsidePointer);
-        document.removeEventListener('keydown', closeOnEscape);
-      };
-    }, [sessionMenuOpen]);
 
     useEffect(() => {
       if (!selectedArtifact || !['report', 'source'].includes(selectedArtifact.kind)) {

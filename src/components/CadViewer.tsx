@@ -23,6 +23,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 
 import styles from './CadViewer.module.css';
+import { formatBytes } from '../lib/format';
 import type { ArtifactSummary } from '../types';
 
 type ViewName = 'front' | 'isometric' | 'top';
@@ -404,10 +405,4 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
       </div>
     </section>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${String(bytes)} B`;
-  if (bytes < 1_024 * 1_024) return `${String(Math.round(bytes / 1_024))} KB`;
-  return `${(bytes / 1_024 / 1_024).toFixed(1)} MB`;
 }
