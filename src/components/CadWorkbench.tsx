@@ -1,22 +1,35 @@
 import {
-  type CSSProperties,
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   forwardRef,
-  lazy,
-  Suspense,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 
 import styles from '../../apps/web/src/components/cad-workbench.module.css';
+import { LeftPanel } from './cad-workbench/LeftPanel';
+import { ParametersPanel } from './cad-workbench/ParametersPanel';
+import { PreviewPanel } from './cad-workbench/PreviewPanel';
+import { StorageDrawer } from './cad-workbench/StorageDrawer';
+import {
+  type Language,
+  type LeftView,
+  type PendingImage,
+  type RuntimeEntry,
+  translator,
+} from './cad-workbench/types';
+import {
+  createSessionId,
+  draftSession,
+  draftWorkspace,
+  errorText,
+  readImage,
+} from './cad-workbench/utils';
+import { useWorkbenchLayout } from './cad-workbench/useWorkbenchLayout';
 import {
   fetchArtifacts,
   fetchHealth,
@@ -32,36 +45,13 @@ import {
   MAX_IMAGE_BYTES,
   MAX_IMAGE_COUNT,
   MAX_TOTAL_IMAGE_BYTES,
-  type AcceptedImageType,
   type AgentEvent,
   type ArtifactSummary,
   type ArtifactWorkspace,
   type ChatMessage,
   type HealthResponse,
-  type ImageAttachment,
   type SessionSummary,
 } from '../types';
-
-const CadViewer = lazy(() =>
-  import('./CadViewer').then((module) => ({ default: module.CadViewer })),
-);
-
-type Language = 'en' | 'zh';
-type LeftView = 'chat' | 'files';
-
-interface PendingImage extends ImageAttachment {
-  id: string;
-  size: number;
-  url: string;
-}
-
-interface RuntimeEntry {
-  id: string;
-  level: 'error' | 'info';
-  message: string;
-  occurredAt: number;
-  stage: string;
-}
 
 interface CadWorkbenchProps {
   language: Language;
@@ -74,116 +64,7 @@ export interface CadWorkbenchHandle {
   downloadCurrent: () => void;
 }
 
-type ToolbarIconName = 'new-run' | 'send' | 'stop';
-
 const acceptedImageTypes = new Set<string>(ACCEPTED_IMAGE_TYPES);
-const LEFT_PANEL_MIN = 280;
-const LEFT_PANEL_MAX = 520;
-const RIGHT_PANEL_MIN = 288;
-const RIGHT_PANEL_MAX = 480;
-const LOG_PANEL_MIN = 128;
-const LOG_PANEL_MAX = 420;
-
-function draftSession(sessionId: string): SessionSummary {
-  const timestamp = new Date().toISOString();
-  return {
-    createdAt: timestamp,
-    id: sessionId,
-    kind: 'user',
-    persisted: false,
-    readOnly: false,
-    title: 'New printable object',
-    updatedAt: timestamp,
-  };
-}
-
-function draftWorkspace(sessionId: string): ArtifactWorkspace {
-  return {
-    id: sessionId,
-    name: 'Workspace',
-    path: `workspace/sessions/${sessionId}/`,
-    readOnly: false,
-    sessionId,
-  };
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function createSessionId(): string {
-  return crypto.randomUUID();
-}
-
-function errorText(error: unknown, language: Language): string {
-  if (error instanceof DOMException && error.name === 'AbortError') {
-    return language === 'zh' ? '本轮执行已停止。' : 'This run was stopped.';
-  }
-  return error instanceof Error
-    ? error.message
-    : language === 'zh'
-      ? '智能体执行失败，请检查服务端日志。'
-      : 'The agent run failed. Check the server log.';
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${String(bytes)} B`;
-  if (bytes < 1_024 * 1_024) return `${String(Math.round(bytes / 1_024))} KB`;
-  return `${(bytes / 1_024 / 1_024).toFixed(1)} MB`;
-}
-
-function fileGlyph(artifact: ArtifactSummary): string {
-  if (artifact.kind === 'model') return '3D';
-  if (artifact.kind === 'source') return 'PY';
-  if (artifact.kind === 'image') return 'IMG';
-  return '{}';
-}
-
-function readImage(file: File): Promise<PendingImage> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Unable to read ${file.name}.`));
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error(`Unable to read ${file.name}.`));
-        return;
-      }
-      const separator = reader.result.indexOf(',');
-      if (separator < 0) {
-        reject(new Error(`Invalid image data: ${file.name}.`));
-        return;
-      }
-      resolve({
-        data: reader.result.slice(separator + 1),
-        id: crypto.randomUUID(),
-        mimeType: file.type as AcceptedImageType,
-        name: file.name.slice(0, 255),
-        size: file.size,
-        url: reader.result,
-      });
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function ToolbarIcon({ name }: { name: ToolbarIconName }) {
-  return (
-    <svg aria-hidden="true" fill="none" focusable="false" viewBox="0 0 24 24">
-      {name === 'new-run' ? (
-        <path d="M12 5v14M5 12h14" />
-      ) : name === 'send' ? (
-        <path d="M12 19V5M6 11l6-6 6 6" />
-      ) : (
-        <rect height="10" rx="1.5" width="10" x="7" y="7" />
-      )}
-    </svg>
-  );
-}
-
-function LoadingSpinner() {
-  return <span aria-hidden="true" className={styles.loadingSpinner} />;
-}
-
 export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
   function CadWorkbench(
     {
@@ -194,8 +75,7 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
     },
     ref,
   ) {
-    const text = (english: string, chinese: string) =>
-      language === 'zh' ? chinese : english;
+    const text = translator(language);
     const [activity, setActivity] = useState('');
     const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
     const [artifactWorkspace, setArtifactWorkspace] = useState<ArtifactWorkspace>({
@@ -207,16 +87,10 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
     });
     const [health, setHealth] = useState<HealthResponse>();
     const [healthError, setHealthError] = useState(false);
-    const [leftCollapsed, setLeftCollapsed] = useState(false);
     const [leftView, setLeftView] = useState<LeftView>('chat');
-    const [leftWidth, setLeftWidth] = useState(340);
-    const [logCollapsed, setLogCollapsed] = useState(true);
-    const [logHeight, setLogHeight] = useState(208);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
     const [prompt, setPrompt] = useState('');
-    const [rightCollapsed, setRightCollapsed] = useState(true);
-    const [rightWidth, setRightWidth] = useState(320);
     const [running, setRunning] = useState(false);
     const [runtimeEntries, setRuntimeEntries] = useState<RuntimeEntry[]>([]);
     const [selectedPath, setSelectedPath] = useState<string>();
@@ -231,6 +105,17 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
     const conversationRef = useRef<HTMLElement>(null);
     const sessionMenuRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const {
+      beginLogResize,
+      beginSideResize,
+      leftCollapsed,
+      logCollapsed,
+      rightCollapsed,
+      setLeftCollapsed,
+      setLogCollapsed,
+      setRightCollapsed,
+      workspaceStyle,
+    } = useWorkbenchLayout();
 
     const selectedArtifact = useMemo(
       () => artifacts.find((artifact) => artifact.path === selectedPath),
@@ -254,13 +139,6 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
       sessionId === BUNDLED_POMODORO_SESSION_ID
         ? text('Amagine3D Pomodoro Timer', 'Amagine3D 番茄钟')
         : sessionTitle(activeSession);
-
-    const workspaceStyle = {
-      '--workspace-left': leftCollapsed ? '3.25rem' : `${String(leftWidth)}px`,
-      '--workspace-log-height': logCollapsed ? '52px' : `${String(logHeight)}px`,
-      '--workspace-log-resizer': logCollapsed ? '0px' : '0.5rem',
-      '--workspace-right': rightCollapsed ? '3.25rem' : `${String(rightWidth)}px`,
-    } as CSSProperties;
 
     function addRuntimeEntry(
       message: string,
@@ -767,373 +645,57 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
       beginUserDraft();
     }
 
-    function beginSideResize(
-      side: 'left' | 'right',
-      event: ReactPointerEvent<HTMLDivElement>,
-    ) {
-      const startX = event.clientX;
-      const startWidth = side === 'left' ? leftWidth : rightWidth;
-      const move = (moveEvent: PointerEvent) => {
-        const delta = moveEvent.clientX - startX;
-        if (side === 'left') {
-          setLeftWidth(clamp(startWidth + delta, LEFT_PANEL_MIN, LEFT_PANEL_MAX));
-        } else {
-          setRightWidth(
-            clamp(startWidth - delta, RIGHT_PANEL_MIN, RIGHT_PANEL_MAX),
-          );
-        }
-      };
-      const stop = () => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', stop);
-      };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', stop, { once: true });
-    }
-
-    function beginLogResize(event: ReactPointerEvent<HTMLDivElement>) {
-      const startY = event.clientY;
-      const startHeight = logHeight;
-      const move = (moveEvent: PointerEvent) => {
-        setLogHeight(
-          clamp(startHeight + startY - moveEvent.clientY, LOG_PANEL_MIN, LOG_PANEL_MAX),
-        );
-      };
-      const stop = () => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', stop);
-      };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', stop, { once: true });
-    }
-
     return (
       <div className={styles.workspace} style={workspaceStyle}>
-        <aside
-          aria-label={text('Conversation and generated files', '对话与生成文件')}
-          className={`${styles.leftPanel} ${leftCollapsed ? styles.collapsedPanel : ''}`}
-          data-menu-open={sessionMenuOpen || undefined}
-        >
-          <header className={styles.panelHeader}>
-            <div className={styles.panelTitle}>
-              <span aria-hidden="true" className={styles.projectMark} />
-              <div className={styles.panelTitleSelect} ref={sessionMenuRef}>
-                <button
-                  aria-expanded={sessionMenuOpen}
-                  aria-haspopup="listbox"
-                  className={styles.panelTitleButton}
-                  disabled={running || sessionLoading}
-                  onClick={() => setSessionMenuOpen((open) => !open)}
-                  type="button"
-                >
-                  <strong>{artifactWorkspaceName}</strong>
-                  <span
-                    aria-hidden="true"
-                    className={styles.panelTitleChevron}
-                    data-open={sessionMenuOpen}
-                  >
-                    <svg fill="none" focusable="false" viewBox="0 0 16 16">
-                      <path d="m5.25 6.25 2.75-2 2.75 2M5.25 9.75l2.75 2 2.75-2" />
-                    </svg>
-                  </span>
-                </button>
-                {sessionMenuOpen ? (
-                  <div
-                    aria-label={text('Sessions', '会话')}
-                    className={styles.executionMenu}
-                    role="listbox"
-                  >
-                    <div className={styles.executionMenuHeading}>
-                      <strong>{text('Sessions', '会话')}</strong>
-                      <span>{sessions.length}</span>
-                    </div>
-                    {sessions.map((session) => (
-                      <button
-                        aria-selected={session.id === sessionId}
-                        className={styles.executionMenuItem}
-                        key={session.id}
-                        onClick={() => void openSession(session)}
-                        role="option"
-                        type="button"
-                      >
-                        <span>
-                          {sessionTitle(session)}
-                          {session.kind === 'builtin' ? (
-                            <small className={styles.bundledProjectBadge}>
-                              {text('Built-in', '内置')}
-                            </small>
-                          ) : null}
-                        </span>
-                        <time dateTime={session.updatedAt}>
-                          {new Intl.DateTimeFormat(
-                            language === 'zh' ? 'zh-CN' : 'en',
-                            { month: 'short', day: 'numeric' },
-                          ).format(Date.parse(session.updatedAt))}
-                        </time>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                <small>
-                  {sessionLoading
-                    ? text('Loading session…', '正在载入会话…')
-                    : connectionStatus}
-                </small>
-              </div>
-            </div>
-            <div className={styles.panelControls}>
-              <button
-                aria-expanded={!leftCollapsed}
-                aria-label={text('Toggle conversation panel', '切换对话面板')}
-                className={styles.panelCollapseButton}
-                onClick={() => setLeftCollapsed((collapsed) => !collapsed)}
-                type="button"
-              >
-                {leftCollapsed ? '›' : '‹'}
-              </button>
-            </div>
-          </header>
-
-          {leftCollapsed ? null : (
-            <>
-              <div
-                aria-label={text('Left panel view', '左侧面板视图')}
-                className={styles.leftTabs}
-                role="tablist"
-              >
-                <button
-                  aria-selected={leftView === 'chat'}
-                  onClick={() => setLeftView('chat')}
-                  role="tab"
-                  type="button"
-                >
-                  {text('Chat', '对话')}
-                </button>
-                <button
-                  aria-selected={leftView === 'files'}
-                  onClick={() => setLeftView('files')}
-                  role="tab"
-                  type="button"
-                >
-                  {text('Files', '文件')}
-                </button>
-              </div>
-
-              {leftView === 'chat' ? (
-                <div className={styles.chatPanel} role="tabpanel">
-                  <section className={styles.conversation} ref={conversationRef}>
-                    {messages.length === 0 ? (
-                      <div className={styles.emptyState}>
-                        <strong>
-                          {text(
-                            'Describe the printable object you want.',
-                            '描述你想要的可打印物体。',
-                          )}
-                        </strong>
-                      </div>
-                    ) : (
-                      <ol className={styles.messageList}>
-                        {messages.map((message) => (
-                          <li data-role={message.role} key={message.id}>
-                            <span className={styles.messageRole}>
-                              {message.role === 'user'
-                                ? text('You', '你')
-                                : 'Amagine'}
-                            </span>
-                            <div className={styles.messageBubble}>
-                              {message.images?.map((image) => (
-                                <figure className={styles.messageAttachment} key={image.url}>
-                                  <img alt={image.name} src={image.url} />
-                                  <figcaption>{image.name}</figcaption>
-                                </figure>
-                              ))}
-                              {message.stages && message.stages.length > 0 ? (
-                                <ol className={styles.chatStages}>
-                                  {message.stages.map((stage) => (
-                                    <li data-status={stage.status} key={stage.id}>
-                                      {stage.status === 'running' ? (
-                                        <LoadingSpinner />
-                                      ) : (
-                                        <span
-                                          aria-hidden="true"
-                                          className={styles.chatStageMarker}
-                                        >
-                                          {stage.status === 'completed' ? '✓' : '×'}
-                                        </span>
-                                      )}
-                                      <span>{stage.label}</span>
-                                    </li>
-                                  ))}
-                                </ol>
-                              ) : null}
-                              {message.text ? (
-                                <div className={styles.reasoningText}>
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                    {message.text}
-                                  </ReactMarkdown>
-                                </div>
-                              ) : !message.stages?.length ? (
-                                <div className={styles.conversationActivity}>
-                                  <LoadingSpinner />
-                                  <span>{activity || text('Thinking…', '正在思考…')}</span>
-                                </div>
-                              ) : null}
-                            </div>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                  </section>
-
-                  <section className={styles.composer}>
-                    <form className={styles.composerForm} onSubmit={submit}>
-                      <div className={styles.composerShell}>
-                        <textarea
-                          aria-busy={running}
-                          aria-label={text('CAD request', 'CAD 请求')}
-                          disabled={running || sessionLoading}
-                          maxLength={8_000}
-                          onChange={(event) => setPrompt(event.target.value)}
-                          onKeyDown={handleComposerKeyDown}
-                          placeholder={text(
-                            'Describe a printable object…',
-                            '描述一个可打印物体…',
-                          )}
-                          ref={textareaRef}
-                          rows={1}
-                          value={prompt}
-                        />
-
-                        {pendingImages.length > 0 ? (
-                          <div className={styles.attachmentStrip}>
-                            {pendingImages.map((image) => (
-                              <button
-                                className={styles.attachmentChip}
-                                key={image.id}
-                                onClick={() =>
-                                  setPendingImages((current) =>
-                                    current.filter(({ id }) => id !== image.id),
-                                  )
-                                }
-                                title={text('Remove image', '移除图片')}
-                                type="button"
-                              >
-                                <img alt="" src={image.url} />
-                                {image.name}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-
-                        <div className={styles.composerFooter}>
-                          <div className={styles.composerTools}>
-                            <button
-                              aria-label={text('New project', '新项目')}
-                              className={styles.composerTool}
-                              data-tooltip={text('New project', '新项目')}
-                              disabled={running || sessionLoading}
-                              onClick={beginFreshRun}
-                              type="button"
-                            >
-                              <ToolbarIcon name="new-run" />
-                            </button>
-                            <label
-                              className={styles.composerTool}
-                              data-tooltip={text(
-                                'Attach reference images',
-                                '附加参考图',
-                              )}
-                            >
-                              <span className={styles.srOnly}>
-                                {text('Attach reference images', '附加参考图')}
-                              </span>
-                              <input
-                                accept={ACCEPTED_IMAGE_TYPES.join(',')}
-                                className={styles.srOnly}
-                                disabled={running || sessionLoading}
-                                multiple
-                                onChange={(event) => void selectImages(event)}
-                                type="file"
-                              />
-                              <span aria-hidden="true">▧</span>
-                            </label>
-                          </div>
-                          <button
-                            aria-label={
-                              running
-                                ? text('Stop current run', '停止当前执行')
-                                : text('Send message', '发送消息')
-                            }
-                            className={styles.sendButton}
-                            data-state={running ? 'stop' : 'send'}
-                            disabled={
-                              !running &&
-                              (sessionLoading ||
-                                (!prompt.trim() && pendingImages.length === 0))
-                            }
-                            onClick={running ? () => abortRef.current?.abort() : undefined}
-                            type={running ? 'button' : 'submit'}
-                          >
-                            <ToolbarIcon name={running ? 'stop' : 'send'} />
-                          </button>
-                        </div>
-                      </div>
-                    </form>
-                  </section>
-                </div>
-              ) : (
-                <div className={styles.fileWorkspace} role="tabpanel">
-                  <section className={styles.fileSection}>
-                    <div className={styles.sectionHeading}>
-                      <h2>{artifactWorkspaceName}</h2>
-                      <div className={styles.fileHeadingActions}>
-                        <span>{artifacts.length}</span>
-                        <button onClick={() => void refreshArtifacts()} type="button">
-                          {text('Refresh', '刷新')}
-                        </button>
-                      </div>
-                    </div>
-                    {artifacts.length === 0 ? (
-                      <p className={styles.fileEmpty}>
-                        {text(
-                          'Files appear after the Agent saves them.',
-                          'Agent 保存文件后会显示在这里。',
-                        )}
-                      </p>
-                    ) : (
-                      <ul className={styles.fileTree}>
-                        {artifacts.map((artifact) => (
-                          <li key={artifact.path}>
-                            <label className={styles.fileTreeCheckbox}>
-                              <input
-                                aria-label={text('Select file', '选择文件')}
-                                checked={selectedPath === artifact.path}
-                                onChange={() => selectArtifact(artifact)}
-                                type="checkbox"
-                              />
-                            </label>
-                            <button
-                              aria-current={selectedPath === artifact.path}
-                              onClick={() => selectArtifact(artifact)}
-                              title={artifact.path}
-                              type="button"
-                            >
-                              <span className={styles.fileIcon}>
-                                {fileGlyph(artifact)}
-                              </span>
-                              <span>{artifact.name}</span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </section>
-                </div>
-              )}
-            </>
-          )}
-        </aside>
-
+        <LeftPanel
+          chat={{
+            activity,
+            conversationRef,
+            language,
+            messages,
+            onKeyDown: handleComposerKeyDown,
+            onNewProject: beginFreshRun,
+            onPromptChange: setPrompt,
+            onRemoveImage: (id) =>
+              setPendingImages((current) =>
+                current.filter((image) => image.id !== id),
+              ),
+            onSelectImages: (event) => void selectImages(event),
+            onStop: () => abortRef.current?.abort(),
+            onSubmit: (event) => void submit(event),
+            pendingImages,
+            prompt,
+            running,
+            sessionLoading,
+            textareaRef,
+          }}
+          collapsed={leftCollapsed}
+          connectionStatus={connectionStatus}
+          files={{
+            artifacts,
+            language,
+            onRefresh: () => void refreshArtifacts(),
+            onSelect: selectArtifact,
+            selectedPath,
+            workspaceName: artifactWorkspaceName,
+          }}
+          language={language}
+          menuOpen={sessionMenuOpen}
+          onOpenSession={(session) => void openSession(session)}
+          onToggleCollapsed={() =>
+            setLeftCollapsed((collapsed) => !collapsed)
+          }
+          onToggleMenu={() => setSessionMenuOpen((open) => !open)}
+          onViewChange={setLeftView}
+          running={running}
+          sessionId={sessionId}
+          sessionLoading={sessionLoading}
+          sessionMenuRef={sessionMenuRef}
+          sessionTitle={sessionTitle}
+          sessions={sessions}
+          view={leftView}
+          workspaceName={artifactWorkspaceName}
+        />
         <div
           aria-disabled={leftCollapsed}
           aria-label={text('Resize conversation panel', '调整对话面板宽度')}
@@ -1145,121 +707,20 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
           <span aria-hidden="true" />
         </div>
 
-        <section className={styles.centerPanel} aria-label={text('Model preview', '模型预览')}>
-          <header className={styles.canvasToolbar}>
-            <div className={styles.canvasHeading}>
-              <div className={styles.canvasHeadingCopy}>
-                <h2>{selectedArtifact?.name ?? text('Model preview', '模型预览')}</h2>
-                <span className={styles.canvasLabel}>
-                  {selectedArtifact?.path ?? connectionStatus}
-                </span>
-              </div>
-            </div>
-            <div className={styles.canvasMeta}>
-              {running ? (
-                <span className={styles.buildingState}>
-                  <LoadingSpinner />
-                  {text('Building…', '构建中…')}
-                </span>
-              ) : null}
-              <span className={styles.phase}>
-                {running ? 'RUNNING' : health?.runtimeReady ? 'READY' : 'OFFLINE'}
-              </span>
-            </div>
-          </header>
-
-          <div className={styles.canvasBody}>
-            {selectedArtifact?.kind === 'image' ? (
-              <div className={styles.emptyCanvas}>
-                <img
-                  alt={selectedArtifact.name}
-                  src={selectedArtifact.url}
-                  style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
-                />
-              </div>
-            ) : selectedText !== undefined ? (
-              <pre className={styles.codePreview} tabIndex={0}>
-                <code>{selectedText}</code>
-              </pre>
-            ) : (
-              <Suspense
-                fallback={
-                  <div className={styles.emptyCanvas}>
-                    <LoadingSpinner />
-                    <span>{text('Loading viewer…', '正在载入查看器…')}</span>
-                  </div>
-                }
-              >
-                <CadViewer artifact={previewArtifact} />
-              </Suspense>
-            )}
-          </div>
-
-          <div
-            aria-disabled={logCollapsed}
-            aria-label={text('Resize activity log', '调整活动日志高度')}
-            className={styles.logResizer}
-            onPointerDown={beginLogResize}
-            role="separator"
-          >
-            <span aria-hidden="true" />
-          </div>
-
-          <section
-            className={`${styles.activityLog} ${logCollapsed ? styles.activityLogCollapsed : ''}`}
-          >
-            <header className={styles.activityLogHeader}>
-              <div>
-                <strong>{text('Activity', '执行')}</strong>
-                <small>{activity || connectionStatus}</small>
-              </div>
-              <button
-                aria-expanded={!logCollapsed}
-                onClick={() => setLogCollapsed((collapsed) => !collapsed)}
-                type="button"
-              >
-                {logCollapsed ? '⌃' : '⌄'}
-              </button>
-            </header>
-            {logCollapsed ? null : (
-              <div className={styles.activityLogBody}>
-                {runtimeEntries.length === 0 ? (
-                  <p className={styles.runtimeEventsEmpty}>
-                    {text(
-                      'Runtime events will appear here.',
-                      '运行时事件会显示在这里。',
-                    )}
-                  </p>
-                ) : (
-                  <ol className={styles.runtimeEvents}>
-                    {runtimeEntries.map((entry) => (
-                      <li data-level={entry.level} key={entry.id}>
-                        <time>
-                          {new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          }).format(entry.occurredAt)}
-                        </time>
-                        <span>{entry.stage}</span>
-                        <p>{entry.message}</p>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-                <div className={styles.platformNotices}>
-                  <p>
-                    {text(
-                      'Agent sessions and generated files are stored in repository folders.',
-                      'Agent 会话与生成文件均保存在仓库目录中。',
-                    )}
-                  </p>
-                </div>
-              </div>
-            )}
-          </section>
-        </section>
-
+        <PreviewPanel
+          activity={activity}
+          connectionStatus={connectionStatus}
+          language={language}
+          logCollapsed={logCollapsed}
+          onLogResize={beginLogResize}
+          onToggleLog={() => setLogCollapsed((collapsed) => !collapsed)}
+          previewArtifact={previewArtifact}
+          running={running}
+          runtimeEntries={runtimeEntries}
+          runtimeReady={Boolean(health?.runtimeReady)}
+          selectedArtifact={selectedArtifact}
+          selectedText={selectedText}
+        />
         <div
           aria-disabled={rightCollapsed}
           aria-label={text('Resize parameter panel', '调整参数面板宽度')}
@@ -1271,182 +732,28 @@ export const CadWorkbench = forwardRef<CadWorkbenchHandle, CadWorkbenchProps>(
           <span aria-hidden="true" />
         </div>
 
-        <aside
-          aria-label={text('Model parameters and exports', '模型参数与导出')}
-          className={`${styles.rightPanel} ${rightCollapsed ? styles.collapsedPanel : ''}`}
-        >
-          <header className={styles.panelHeader}>
-            <div className={styles.panelTitle}>
-              <button
-                aria-expanded={!rightCollapsed}
-                aria-label={text('Toggle parameter panel', '切换参数面板')}
-                className={styles.panelCollapseButton}
-                onClick={() => setRightCollapsed((collapsed) => !collapsed)}
-                type="button"
-              >
-                {rightCollapsed ? '‹' : '›'}
-              </button>
-              <div>
-                <strong>{text('Parameters', '参数')}</strong>
-                <small>{text('Agent-produced project', 'Agent 生成项目')}</small>
-              </div>
-            </div>
-          </header>
-          {rightCollapsed ? null : (
-            <>
-              <div className={styles.parameterScroll}>
-                <div className={styles.emptyState}>
-                  <strong>{text('No adjustable literals yet.', '暂时没有可调字面量。')}</strong>
-                  <span>
-                    {text(
-                      'Generated files remain available below for download.',
-                      '生成文件仍可在下方下载。',
-                    )}
-                  </span>
-                </div>
-                {artifacts.length > 0 ? (
-                  <section className={styles.exports}>
-                    <h2>{text('Downloads', '下载')}</h2>
-                    <ul>
-                      {artifacts.map((artifact) => (
-                        <li key={artifact.path}>
-                          <div>
-                            <strong>{artifact.name}</strong>
-                            <small>
-                              {artifact.kind} · {formatBytes(artifact.size)}
-                            </small>
-                          </div>
-                          <button onClick={() => downloadArtifact(artifact)} type="button">
-                            {text('Download', '下载')}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                ) : null}
-              </div>
-              <footer className={styles.parameterActions}>
-                <p>
-                  {text(
-                    artifactWorkspace.readOnly
-                      ? 'This bundled example is read-only and kept outside the Agent workspace.'
-                      : 'Project files are stored under workspace/ in this repository.',
-                    artifactWorkspace.readOnly
-                      ? '该内置示例为只读项目，不会写入 Agent 工作区。'
-                      : '项目文件保存在仓库的 workspace/ 目录中。',
-                  )}
-                </p>
-              </footer>
-            </>
-          )}
-        </aside>
-
+        <ParametersPanel
+          artifactWorkspace={artifactWorkspace}
+          artifacts={artifacts}
+          collapsed={rightCollapsed}
+          language={language}
+          onDownload={downloadArtifact}
+          onToggle={() => setRightCollapsed((collapsed) => !collapsed)}
+        />
         {storageOpen ? (
-          <aside
-            aria-label={text('Project folder storage', '项目目录存储')}
-            className={styles.storageDrawer}
-            data-open="true"
-          >
-            <section className={styles.storageSection}>
-              <div className={styles.storageDrawerHeader}>
-                <div className={styles.sectionHeading}>
-                  <div>
-                    <h2>{artifactWorkspaceName}</h2>
-                    <small>
-                      {artifactWorkspace.readOnly
-                        ? text('Built-in read-only project', '内置只读项目')
-                        : text(
-                            'Files stored in this repository folder',
-                            '文件直接保存在当前仓库目录',
-                          )}
-                    </small>
-                  </div>
-                  <button
-                    aria-label={text('Refresh storage', '刷新存储')}
-                    className={styles.storageRefreshButton}
-                    disabled={storageLoading}
-                    onClick={() => void refreshArtifacts()}
-                    type="button"
-                  >
-                    {storageLoading ? (
-                      <LoadingSpinner />
-                    ) : (
-                      <svg fill="none" focusable="false" viewBox="0 0 20 20">
-                        <path d="M15.4 6.4A6.25 6.25 0 1 0 16 12" />
-                        <path d="M15.5 3.5v3.25h-3.25" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-                <button
-                  aria-label={text('Close storage', '关闭存储')}
-                  className={styles.storageDrawerClose}
-                  onClick={() => onStorageOpenChange?.(false)}
-                  type="button"
-                >
-                  <svg fill="none" focusable="false" viewBox="0 0 20 20">
-                    <path d="m5.25 5.25 9.5 9.5M14.75 5.25l-9.5 9.5" />
-                  </svg>
-                </button>
-              </div>
-              <div className={styles.storageViewport}>
-                {artifacts.length === 0 ? (
-                  <div className={styles.emptyState}>
-                    <strong>{text('No project files yet.', '暂无项目文件。')}</strong>
-                    <span>
-                      {text(
-                        `Generated files will appear under ${artifactWorkspace.path}.`,
-                        `生成文件会出现在 ${artifactWorkspace.path} 下。`,
-                      )}
-                    </span>
-                  </div>
-                ) : (
-                  <div className={styles.storageGroups}>
-                    <section className={styles.folderGroup}>
-                      <div className={styles.storageGroupHeading}>
-                        <span className={styles.fileIcon}>⌄</span>
-                        <div className={styles.projectSummary}>
-                          <h3>{artifactWorkspace.path}</h3>
-                          <span>
-                            {String(artifacts.length)} {text('files', '个文件')}
-                          </span>
-                        </div>
-                      </div>
-                      <ul className={styles.folderFileList}>
-                        {artifacts.map((artifact) => (
-                          <li key={artifact.path}>
-                            <span className={styles.fileIcon}>{fileGlyph(artifact)}</span>
-                            <button
-                              className={styles.storageFileIdentity}
-                              onClick={() => {
-                                selectArtifact(artifact);
-                                onStorageOpenChange?.(false);
-                              }}
-                              type="button"
-                            >
-                              <strong>{artifact.name}</strong>
-                              <small>{artifact.path}</small>
-                            </button>
-                            <span className={styles.storageFileSize}>
-                              {formatBytes(artifact.size)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  </div>
-                )}
-              </div>
-              <footer className={styles.storageActions}>
-                <div className={styles.storageSelectionBar}>
-                  <span>{artifactWorkspace.path}</span>
-                  <button onClick={() => void refreshArtifacts()} type="button">
-                    {text('Refresh', '刷新')}
-                  </button>
-                </div>
-              </footer>
-            </section>
-          </aside>
+          <StorageDrawer
+            artifactWorkspace={artifactWorkspace}
+            artifacts={artifacts}
+            language={language}
+            loading={storageLoading}
+            onClose={() => onStorageOpenChange?.(false)}
+            onRefresh={() => void refreshArtifacts()}
+            onSelect={(artifact) => {
+              selectArtifact(artifact);
+              onStorageOpenChange?.(false);
+            }}
+            workspaceName={artifactWorkspaceName}
+          />
         ) : null}
       </div>
     );
