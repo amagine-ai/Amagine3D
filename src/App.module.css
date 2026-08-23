@@ -54,7 +54,6 @@
 
 .languageButton,
 .storageButton,
-.downloadButton,
 .licenseLink {
   display: inline-flex;
   min-height: 2.25rem;
@@ -76,12 +75,6 @@
     background-color var(--dur-micro) var(--ease-out),
     color var(--dur-micro) var(--ease-out),
     box-shadow var(--dur-micro) var(--ease-out);
-}
-
-.downloadButton:not(:disabled) {
-  padding-inline: 0.875rem;
-  background: var(--color-primary);
-  color: var(--color-primary-ink);
 }
 
 .languageChevron {
@@ -152,7 +145,6 @@
 }
 
 .storageButton svg,
-.downloadButton svg,
 .licenseLink svg {
   width: 1rem;
   height: 1rem;
@@ -162,7 +154,6 @@
   stroke-width: 1.45;
 }
 
-.downloadButton:disabled,
 .storageButton:disabled,
 .languageButton:disabled {
   cursor: not-allowed;
@@ -171,7 +162,6 @@
 
 .languageButton:focus-visible,
 .storageButton:focus-visible,
-.downloadButton:focus-visible,
 .licenseLink:focus-visible,
 .languageDropdown button:focus-visible {
   outline: 2px solid var(--color-focus);
@@ -181,7 +171,6 @@
 .languageButton:active,
 .storageButton:active,
 .licenseLink:active,
-.downloadButton:not(:disabled):active,
 .languageDropdown button:active {
   transform: scale(0.98);
 }
@@ -205,10 +194,6 @@
     background: var(--color-fill);
     color: var(--color-ink);
   }
-
-  .downloadButton:not(:disabled):hover {
-    background: var(--color-primary-hover);
-  }
 }
 
 @media (min-width: 40rem) {
@@ -231,14 +216,12 @@
   }
 
   .storageButton span,
-  .downloadButton span,
   .licenseLink span {
     display: none;
   }
 
   .languageButton,
   .storageButton,
-  .downloadButton,
   .licenseLink {
     min-width: 2.5rem;
     padding-inline: var(--space-xs);

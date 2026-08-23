@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import appStyles from './App.module.css';
 import { BrandLink } from './components/BrandLink';
-import { CadWorkbench, type CadWorkbenchHandle } from './components/CadWorkbench';
+import { CadWorkbench } from './components/CadWorkbench';
 import { useDismissibleLayer } from './hooks/useDismissibleLayer';
-import type { ArtifactSummary } from './types';
 
 type Language = 'en' | 'zh';
 
@@ -12,8 +11,6 @@ const copy = {
   en: {
     chooseLanguage: 'Choose language',
     closeStorage: 'Close storage panel',
-    download: 'Download',
-    downloadCurrent: 'Download current selection',
     language: 'Language',
     licenses: 'Licenses',
     openStorage: 'Open storage panel',
@@ -23,8 +20,6 @@ const copy = {
   zh: {
     chooseLanguage: '选择语言',
     closeStorage: '关闭存储面板',
-    download: '下载',
-    downloadCurrent: '下载当前所选文件',
     language: '语言',
     licenses: '许可证',
     openStorage: '打开存储面板',
@@ -34,7 +29,6 @@ const copy = {
 } as const;
 
 export function App() {
-  const [downloadTarget, setDownloadTarget] = useState<ArtifactSummary>();
   const [language, setLanguage] = useState<Language>('zh');
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
@@ -42,13 +36,7 @@ export function App() {
     onDismiss: () => setLanguageMenuOpen(false),
     open: languageMenuOpen,
   });
-  const workbenchRef = useRef<CadWorkbenchHandle>(null);
   const t = copy[language];
-
-  const handleDownloadTargetChange = useCallback(
-    (target: ArtifactSummary | undefined) => setDownloadTarget(target),
-    [],
-  );
 
   useEffect(() => {
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
@@ -119,25 +107,6 @@ export function App() {
             ) : null}
           </div>
           <button
-            aria-disabled={downloadTarget === undefined}
-            aria-label={t.downloadCurrent}
-            className={appStyles.downloadButton}
-            disabled={downloadTarget === undefined}
-            onClick={() => workbenchRef.current?.downloadCurrent()}
-            title={
-              downloadTarget === undefined
-                ? t.downloadCurrent
-                : `${t.download}: ${downloadTarget.name}`
-            }
-            type="button"
-          >
-            <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
-              <path d="M12 4v11m-4-4 4 4 4-4" />
-              <path d="M4 19h16" />
-            </svg>
-            <span>{t.download}</span>
-          </button>
-          <button
             aria-expanded={storageOpen}
             aria-label={storageOpen ? t.closeStorage : t.openStorage}
             className={appStyles.storageButton}
@@ -154,9 +123,7 @@ export function App() {
       </header>
       <CadWorkbench
         language={language}
-        onDownloadTargetChange={handleDownloadTargetChange}
         onStorageOpenChange={setStorageOpen}
-        ref={workbenchRef}
         storageOpen={storageOpen}
       />
     </main>
