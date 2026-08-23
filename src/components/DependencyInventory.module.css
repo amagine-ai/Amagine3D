@@ -1,0 +1,166 @@
+.inventoryMeta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  margin-block-end: var(--space-md);
+  font-family: var(--font-mono);
+}
+
+.inventoryMeta strong {
+  font-size: 2rem;
+  font-weight: 520;
+  letter-spacing: -0.04em;
+}
+
+.inventoryMeta span {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.inventoryMeta i {
+  width: 0.2rem;
+  height: 0.2rem;
+  margin-inline: 0.25rem;
+  border-radius: 50%;
+  background: var(--color-rule-strong);
+}
+
+.licenseGroups {
+  border-block-start: var(--rule-thin) solid var(--color-rule-strong);
+}
+
+.licenseGroups details {
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+}
+
+.licenseGroups summary {
+  display: flex;
+  min-height: 3.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+
+.licenseGroups summary::-webkit-details-marker {
+  display: none;
+}
+
+.licenseGroups summary::before {
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-inline-end: var(--space-sm);
+  border-inline-end: 1px solid currentcolor;
+  border-block-end: 1px solid currentcolor;
+  content: '';
+  transform: rotate(-45deg);
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+
+.licenseGroups details[open] summary::before {
+  transform: rotate(45deg) translate(-0.1rem, -0.1rem);
+}
+
+.licenseGroups summary span:first-child {
+  margin-inline-end: auto;
+}
+
+.licenseGroups summary span:last-child {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.licenseGroups ul {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--rule-thin);
+  margin: 0 0 var(--space-md);
+  padding: var(--rule-thin);
+  background: var(--color-rule);
+  list-style: none;
+}
+
+.licenseGroups li {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  padding: var(--space-sm);
+  background: var(--color-elevated);
+}
+
+.licenseGroups li > a,
+.licenseGroups li > span {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: var(--text-xs);
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.licenseGroups code {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-block-start: var(--space-xl);
+}
+
+.downloads a {
+  padding: 0.5625rem 0.75rem;
+  border: var(--rule-thin) solid var(--color-rule-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-elevated);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: 540;
+  text-decoration: none;
+}
+
+.downloads p {
+  flex-basis: 100%;
+  margin: var(--space-xs) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+@media (hover: hover) and (pointer: fine) {
+
+  .licenseGroups li:hover {
+    background: var(--color-paper-sunken);
+  }
+
+  .downloads a:hover {
+    border-color: var(--color-ink);
+    box-shadow: 0 3px 8px var(--color-shadow-soft);
+  }
+}
+
+@media (max-width: 52rem) {
+
+  .licenseGroups ul {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 39.99rem) {
+
+  .licenseGroups ul {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .licenseGroups summary::before {
+    transition-duration: 1ms;
+  }
+}

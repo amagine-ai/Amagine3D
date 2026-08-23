@@ -1,0 +1,91 @@
+.projectCard {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr auto;
+  align-items: end;
+  gap: var(--space-xl);
+  padding: var(--space-xl);
+  border-radius: var(--radius-lg);
+  background: var(--color-ink);
+  color: var(--color-primary-ink);
+  box-shadow:
+    0 1px 1px rgb(0 0 0 / 0.12),
+    0 12px 32px rgb(0 0 0 / 0.12);
+}
+
+.projectCard > div:not(.projectLinks) {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.projectCard span {
+  color: rgb(255 255 255 / 0.58);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.projectCard strong {
+  font-family: var(--font-mono);
+  font-size: 1.375rem;
+  font-weight: 520;
+}
+
+.projectCard a {
+  color: var(--color-primary-ink);
+}
+
+.projectCard > div > a {
+  width: fit-content;
+  font-size: var(--text-md);
+  font-weight: 520;
+  text-underline-offset: 0.25rem;
+}
+
+.projectLinks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+.projectLinks a {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(255 255 255 / 0.22);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+
+  .projectLinks a:hover {
+    border-color: rgb(255 255 255 / 0.52);
+    background: rgb(255 255 255 / 0.08);
+  }
+}
+
+@media (max-width: 52rem) {
+
+  .projectCard {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .projectLinks {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 39.99rem) {
+
+  .projectCard {
+    grid-template-columns: 1fr;
+    gap: var(--space-lg);
+    padding: var(--space-lg);
+  }
+
+  .projectLinks {
+    grid-column: auto;
+  }
+}

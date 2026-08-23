@@ -1,0 +1,276 @@
+.page {
+  width: 100%;
+  max-width: none;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+}
+
+.appBar {
+  position: relative;
+  z-index: var(--z-sticky);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  width: 100%;
+  min-height: 4.25rem;
+  align-items: center;
+  gap: var(--space-md);
+  margin: 0;
+  padding: 0.75rem var(--space-md);
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  background: rgb(255 255 255 / 0.94);
+  color: var(--color-ink);
+  backdrop-filter: blur(16px);
+}
+
+.wordmark {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wordmark::before {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: 0 0 auto;
+  border-radius: 0.125rem;
+  background: var(--color-ink);
+  content: '';
+  transform: rotate(45deg) scale(0.72);
+}
+
+.routeTitle {
+  display: none;
+  min-width: 0;
+  justify-items: start;
+  padding-inline-start: var(--space-md);
+  border-inline-start: var(--rule-thin) solid var(--color-rule);
+}
+
+.routeTitle span {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: 560;
+  letter-spacing: -0.015em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.appBar nav {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.languageMenu {
+  position: relative;
+}
+
+.languageButton,
+.storageButton,
+.downloadButton,
+.licenseLink {
+  display: inline-flex;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: 0.4375rem 0.75rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 520;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-micro) var(--ease-out);
+}
+
+.downloadButton:not(:disabled) {
+  padding-inline: 0.875rem;
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
+}
+
+.languageChevron {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  color: currentcolor;
+  opacity: 0.62;
+}
+
+.languageChevron svg {
+  width: 1rem;
+  height: 1rem;
+  overflow: visible;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.languageDropdown {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  inset-block-start: calc(100% + var(--space-xs));
+  inset-inline-end: 0;
+  display: grid;
+  min-width: 9.5rem;
+  padding: var(--space-2xs);
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-elevated);
+  box-shadow:
+    0 12px 24px rgb(0 0 0 / 0.08),
+    0 2px 6px rgb(0 0 0 / 0.06);
+  transform-origin: top right;
+  animation: menu-enter var(--dur-short) var(--ease-out) both;
+}
+
+.languageDropdown button {
+  display: flex;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+.languageDropdown button[aria-checked='true'],
+.storageButton[aria-expanded='true'],
+.languageButton[aria-expanded='true'] {
+  background: var(--color-fill);
+  color: var(--color-ink);
+}
+
+.languageDropdown button[aria-checked='true'] {
+  font-weight: 620;
+}
+
+.storageButton svg,
+.downloadButton svg,
+.licenseLink svg {
+  width: 1rem;
+  height: 1rem;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.45;
+}
+
+.downloadButton:disabled,
+.storageButton:disabled,
+.languageButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.languageButton:focus-visible,
+.storageButton:focus-visible,
+.downloadButton:focus-visible,
+.licenseLink:focus-visible,
+.languageDropdown button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.languageButton:active,
+.storageButton:active,
+.licenseLink:active,
+.downloadButton:not(:disabled):active,
+.languageDropdown button:active {
+  transform: scale(0.98);
+}
+
+@keyframes menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .languageButton:hover,
+  .storageButton:hover,
+  .licenseLink:hover,
+  .languageDropdown button:hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+  }
+
+  .downloadButton:not(:disabled):hover {
+    background: var(--color-primary-hover);
+  }
+}
+
+@media (min-width: 40rem) {
+  .appBar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .routeTitle {
+    display: grid;
+  }
+
+  .appBar nav {
+    gap: var(--space-sm);
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .appBar {
+    padding-inline: 0.75rem;
+  }
+
+  .storageButton span,
+  .downloadButton span,
+  .licenseLink span {
+    display: none;
+  }
+
+  .languageButton,
+  .storageButton,
+  .downloadButton,
+  .licenseLink {
+    min-width: 2.5rem;
+    padding-inline: var(--space-xs);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .languageDropdown {
+    animation: none;
+  }
+}

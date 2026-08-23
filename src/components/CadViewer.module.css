@@ -1,4 +1,4 @@
-/* Amagine3D · precision viewer surface */
+/* CAD viewer surface and controls. */
 .shell {
   display: grid;
   min-width: 0;
@@ -6,13 +6,10 @@
   padding: 0;
   overflow: clip;
   border: 0;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--color-paper-raised);
   color: var(--color-ink);
-  box-shadow:
-    inset 0 1px 0 var(--color-shell-highlight),
-    0 12px 32px var(--color-shadow-soft);
-  animation: viewer-enter var(--dur-long) var(--ease-out) both;
+  box-shadow: none;
 }
 
 .shell[data-external-toolbar='true'] {
@@ -35,14 +32,15 @@
 
 .header {
   display: flex;
+  min-height: 3.5rem;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm) var(--space-lg);
-  padding: var(--space-sm) var(--space-md);
-  border-block-end: 0;
+  padding: 0.625rem 0.875rem;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
   background: var(--color-paper-raised);
-  box-shadow: inset 0 -1px 0 var(--color-rule);
+  box-shadow: none;
 }
 
 .modelIdentity {
@@ -63,7 +61,7 @@
   font-family: var(--font-display);
   font-size: var(--text-sm);
   font-style: normal;
-  font-weight: 620;
+  font-weight: 600;
   letter-spacing: -0.025em;
 }
 
@@ -132,27 +130,22 @@
 }
 
 .toolButton {
-  min-width: 2.75rem;
-  min-height: 2.75rem;
-  padding: var(--space-xs) var(--space-sm);
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.625rem;
   border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--color-fill);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--color-ink-soft);
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  font-weight: 600;
+  font-weight: 560;
   line-height: 1;
   white-space: nowrap;
   transition:
-    background-color var(--dur-short) var(--ease-out),
-    color var(--dur-short) var(--ease-out),
-    transform var(--dur-micro) var(--ease-out),
-    box-shadow var(--dur-short) var(--ease-out);
-  box-shadow:
-    inset 0 1px 0 var(--color-shell-highlight),
-    inset 0 0 0 1px var(--color-rule);
+    background-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
 }
 
 .toolButton:focus-visible {
@@ -170,11 +163,9 @@
 }
 
 .toolButton[aria-pressed='true'] {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  box-shadow:
-    inset 0 1px 0 var(--color-shell-highlight),
-    inset 0 0 0 1px var(--color-accent);
+  background: var(--color-ink);
+  color: var(--color-primary-ink);
+  box-shadow: none;
 }
 
 .toolButton[data-state='loading'] {
@@ -202,11 +193,7 @@
   block-size: 28rem;
   overflow: clip;
   background:
-    radial-gradient(
-      circle at 50% 42%,
-      var(--color-paper-raised),
-      transparent 45%
-    ),
+    radial-gradient(circle at 50% 42%, #ffffff 0, transparent 52%),
     var(--color-canvas);
   color: var(--color-ink);
 }
@@ -235,14 +222,16 @@
   z-index: var(--z-raised);
   inset-block-start: var(--space-sm);
   max-width: calc(100% - 2 * var(--space-sm));
+  gap: var(--space-3xs);
   padding: var(--space-2xs);
-  border: 4px solid var(--color-shell);
-  border-radius: var(--radius-lg);
-  background: var(--color-elevated);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 0.92);
   color: var(--color-ink);
   box-shadow:
-    inset 0 1px 0 var(--color-shell-highlight),
-    0 14px 34px var(--color-shadow);
+    0 4px 12px rgb(0 0 0 / 0.07),
+    0 1px 2px rgb(0 0 0 / 0.06);
+  backdrop-filter: blur(12px);
 }
 
 .selectionTools {
@@ -253,89 +242,26 @@
   inset-inline-end: var(--space-sm);
 }
 
-.measurement,
-.regionLegend,
 .readout {
   position: absolute;
   z-index: var(--z-raised);
-  border: 3px solid var(--color-shell);
-  background: var(--color-elevated);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 0.92);
   color: var(--color-ink);
   box-shadow:
-    inset 0 1px 0 var(--color-shell-highlight),
-    0 12px 28px var(--color-shadow);
-}
-
-.measurement {
-  inset-block-start: calc(var(--space-sm) + 4.25rem);
-  inset-inline-end: var(--space-sm);
-  display: grid;
-  gap: var(--space-3xs);
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-}
-
-.measurement span {
-  color: var(--color-muted);
-}
-
-.measurement strong {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.regionLegend {
-  inset-block-end: calc(var(--space-xl) + var(--space-xs));
-  inset-inline-start: var(--space-sm);
-  max-width: min(15rem, calc(100% - 2 * var(--space-sm)));
-  padding: var(--space-sm);
-  border-radius: var(--radius-md);
-}
-
-.regionLegend > strong {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.regionLegend ul {
-  display: grid;
-  gap: var(--space-xs);
-  margin: var(--space-xs) 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.regionLegend li {
-  display: grid;
-  grid-template-columns: var(--space-sm) minmax(0, 1fr);
-  gap: 0 var(--space-xs);
-  align-items: center;
-  font-size: var(--text-xs);
-}
-
-.regionLegend small {
-  grid-column: 2;
-  color: var(--color-muted);
-}
-
-.regionSwatch {
-  grid-row: 1 / span 2;
-  width: var(--space-sm);
-  height: var(--space-sm);
-  border: var(--rule-thin) solid var(--color-rule-strong);
-  border-radius: var(--radius-pill);
+    0 4px 12px rgb(0 0 0 / 0.06),
+    0 1px 2px rgb(0 0 0 / 0.05);
+  backdrop-filter: blur(12px);
 }
 
 .readout {
-  inset-block-end: var(--space-sm);
+  inset-block-end: 0.75rem;
   inset-inline: var(--space-sm);
   display: flex;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-sm);
+  padding: var(--space-xs) 0.75rem;
   color: var(--color-ink-soft);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -351,24 +277,24 @@
   transform: translate(-50%, -50%);
   gap: var(--space-xs);
   justify-items: start;
-  padding: var(--space-lg);
-  border: 5px solid var(--color-shell);
-  border-radius: var(--radius-xl);
+  padding: 1.25rem;
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-lg);
   background: var(--color-elevated);
   color: var(--color-ink);
   box-shadow:
-    inset 0 1px 0 var(--color-shell-highlight),
-    0 24px 64px var(--color-shadow-deep);
+    0 20px 40px rgb(0 0 0 / 0.1),
+    0 2px 8px rgb(0 0 0 / 0.06);
 }
 
 .statePanel[data-tone='error'] {
-  border-color: var(--color-error);
+  border-color: var(--color-rule);
   background: var(--color-error-soft);
   color: var(--color-ink);
 }
 
 .statePanel[data-tone='loading'] {
-  border-color: var(--color-loading);
+  border-color: var(--color-rule);
   background: var(--color-loading-soft);
   color: var(--color-ink);
 }
@@ -400,12 +326,15 @@
 
 @media (hover: hover) and (pointer: fine) {
   .toolButton:not(:disabled):hover {
-    background: var(--color-paper-raised);
+    background: var(--color-fill);
     color: var(--color-ink);
-    box-shadow:
-      inset 0 1px 0 var(--color-shell-highlight),
-      0 5px 14px var(--color-shadow-soft);
-    transform: translateY(-1px);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .toolButton[aria-pressed='true']:not(:disabled):hover {
+    background: var(--color-primary-hover);
+    color: var(--color-primary-ink);
   }
 }
 
@@ -421,10 +350,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shell {
-    animation: none;
-  }
-
   .toolButton {
     transition:
       background-color 150ms var(--ease-out),
@@ -432,125 +357,11 @@
   }
 
   .spinner {
-    animation-duration: 1.5s !important;
+    animation: none;
   }
 
   .toolButton:active,
   .toolButton:not(:disabled):hover {
     transform: none;
-  }
-}
-
-@keyframes viewer-enter {
-  from {
-    opacity: 0;
-    transform: translateY(0.75rem) scale(0.992);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-/* Restrained viewer chrome: controls float by contrast, not heavy framing. */
-.shell {
-  border-radius: var(--radius-md);
-  background: var(--color-paper-raised);
-  box-shadow: none;
-  animation: none;
-}
-
-.header {
-  min-height: 3.5rem;
-  padding: 0.625rem 0.875rem;
-  border-block-end: var(--rule-thin) solid var(--color-rule);
-  box-shadow: none;
-}
-
-.modelIdentity h2 {
-  font-weight: 600;
-}
-
-.stage {
-  background:
-    radial-gradient(circle at 50% 42%, #ffffff 0, transparent 52%),
-    var(--color-canvas);
-}
-
-.selectionTools,
-.viewTools {
-  gap: 0.125rem;
-  padding: 0.25rem;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: rgb(255 255 255 / 0.92);
-  box-shadow:
-    0 4px 12px rgb(0 0 0 / 0.07),
-    0 1px 2px rgb(0 0 0 / 0.06);
-  backdrop-filter: blur(12px);
-}
-
-.toolButton {
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-  padding: 0.375rem 0.625rem;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  box-shadow: none;
-  font-weight: 560;
-  transition:
-    background-color var(--dur-micro) var(--ease-out),
-    color var(--dur-micro) var(--ease-out);
-}
-
-.toolButton[aria-pressed='true'] {
-  background: var(--color-ink);
-  color: var(--color-primary-ink);
-  box-shadow: none;
-}
-
-.measurement,
-.regionLegend,
-.readout {
-  border: 0;
-  border-radius: var(--radius-md);
-  background: rgb(255 255 255 / 0.92);
-  box-shadow:
-    0 4px 12px rgb(0 0 0 / 0.06),
-    0 1px 2px rgb(0 0 0 / 0.05);
-  backdrop-filter: blur(12px);
-}
-
-.readout {
-  inset-block-end: 0.75rem;
-  padding: 0.5rem 0.75rem;
-}
-
-.statePanel {
-  padding: 1.25rem;
-  border: var(--rule-thin) solid var(--color-rule);
-  border-radius: var(--radius-lg);
-  box-shadow:
-    0 20px 40px rgb(0 0 0 / 0.1),
-    0 2px 8px rgb(0 0 0 / 0.06);
-}
-
-.statePanel[data-tone='error'],
-.statePanel[data-tone='loading'] {
-  border-color: var(--color-rule);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .toolButton:not(:disabled):hover {
-    background: var(--color-fill);
-    color: var(--color-ink);
-    box-shadow: none;
-    transform: none;
-  }
-
-  .toolButton[aria-pressed='true']:not(:disabled):hover {
-    background: var(--color-primary-hover);
-    color: var(--color-primary-ink);
   }
 }

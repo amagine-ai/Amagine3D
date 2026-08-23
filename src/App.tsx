@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import appStyles from '../apps/web/src/app/agent-page.module.css';
+import appStyles from './App.module.css';
 import { CadWorkbench, type CadWorkbenchHandle } from './components/CadWorkbench';
 import type { ArtifactSummary } from './types';
 

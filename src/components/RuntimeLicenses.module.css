@@ -1,0 +1,128 @@
+.componentTable {
+  overflow: hidden;
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  background: var(--color-elevated);
+  box-shadow:
+    0 1px 2px var(--color-shadow-soft),
+    0 8px 24px rgb(0 0 0 / 0.035);
+}
+
+.tableHeader,
+.componentRow {
+  display: grid;
+  grid-template-columns: 1.25fr 1.65fr 0.6fr 1fr;
+  gap: var(--space-md);
+  align-items: center;
+  padding: var(--space-sm) var(--space-md);
+}
+
+.tableHeader {
+  background: var(--color-paper-sunken);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.componentRow {
+  min-height: 4.75rem;
+  margin: 0;
+  border: 0;
+  border-block-start: var(--rule-thin) solid var(--color-rule);
+  border-radius: 0;
+  background: transparent;
+}
+
+.componentRow > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+
+.componentRow strong {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.componentRow > div:first-child span,
+.componentRow p {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.componentRow p {
+  margin: 0;
+}
+
+.componentRow > a,
+.licenseFiles a {
+  width: fit-content;
+  color: var(--color-ink-soft);
+  font-size: var(--text-xs);
+  text-decoration-color: var(--color-rule-strong);
+  text-underline-offset: 0.2rem;
+}
+
+.componentRow > a span {
+  margin-inline-start: 0.25rem;
+}
+
+.licenseFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+@media (hover: hover) and (pointer: fine) {
+
+  .componentRow:hover {
+    background: var(--color-paper-sunken);
+  }
+}
+
+@media (max-width: 52rem) {
+
+  .tableHeader {
+    display: none;
+  }
+
+  .componentRow {
+    grid-template-columns: 1.25fr 1.75fr auto;
+  }
+
+  .componentRow > a {
+    justify-self: end;
+  }
+
+  .licenseFiles {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 39.99rem) {
+
+  .componentRow {
+    grid-template-columns: 1fr auto;
+    gap: var(--space-sm);
+    padding: var(--space-md);
+  }
+
+  .componentRow p {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .componentRow > a {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .licenseFiles {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+}

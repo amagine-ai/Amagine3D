@@ -22,7 +22,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 
-import styles from '../../apps/web/src/components/cad-viewer-shell.module.css';
+import styles from './CadViewer.module.css';
 import type { ArtifactSummary } from '../types';
 
 type ViewName = 'front' | 'isometric' | 'top';

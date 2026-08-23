@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import styles from '../../apps/web/src/app/licenses/licenses.module.css';
+import inventoryStyles from './DependencyInventory.module.css';
+import styles from './LicensesPage.module.css';
+import projectStyles from './ProjectLicense.module.css';
+import runtimeStyles from './RuntimeLicenses.module.css';
 import {
   curatedLicenses,
   licensePageCopy,
@@ -89,7 +92,7 @@ export function LicensesPage() {
           <p className={styles.intro}>{copy.intro}</p>
         </section>
 
-        <section className={styles.projectSection}>
+        <section>
           <div className={styles.sectionHeading}>
             <p className={styles.sectionNumber}>01</p>
             <div>
@@ -97,7 +100,7 @@ export function LicensesPage() {
               <p>{copy.projectBody}</p>
             </div>
           </div>
-          <div className={styles.projectCard}>
+          <div className={projectStyles.projectCard}>
             <div>
               <span>{copy.license}</span>
               <strong>Apache-2.0</strong>
@@ -106,7 +109,7 @@ export function LicensesPage() {
               <span>{copy.owner}</span>
               <a href="https://github.com/amagine-ai">{copy.organization}</a>
             </div>
-            <div className={styles.projectLinks}>
+            <div className={projectStyles.projectLinks}>
               <a href="/licenses/apache-2.0.txt">{copy.fullText}</a>
               <a href="/licenses/amagine3d-notice.txt">{copy.notice}</a>
             </div>
@@ -121,15 +124,15 @@ export function LicensesPage() {
               <p>{copy.runtimeBody}</p>
             </div>
           </div>
-          <div className={styles.componentTable} role="table">
-            <div className={styles.tableHeader} role="row">
+          <div className={runtimeStyles.componentTable} role="table">
+            <div className={runtimeStyles.tableHeader} role="row">
               <span role="columnheader">{copy.component}</span>
               <span role="columnheader">{copy.use}</span>
               <span role="columnheader">{copy.source}</span>
               <span role="columnheader">{copy.text}</span>
             </div>
             {curatedLicenses.map((component) => (
-              <article className={styles.componentRow} key={component.name} role="row">
+              <article className={runtimeStyles.componentRow} key={component.name} role="row">
                 <div role="cell">
                   <strong>{component.name}</strong>
                   <span>{component.version}</span>
@@ -139,7 +142,7 @@ export function LicensesPage() {
                   {copy.source}
                   <span aria-hidden="true">↗</span>
                 </a>
-                <div className={styles.licenseFiles} role="cell">
+                <div className={runtimeStyles.licenseFiles} role="cell">
                   {component.files.length > 0 ? (
                     component.files.map((file) => (
                       <a href={file.href} key={file.href}>
@@ -163,13 +166,13 @@ export function LicensesPage() {
               <p>{copy.dependencyBody}</p>
             </div>
           </div>
-          <div className={styles.inventoryMeta}>
+          <div className={inventoryStyles.inventoryMeta}>
             <strong>{packages.length}</strong>
             <span>{copy.packages}</span>
             <i aria-hidden="true" />
             <span>{groups.length} SPDX</span>
           </div>
-          <div className={styles.licenseGroups}>
+          <div className={inventoryStyles.licenseGroups}>
             {groups.map(([license, records], index) => (
               <details key={license} open={index < 2}>
                 <summary>
@@ -189,7 +192,7 @@ export function LicensesPage() {
               </details>
             ))}
           </div>
-          <div className={styles.downloads}>
+          <div className={inventoryStyles.downloads}>
             <a href="/licenses/npm-production-licenses.json">
               {copy.downloadInventory}
             </a>
