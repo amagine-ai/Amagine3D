@@ -12,7 +12,6 @@
     "dev": "npm run python:setup && concurrently -k -n api,web -c blue,white \"tsx watch server/index.ts\" \"vite\"",
     "doctor": "tsx server/doctor.ts",
     "licenses:check": "node scripts/check-licenses.mjs",
-    "styles:prune": "node scripts/prune-workbench-css.mjs --write",
     "python:setup": "node scripts/setup-python.mjs",
     "start": "npm run python:setup && tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
@@ -38,7 +37,6 @@
     "@types/three": "0.185.0",
     "@vitejs/plugin-react": "5.0.2",
     "concurrently": "9.2.4",
-    "postcss": "8.5.26",
     "tsx": "4.20.5",
     "typescript": "5.9.2",
     "vite": "7.3.6"
