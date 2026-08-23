@@ -156,27 +156,32 @@ AGENT_RUN_TIMEOUT_MS=1800000
 
 ## 系统架构
 
+`React/Vite 界面 -> Express API -> 3D-native Agent 运行时 -> 会话隔离的 Python CAD 工作区`
+
 ```text
-桌面浏览器与 Next.js UI
-├── 3D 创作工作台
-│   ├── Agent 消息与客户端工具结果
-│   ├── 交互式 3D 预览、选择与测量
-│   └── 本地项目、修订和 ZIP 备份
-├── 专用几何 Worker
-│   ├── Pyodide、OCP.wasm、build123d、trimesh 和 lib3mf
-│   ├── 带版本的工作流配置与源码策略
-│   └── 几何与产物检查
-└── Next.js 服务端路由
-    ├── 3D Agent 与模型凭据
-    ├── 可选网络调研
-    └── 模型配置验证
+Amagine3D/
+├── src/
+│   ├── components/cad-workbench/   对话、文件、预览、参数和存储面板
+│   ├── components/CadViewer.tsx   Three.js 模型查看与交互
+│   ├── lib/                       流式 API 客户端及产物、会话辅助逻辑
+│   └── App.tsx, types.ts           应用外壳与前后端共用协议
+├── server/
+│   ├── routes/                    Agent 对话流与会话、产物 API
+│   ├── artifacts*.ts, sessions.ts 产物发现、打包、回收与会话持久化
+│   ├── uploads.ts, visual-audit.ts 图片输入与生成模型视觉检查
+│   └── app.ts, index.ts             Express 启动、静态托管与运行时组装
+├── packages/a3d-runtime/src/          3D-native Agent 模型/会话适配、Skill 加载与写入限制
+├── skills/
+│   ├── text-a3d/                  单色 CAD 生成与质量检查流程
+│   └── text-a3d-color/            多色 CAD、配色、3MF 导出与质量检查流程
+├── bundled-projects/                  工作台内置的只读示例项目
+├── workspace/sessions/<sessionId>/   生成的源码、模型、报告和预览图
+├── .amagine-state/                   Agent 会话、上传文件和本地运行状态
+├── scripts/                           Python 环境安装与许可证检查
+└── tests/                             服务端、运行时、产物与 UI 逻辑测试
 ```
 
-PI 对话保存在 `.amagine-state/sessions/`，上传文件保存在
-`.amagine-state/uploads/<sessionId>/`，生成源码、模型、报告和预览保存在
-`workspace/sessions/<sessionId>/`。模型与搜索凭据留在服务端。
-
-生成的 Python 会先经过宿主源码策略与 Python AST 检查，再进入专用 Worker 执行。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
+每个 Agent 会话使用独立工作区。CAD 脚本由服务端管理的 Python 环境执行，浏览器通过 Three.js 渲染生成模型，模型凭据仅保留在服务端。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
 
 ## 项目状态
 

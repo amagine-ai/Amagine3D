@@ -157,28 +157,32 @@ through client-side environment variables or commit `.env`.
 
 ## System Architecture
 
+`React/Vite UI -> Express API -> 3D-native Agent runtime -> session-scoped Python CAD workspace`
+
 ```text
-Desktop browser and Next.js UI
-├── 3D creation workbench
-│   ├── Agent messages and client tool results
-│   ├── interactive 3D preview, selection, and measurement
-│   └── local projects, revisions, and ZIP backups
-├── dedicated geometry Worker
-│   ├── Pyodide, OCP.wasm, build123d, trimesh, and lib3mf
-│   ├── versioned workflow profiles and source policies
-│   └── geometry and artifact checks
-└── Next.js server routes
-    ├── 3D Agent and model credentials
-    ├── optional Web Research
-    └── model configuration validation
+Amagine3D/
+├── src/
+│   ├── components/cad-workbench/   Chat, files, preview, parameters, and storage panels
+│   ├── components/CadViewer.tsx   Three.js model viewer and interaction
+│   ├── lib/                       Streaming API client and artifact/session helpers
+│   └── App.tsx, types.ts           App shell and shared contracts
+├── server/
+│   ├── routes/                    Agent chat streaming and session/artifact APIs
+│   ├── artifacts*.ts, sessions.ts Artifact discovery, archive, trash, and persistence
+│   ├── uploads.ts, visual-audit.ts Image input and generated-model visual checks
+│   └── app.ts, index.ts             Express startup, static hosting, and runtime wiring
+├── packages/a3d-runtime/src/          3D-native Agent model/session adapter, skill loading, and write guards
+├── skills/
+│   ├── text-a3d/                  Single-color CAD generation and QA workflow
+│   └── text-a3d-color/            Multi-color CAD, palette, 3MF export, and QA workflow
+├── bundled-projects/                  Read-only example projects shown in the workbench
+├── workspace/sessions/<sessionId>/   Generated source, models, reports, and previews
+├── .amagine-state/                   Agent sessions, uploads, and local runtime state
+├── scripts/                           Python setup and license checks
+└── tests/                             Server, runtime, artifact, and UI-logic tests
 ```
 
-PI conversations are stored under `.amagine-state/sessions/`, uploads under
-`.amagine-state/uploads/<sessionId>/`, and generated source, models, reports,
-and previews under `workspace/sessions/<sessionId>/`. Model and search
-credentials remain on the server.
-
-Generated Python passes through host source policies and Python AST checks before it runs in a dedicated Worker. For more detail, see the [threat model](./docs/threat-model.md), and [security reporting policy](./docs/SECURITY.md).
+Each Agent session uses its own workspace. CAD scripts run with the server-managed Python environment, while the browser renders generated models with Three.js. Model credentials remain on the server. For more detail, see the [threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
 
 ## Project Status
 
