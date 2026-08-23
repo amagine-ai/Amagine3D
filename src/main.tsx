@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
 import { LicensesPage } from './components/LicensesPage';
-import './styles.css';
+import './styles/globals.css';
 
 const route = window.location.pathname.replace(/\/+$/u, '') || '/';
 

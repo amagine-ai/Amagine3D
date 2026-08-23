@@ -1,4 +1,4 @@
-@import '../styles/tokens.css';
+@import './tokens.css';
 
 :root {
   color-scheme: light;
@@ -20,6 +20,12 @@ body {
   line-height: 1.55;
 }
 
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body::before {
   content: none;
 }
@@ -34,51 +40,8 @@ body {
   overflow-x: clip;
 }
 
-main {
-  width: min(760px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 80px 0;
-}
-
-h1 {
-  margin: 0;
-  font-size: clamp(3rem, 10vw, 6rem);
-  letter-spacing: -0.07em;
-  overflow-wrap: anywhere;
-}
-
-h2 {
-  margin-top: 0;
-}
-
 a {
   color: var(--color-accent);
-}
-
-section,
-article {
-  margin-top: var(--space-lg);
-  padding: var(--space-lg) 0;
-  border: 0;
-  border-block-start: var(--rule-thin) solid var(--color-rule);
-  border-radius: 0;
-  background: transparent;
-  color: var(--color-ink);
-}
-
-.eyebrow {
-  margin-bottom: var(--space-xs);
-  color: var(--color-accent);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.lede {
-  max-width: 620px;
-  font-size: 1.35rem;
-  line-height: 1.5;
 }
 
 button,

@@ -1,7 +1,0 @@
-@import '../apps/web/src/app/styles.css';
-
-html,
-body,
-#root {
-  min-height: 100%;
-}
