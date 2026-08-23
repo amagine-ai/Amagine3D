@@ -2,6 +2,14 @@ import type { Express } from 'express';
 
 import { BUNDLED_POMODORO_SESSION_ID } from '../../src/types.ts';
 import {
+  createArtifactArchive,
+  MAX_ARCHIVE_FILES,
+} from '../artifact-archive.ts';
+import {
+  MAX_TRASH_FILES,
+  moveArtifactsToTrash,
+} from '../artifact-trash.ts';
+import {
   artifactContentType,
   createReadStream,
   resolveArtifactPath,
@@ -103,6 +111,88 @@ export function registerSessionRoutes(
     response.setHeader('Content-Type', artifactContentType(artifactPath));
     createReadStream(artifactPath).pipe(response);
   });
+
+  app.post(
+    '/api/sessions/:sessionId/artifacts/archive',
+    async (request, response) => {
+      const requestedPaths: unknown = request.body?.paths;
+      if (
+        !Array.isArray(requestedPaths) ||
+        requestedPaths.length < 2 ||
+        requestedPaths.length > MAX_ARCHIVE_FILES ||
+        requestedPaths.some(
+          (path) => typeof path !== 'string' || path.length > 1_024,
+        )
+      ) {
+        response
+          .status(400)
+          .json({ message: 'At least two valid artifact paths are required.' });
+        return;
+      }
+      const workspaceRoot =
+        request.params.sessionId === BUNDLED_POMODORO_SESSION_ID
+          ? paths.bundledPomodoroRoot
+          : sessionWorkspaceRoot(paths.workspaceRoot, request.params.sessionId);
+      if (!workspaceRoot) {
+        response.status(400).json({ message: 'Invalid session id.' });
+        return;
+      }
+      const archive = await createArtifactArchive(workspaceRoot, requestedPaths);
+      if (!archive) {
+        response.status(404).json({ message: 'Artifact not found.' });
+        return;
+      }
+      response.setHeader('Cache-Control', 'no-store');
+      response.setHeader(
+        'Content-Disposition',
+        'attachment; filename="amagine3d-files.zip"',
+      );
+      response.type('application/zip').send(Buffer.from(archive));
+    },
+  );
+
+  app.post(
+    '/api/sessions/:sessionId/artifacts/trash',
+    async (request, response) => {
+      if (request.params.sessionId === BUNDLED_POMODORO_SESSION_ID) {
+        response
+          .status(403)
+          .json({ message: 'Built-in project files are read-only.' });
+        return;
+      }
+      const requestedPaths: unknown = request.body?.paths;
+      if (
+        !Array.isArray(requestedPaths) ||
+        requestedPaths.length === 0 ||
+        requestedPaths.length > MAX_TRASH_FILES ||
+        requestedPaths.some(
+          (path) => typeof path !== 'string' || path.length > 1_024,
+        )
+      ) {
+        response
+          .status(400)
+          .json({ message: 'At least one valid artifact path is required.' });
+        return;
+      }
+      const workspaceRoot = sessionWorkspaceRoot(
+        paths.workspaceRoot,
+        request.params.sessionId,
+      );
+      if (!workspaceRoot) {
+        response.status(400).json({ message: 'Invalid session id.' });
+        return;
+      }
+      const trashed = await moveArtifactsToTrash(
+        workspaceRoot,
+        requestedPaths,
+      );
+      if (trashed === undefined) {
+        response.status(404).json({ message: 'Artifact not found.' });
+        return;
+      }
+      response.json({ trashed });
+    },
+  );
 
   app.get('/api/bundled-artifacts/file', async (request, response) => {
     const requestedPath = request.query.path;

@@ -23,11 +23,13 @@
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "dotenv": "17.2.1",
     "express": "5.1.0",
+    "fflate": "0.8.3",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1",
-    "three": "0.182.0"
+    "three": "0.182.0",
+    "trash": "10.1.1"
   },
   "devDependencies": {
     "@types/express": "5.0.3",

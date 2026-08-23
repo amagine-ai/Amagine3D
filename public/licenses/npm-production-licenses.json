@@ -251,6 +251,21 @@
       "license": "MIT"
     },
     {
+      "name": "@nodelib/fs.scandir",
+      "version": "2.1.5",
+      "license": "MIT"
+    },
+    {
+      "name": "@nodelib/fs.stat",
+      "version": "2.0.5",
+      "license": "MIT"
+    },
+    {
+      "name": "@nodelib/fs.walk",
+      "version": "1.2.8",
+      "license": "MIT"
+    },
+    {
       "name": "@opentelemetry/api",
       "version": "1.9.0",
       "license": "Apache-2.0"
@@ -306,6 +321,21 @@
       "license": "Apache-2.0"
     },
     {
+      "name": "@sindresorhus/df",
+      "version": "1.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "@sindresorhus/df",
+      "version": "3.1.1",
+      "license": "MIT"
+    },
+    {
+      "name": "@sindresorhus/merge-streams",
+      "version": "2.3.0",
+      "license": "MIT"
+    },
+    {
       "name": "@smithy/core",
       "version": "3.24.3",
       "license": "Apache-2.0"
@@ -349,6 +379,11 @@
       "name": "@smithy/util-utf8",
       "version": "2.3.0",
       "license": "Apache-2.0"
+    },
+    {
+      "name": "@stroncium/procfs",
+      "version": "1.2.1",
+      "license": "CC0-1.0"
     },
     {
       "name": "@types/debug",
@@ -456,6 +491,11 @@
       "license": "MIT"
     },
     {
+      "name": "braces",
+      "version": "3.0.3",
+      "license": "MIT"
+    },
+    {
       "name": "buffer-equal-constant-time",
       "version": "1.0.1",
       "license": "BSD-3-Clause"
@@ -503,6 +543,11 @@
     {
       "name": "character-reference-invalid",
       "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "chunkify",
+      "version": "5.0.0",
       "license": "MIT"
     },
     {
@@ -606,6 +651,11 @@
       "license": "MIT"
     },
     {
+      "name": "end-of-stream",
+      "version": "1.4.5",
+      "license": "MIT"
+    },
+    {
       "name": "es-define-property",
       "version": "1.0.1",
       "license": "MIT"
@@ -641,6 +691,11 @@
       "license": "MIT"
     },
     {
+      "name": "execa",
+      "version": "2.1.0",
+      "license": "MIT"
+    },
+    {
       "name": "express",
       "version": "5.1.0",
       "license": "MIT"
@@ -648,6 +703,11 @@
     {
       "name": "extend",
       "version": "3.0.2",
+      "license": "MIT"
+    },
+    {
+      "name": "fast-glob",
+      "version": "3.3.3",
       "license": "MIT"
     },
     {
@@ -661,8 +721,23 @@
       "license": "MIT"
     },
     {
+      "name": "fastq",
+      "version": "1.20.1",
+      "license": "ISC"
+    },
+    {
       "name": "fetch-blob",
       "version": "3.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "fflate",
+      "version": "0.8.3",
+      "license": "MIT"
+    },
+    {
+      "name": "fill-range",
+      "version": "7.1.1",
       "license": "MIT"
     },
     {
@@ -716,9 +791,24 @@
       "license": "MIT"
     },
     {
+      "name": "get-stream",
+      "version": "5.2.0",
+      "license": "MIT"
+    },
+    {
       "name": "glob",
       "version": "13.0.6",
       "license": "BlueOak-1.0.0"
+    },
+    {
+      "name": "glob-parent",
+      "version": "5.1.2",
+      "license": "ISC"
+    },
+    {
+      "name": "globby",
+      "version": "14.1.0",
+      "license": "MIT"
     },
     {
       "name": "google-auth-library",
@@ -806,6 +896,11 @@
       "license": "MIT"
     },
     {
+      "name": "ignore",
+      "version": "7.0.6",
+      "license": "MIT"
+    },
+    {
       "name": "inherits",
       "version": "2.0.4",
       "license": "ISC"
@@ -836,8 +931,38 @@
       "license": "MIT"
     },
     {
+      "name": "is-docker",
+      "version": "3.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "is-extglob",
+      "version": "2.1.1",
+      "license": "MIT"
+    },
+    {
+      "name": "is-glob",
+      "version": "4.0.3",
+      "license": "MIT"
+    },
+    {
       "name": "is-hexadecimal",
       "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "is-inside-container",
+      "version": "1.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "is-number",
+      "version": "7.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "is-path-inside",
+      "version": "4.0.0",
       "license": "MIT"
     },
     {
@@ -848,6 +973,16 @@
     {
       "name": "is-promise",
       "version": "4.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "is-stream",
+      "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "is-wsl",
+      "version": "3.1.1",
       "license": "MIT"
     },
     {
@@ -996,6 +1131,16 @@
       "license": "MIT"
     },
     {
+      "name": "merge-stream",
+      "version": "2.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "merge2",
+      "version": "1.4.1",
+      "license": "MIT"
+    },
+    {
       "name": "micromark",
       "version": "4.0.2",
       "license": "MIT"
@@ -1136,6 +1281,11 @@
       "license": "MIT"
     },
     {
+      "name": "micromatch",
+      "version": "4.0.8",
+      "license": "MIT"
+    },
+    {
       "name": "mime-db",
       "version": "1.54.0",
       "license": "MIT"
@@ -1143,6 +1293,11 @@
     {
       "name": "mime-types",
       "version": "3.0.2",
+      "license": "MIT"
+    },
+    {
+      "name": "mimic-fn",
+      "version": "2.1.0",
       "license": "MIT"
     },
     {
@@ -1154,6 +1309,16 @@
       "name": "minipass",
       "version": "7.1.3",
       "license": "BlueOak-1.0.0"
+    },
+    {
+      "name": "mount-point",
+      "version": "3.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "move-file",
+      "version": "4.1.0",
+      "license": "MIT"
     },
     {
       "name": "ms",
@@ -1176,6 +1341,11 @@
       "license": "MIT"
     },
     {
+      "name": "npm-run-path",
+      "version": "3.1.0",
+      "license": "MIT"
+    },
+    {
       "name": "object-inspect",
       "version": "1.13.4",
       "license": "MIT"
@@ -1191,9 +1361,29 @@
       "license": "ISC"
     },
     {
+      "name": "onetime",
+      "version": "5.1.2",
+      "license": "MIT"
+    },
+    {
       "name": "openai",
       "version": "6.40.0",
       "license": "Apache-2.0"
+    },
+    {
+      "name": "os-homedir",
+      "version": "1.0.2",
+      "license": "MIT"
+    },
+    {
+      "name": "p-finally",
+      "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "p-map",
+      "version": "7.0.6",
+      "license": "MIT"
     },
     {
       "name": "p-retry",
@@ -1236,6 +1426,41 @@
       "license": "MIT"
     },
     {
+      "name": "path-type",
+      "version": "6.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "picomatch",
+      "version": "2.3.2",
+      "license": "MIT"
+    },
+    {
+      "name": "pify",
+      "version": "2.3.0",
+      "license": "MIT"
+    },
+    {
+      "name": "pinkie",
+      "version": "2.0.4",
+      "license": "MIT"
+    },
+    {
+      "name": "pinkie-promise",
+      "version": "2.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "powershell-utils",
+      "version": "0.1.0",
+      "license": "MIT"
+    },
+    {
+      "name": "powershell-utils",
+      "version": "0.2.0",
+      "license": "MIT"
+    },
+    {
       "name": "proper-lockfile",
       "version": "4.1.2",
       "license": "MIT"
@@ -1256,9 +1481,19 @@
       "license": "MIT"
     },
     {
+      "name": "pump",
+      "version": "3.0.4",
+      "license": "MIT"
+    },
+    {
       "name": "qs",
       "version": "6.15.3",
       "license": "BSD-3-Clause"
+    },
+    {
+      "name": "queue-microtask",
+      "version": "1.2.3",
+      "license": "MIT"
     },
     {
       "name": "range-parser",
@@ -1316,8 +1551,18 @@
       "license": "MIT"
     },
     {
+      "name": "reusify",
+      "version": "1.1.0",
+      "license": "MIT"
+    },
+    {
       "name": "router",
       "version": "2.2.0",
+      "license": "MIT"
+    },
+    {
+      "name": "run-parallel",
+      "version": "1.2.0",
       "license": "MIT"
     },
     {
@@ -1391,6 +1636,11 @@
       "license": "ISC"
     },
     {
+      "name": "slash",
+      "version": "5.1.0",
+      "license": "MIT"
+    },
+    {
       "name": "space-separated-tokens",
       "version": "2.0.2",
       "license": "MIT"
@@ -1403,6 +1653,11 @@
     {
       "name": "stringify-entities",
       "version": "4.0.4",
+      "license": "MIT"
+    },
+    {
+      "name": "strip-final-newline",
+      "version": "2.0.0",
       "license": "MIT"
     },
     {
@@ -1426,8 +1681,18 @@
       "license": "MIT"
     },
     {
+      "name": "to-regex-range",
+      "version": "5.0.1",
+      "license": "MIT"
+    },
+    {
       "name": "toidentifier",
       "version": "1.0.1",
+      "license": "MIT"
+    },
+    {
+      "name": "trash",
+      "version": "10.1.1",
       "license": "MIT"
     },
     {
@@ -1471,6 +1736,11 @@
       "license": "MIT"
     },
     {
+      "name": "unicorn-magic",
+      "version": "0.3.0",
+      "license": "MIT"
+    },
+    {
       "name": "unified",
       "version": "11.0.5",
       "license": "MIT"
@@ -1506,6 +1776,11 @@
       "license": "MIT"
     },
     {
+      "name": "user-home",
+      "version": "2.0.0",
+      "license": "MIT"
+    },
+    {
       "name": "vary",
       "version": "1.1.2",
       "license": "MIT"
@@ -1538,6 +1813,21 @@
     {
       "name": "ws",
       "version": "8.21.0",
+      "license": "MIT"
+    },
+    {
+      "name": "wsl-utils",
+      "version": "0.4.0",
+      "license": "MIT"
+    },
+    {
+      "name": "xdg-basedir",
+      "version": "4.0.0",
+      "license": "MIT"
+    },
+    {
+      "name": "xdg-trashdir",
+      "version": "3.1.0",
       "license": "MIT"
     },
     {

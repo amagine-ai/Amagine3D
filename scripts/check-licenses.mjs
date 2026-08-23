@@ -10,6 +10,7 @@ const allowedProductionLicenses = new Set([
   'BSD-2-Clause',
   'BSD-3-Clause',
   'BlueOak-1.0.0',
+  'CC0-1.0',
   'ISC',
   'MIT',
   'OFL-1.1',

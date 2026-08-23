@@ -43,6 +43,37 @@ export async function fetchArtifacts(
   return (await response.json()) as ArtifactCollection;
 }
 
+export async function fetchArtifactArchive(
+  sessionId: string,
+  paths: string[],
+): Promise<Blob> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/archive`,
+    {
+      body: JSON.stringify({ paths }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    },
+  );
+  if (!response.ok) throw new Error('无法打包所选文件。');
+  return response.blob();
+}
+
+export async function trashArtifacts(
+  sessionId: string,
+  paths: string[],
+): Promise<void> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/trash`,
+    {
+      body: JSON.stringify({ paths }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    },
+  );
+  if (!response.ok) throw new Error('无法将所选文件移动到回收站。');
+}
+
 export async function streamAgent({
   images,
   message,
