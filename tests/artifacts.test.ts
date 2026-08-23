@@ -10,6 +10,7 @@ test('discovers supported artifacts and keeps newest files first', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-artifacts-'));
   try {
     await mkdir(root, { recursive: true });
+    await writeFile(join(root, 'legacy.glb'), 'unsupported model');
     await writeFile(join(root, 'part.py'), 'print("source")');
     await writeFile(join(root, 'part.stl'), 'solid part\nendsolid part\n');
     await writeFile(join(root, '.ignored.json'), '{}');

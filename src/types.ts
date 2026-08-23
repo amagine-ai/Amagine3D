@@ -14,7 +14,7 @@ export const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export type AcceptedImageType = (typeof ACCEPTED_IMAGE_TYPES)[number];
 export type ArtifactKind = 'image' | 'model' | 'report' | 'source' | 'other';
-export type PreviewFormat = '3mf' | 'glb' | 'stl';
+export type PreviewFormat = '3mf' | 'stl';
 
 export interface ImageAttachment {
   data: string;
