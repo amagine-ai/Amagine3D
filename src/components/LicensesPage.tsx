@@ -4,6 +4,7 @@ import inventoryStyles from './DependencyInventory.module.css';
 import styles from './LicensesPage.module.css';
 import projectStyles from './ProjectLicense.module.css';
 import runtimeStyles from './RuntimeLicenses.module.css';
+import { BrandLink } from './BrandLink';
 import {
   curatedLicenses,
   licensePageCopy,
@@ -55,9 +56,7 @@ export function LicensesPage() {
   return (
     <main className={styles.page}>
       <header className={styles.appBar}>
-        <a className={styles.wordmark} href="/">
-          Amagine3D
-        </a>
+        <BrandLink />
         <span className={styles.routeTitle}>{copy.route}</span>
         <nav aria-label={copy.route}>
           <div className={styles.languageSwitch}>

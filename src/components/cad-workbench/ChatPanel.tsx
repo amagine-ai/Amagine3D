@@ -9,6 +9,7 @@ import remarkGfm from 'remark-gfm';
 
 import styles from './ChatPanel.module.css';
 import composerStyles from './Composer.module.css';
+import { EmptyState } from '../ui/EmptyState';
 import { ACCEPTED_IMAGE_TYPES, type ChatMessage } from '../../types';
 import type { Language, PendingImage } from './types';
 import { translator } from './types';
@@ -56,14 +57,13 @@ export function ChatPanel({
     <div className={styles.chatPanel} role="tabpanel">
       <section className={styles.conversation} ref={conversationRef}>
         {messages.length === 0 ? (
-          <div className={styles.emptyState}>
-            <strong>
-              {text(
-                'Describe the printable object you want.',
-                '描述你想要的可打印物体。',
-              )}
-            </strong>
-          </div>
+          <EmptyState
+            className={styles.emptyState}
+            title={text(
+              'Describe the printable object you want.',
+              '描述你想要的可打印物体。',
+            )}
+          />
         ) : (
           <ol className={styles.messageList}>
             {messages.map((message) => (

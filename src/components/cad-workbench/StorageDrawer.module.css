@@ -103,15 +103,7 @@
 }
 
 .emptyState {
-  display: grid;
-  max-width: 38rem;
-  gap: var(--space-xs);
   margin: var(--space-md);
-  color: var(--color-ink-soft);
-}
-
-.emptyState strong {
-  color: var(--color-ink);
 }
 
 .storageGroups {
@@ -193,7 +185,7 @@
     color var(--dur-micro) var(--ease-out);
 }
 
-.fileIcon {
+.folderIcon {
   display: inline-grid;
   width: 1.75rem;
   height: 1.75rem;
@@ -206,13 +198,6 @@
   font-weight: 620;
   font-variant-numeric: tabular-nums;
   text-align: center;
-}
-
-.folderFileList .fileIcon {
-  width: 1rem;
-  height: 1rem;
-  border-radius: 0;
-  background: transparent;
 }
 
 .storageFileIdentity {

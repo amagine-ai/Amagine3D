@@ -1,0 +1,10 @@
+.root {
+  display: grid;
+  max-width: 38rem;
+  gap: var(--space-xs);
+  color: var(--color-ink-soft);
+}
+
+.root strong {
+  color: var(--color-ink);
+}

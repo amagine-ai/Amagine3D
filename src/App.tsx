@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import appStyles from './App.module.css';
+import { BrandLink } from './components/BrandLink';
 import { CadWorkbench, type CadWorkbenchHandle } from './components/CadWorkbench';
 import { useDismissibleLayer } from './hooks/useDismissibleLayer';
 import type { ArtifactSummary } from './types';
@@ -56,9 +57,7 @@ export function App() {
   return (
     <main className={appStyles.page}>
       <header className={appStyles.appBar}>
-        <a className={appStyles.wordmark} href="/">
-          Amagine3D
-        </a>
+        <BrandLink />
         <div className={appStyles.routeTitle}>
           <span>{t.title}</span>
         </div>

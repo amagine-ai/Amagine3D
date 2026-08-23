@@ -129,26 +129,6 @@
   accent-color: var(--color-accent);
 }
 
-.fileIcon {
-  display: inline-grid;
-  width: 1.75rem;
-  height: 1.75rem;
-  place-items: center;
-  border-radius: 0.375rem;
-  background: var(--color-fill);
-  color: var(--color-ink-soft);
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  font-weight: 620;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-.fileTree li:has(button[aria-current='true']) .fileIcon {
-  background: var(--color-paper-raised);
-  color: var(--color-accent);
-}
-
 .fileWorkspace :is(button, input):disabled {
   cursor: not-allowed;
   opacity: 0.55;

@@ -87,15 +87,7 @@
 }
 
 .emptyState {
-  display: grid;
-  max-width: 38rem;
-  gap: var(--space-xs);
   margin-block-start: var(--space-xl);
-  color: var(--color-ink-soft);
-}
-
-.emptyState strong {
-  color: var(--color-ink);
 }
 
 .exports {

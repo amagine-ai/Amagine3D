@@ -15,16 +15,8 @@
 }
 
 .emptyState {
-  display: grid;
-  max-width: 38rem;
-  gap: var(--space-xs);
   margin: auto;
   padding: var(--space-lg) var(--space-sm);
-  color: var(--color-ink-soft);
-}
-
-.emptyState strong {
-  color: var(--color-ink);
 }
 
 .messageList {

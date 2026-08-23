@@ -1,6 +1,5 @@
 import type {
   AcceptedImageType,
-  ArtifactSummary,
   ArtifactWorkspace,
   SessionSummary,
 } from '../../types';
@@ -50,13 +49,6 @@ export function errorText(error: unknown, language: Language): string {
     : language === 'zh'
       ? '智能体执行失败，请检查服务端日志。'
       : 'The agent run failed. Check the server log.';
-}
-
-export function fileGlyph(artifact: ArtifactSummary): string {
-  if (artifact.kind === 'model') return '3D';
-  if (artifact.kind === 'source') return 'PY';
-  if (artifact.kind === 'image') return 'IMG';
-  return '{}';
 }
 
 export function readImage(file: File): Promise<PendingImage> {

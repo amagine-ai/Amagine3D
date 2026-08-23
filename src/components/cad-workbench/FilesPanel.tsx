@@ -1,8 +1,8 @@
 import styles from './FilesPanel.module.css';
 import type { ArtifactSummary } from '../../types';
+import { ArtifactIcon } from './ArtifactIcon';
 import type { Language } from './types';
 import { translator } from './types';
-import { fileGlyph } from './utils';
 
 export interface FilesPanelProps {
   artifacts: ArtifactSummary[];
@@ -59,7 +59,10 @@ export function FilesPanel({
                   title={artifact.path}
                   type="button"
                 >
-                  <span className={styles.fileIcon}>{fileGlyph(artifact)}</span>
+                  <ArtifactIcon
+                    artifact={artifact}
+                    selected={selectedPath === artifact.path}
+                  />
                   <span>{artifact.name}</span>
                 </button>
               </li>

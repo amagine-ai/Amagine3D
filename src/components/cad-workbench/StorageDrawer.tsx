@@ -1,9 +1,10 @@
 import styles from './StorageDrawer.module.css';
+import { EmptyState } from '../ui/EmptyState';
 import type { ArtifactSummary, ArtifactWorkspace } from '../../types';
 import { formatBytes } from '../../lib/format';
+import { ArtifactIcon } from './ArtifactIcon';
 import type { Language } from './types';
 import { translator } from './types';
-import { fileGlyph } from './utils';
 import { LoadingSpinner } from './WorkbenchPrimitives';
 
 interface StorageDrawerProps {
@@ -78,20 +79,19 @@ export function StorageDrawer({
         </div>
         <div className={styles.storageViewport}>
           {artifacts.length === 0 ? (
-            <div className={styles.emptyState}>
-              <strong>{text('No project files yet.', '暂无项目文件。')}</strong>
-              <span>
-                {text(
-                  `Generated files will appear under ${artifactWorkspace.path}.`,
-                  `生成文件会出现在 ${artifactWorkspace.path} 下。`,
-                )}
-              </span>
-            </div>
+            <EmptyState
+              className={styles.emptyState}
+              description={text(
+                `Generated files will appear under ${artifactWorkspace.path}.`,
+                `生成文件会出现在 ${artifactWorkspace.path} 下。`,
+              )}
+              title={text('No project files yet.', '暂无项目文件。')}
+            />
           ) : (
             <div className={styles.storageGroups}>
               <section className={styles.folderGroup}>
                 <div className={styles.storageGroupHeading}>
-                  <span className={styles.fileIcon}>⌄</span>
+                  <span className={styles.folderIcon}>⌄</span>
                   <div className={styles.projectSummary}>
                     <h3>{artifactWorkspace.path}</h3>
                     <span>
@@ -102,7 +102,7 @@ export function StorageDrawer({
                 <ul className={styles.folderFileList}>
                   {artifacts.map((artifact) => (
                     <li key={artifact.path}>
-                      <span className={styles.fileIcon}>{fileGlyph(artifact)}</span>
+                      <ArtifactIcon artifact={artifact} size="compact" />
                       <button
                         className={styles.storageFileIdentity}
                         onClick={() => onSelect(artifact)}

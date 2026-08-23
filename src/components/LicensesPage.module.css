@@ -26,27 +26,6 @@
   backdrop-filter: blur(16px);
 }
 
-.wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.625rem;
-  color: var(--color-ink);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  text-decoration: none;
-}
-
-.wordmark::before {
-  width: 0.75rem;
-  height: 0.75rem;
-  flex: 0 0 auto;
-  border-radius: 0.125rem;
-  background: var(--color-ink);
-  content: '';
-  transform: rotate(45deg) scale(0.72);
-}
-
 .routeTitle {
   overflow: hidden;
   padding-inline-start: var(--space-md);

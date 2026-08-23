@@ -1,0 +1,26 @@
+.icon {
+  display: inline-grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 0.375rem;
+  background: var(--color-fill);
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.icon[data-size='compact'] {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0;
+  background: transparent;
+}
+
+.icon[data-selected='true'] {
+  background: var(--color-paper-raised);
+  color: var(--color-accent);
+}

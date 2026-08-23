@@ -1,0 +1,23 @@
+.brandLink {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.brandLink::before {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: 0 0 auto;
+  border-radius: 0.125rem;
+  background: var(--color-ink);
+  content: '';
+  transform: rotate(45deg) scale(0.72);
+}

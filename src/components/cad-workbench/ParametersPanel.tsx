@@ -1,4 +1,5 @@
 import styles from './ParametersPanel.module.css';
+import { EmptyState } from '../ui/EmptyState';
 import type { ArtifactSummary, ArtifactWorkspace } from '../../types';
 import { formatBytes } from '../../lib/format';
 import type { Language } from './types';
@@ -47,15 +48,14 @@ export function ParametersPanel({
       {collapsed ? null : (
         <>
           <div className={styles.parameterScroll}>
-            <div className={styles.emptyState}>
-              <strong>{text('No adjustable literals yet.', '暂时没有可调字面量。')}</strong>
-              <span>
-                {text(
-                  'Generated files remain available below for download.',
-                  '生成文件仍可在下方下载。',
-                )}
-              </span>
-            </div>
+            <EmptyState
+              className={styles.emptyState}
+              description={text(
+                'Generated files remain available below for download.',
+                '生成文件仍可在下方下载。',
+              )}
+              title={text('No adjustable literals yet.', '暂时没有可调字面量。')}
+            />
             {artifacts.length > 0 ? (
               <section className={styles.exports}>
                 <h2>{text('Downloads', '下载')}</h2>
