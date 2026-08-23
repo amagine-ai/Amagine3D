@@ -1,0 +1,173 @@
+.fileWorkspace {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: var(--space-lg);
+  padding: var(--space-md);
+  overflow: auto;
+}
+
+.fileSection {
+  min-height: 0;
+}
+
+.sectionHeading {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding-inline: var(--space-xs);
+}
+
+.sectionHeading h2 {
+  margin: 0;
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 620;
+  letter-spacing: 0.04em;
+}
+
+.fileHeadingActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.fileHeadingActions > span {
+  color: var(--color-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+}
+
+.fileHeadingActions button {
+  min-height: 2rem;
+  padding: var(--space-2xs) var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.fileEmpty {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.fileTree {
+  display: grid;
+  gap: 0;
+  margin: var(--space-xs) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fileTree li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 2.75rem;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-3xs) var(--space-2xs);
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out);
+}
+
+.fileTree li:has(button[aria-current='true']) {
+  background: var(--color-accent-soft);
+  color: var(--color-ink);
+}
+
+.fileTree button {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  width: 100%;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.fileTree button[aria-current='true'] {
+  color: var(--color-ink);
+}
+
+.fileTree button > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileTreeCheckbox {
+  display: inline-grid;
+  place-items: center;
+  padding: var(--space-2xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.fileTreeCheckbox input {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  accent-color: var(--color-accent);
+}
+
+.fileIcon {
+  display: inline-grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  place-items: center;
+  border-radius: 0.375rem;
+  background: var(--color-fill);
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.fileTree li:has(button[aria-current='true']) .fileIcon {
+  background: var(--color-paper-raised);
+  color: var(--color-accent);
+}
+
+.fileWorkspace :is(button, input):disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fileHeadingActions button:not(:disabled):hover,
+  .fileTree li:not(:has(button[aria-current='true'])):hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+  }
+
+  .fileTree li:has(button[aria-current='true']):hover {
+    background: var(--color-accent-soft);
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .fileWorkspace {
+    padding: var(--space-sm);
+  }
+}

@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
 
-import styles from '../../../apps/web/src/components/cad-workbench.module.css';
+import styles from './LeftPanel.module.css';
 import type { SessionSummary } from '../../types';
 import { ChatPanel, type ChatPanelProps } from './ChatPanel';
 import { FilesPanel, type FilesPanelProps } from './FilesPanel';

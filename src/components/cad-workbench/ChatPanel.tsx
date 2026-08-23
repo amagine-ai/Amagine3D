@@ -7,7 +7,8 @@ import type {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import styles from '../../../apps/web/src/components/cad-workbench.module.css';
+import styles from './ChatPanel.module.css';
+import composerStyles from './Composer.module.css';
 import { ACCEPTED_IMAGE_TYPES, type ChatMessage } from '../../types';
 import type { Language, PendingImage } from './types';
 import { translator } from './types';
@@ -112,9 +113,9 @@ export function ChatPanel({
         )}
       </section>
 
-      <section className={styles.composer}>
-        <form className={styles.composerForm} onSubmit={onSubmit}>
-          <div className={styles.composerShell}>
+      <section className={composerStyles.composer}>
+        <form className={composerStyles.composerForm} onSubmit={onSubmit}>
+          <div className={composerStyles.composerShell}>
             <textarea
               aria-busy={running}
               aria-label={text('CAD request', 'CAD 请求')}
@@ -132,10 +133,10 @@ export function ChatPanel({
             />
 
             {pendingImages.length > 0 ? (
-              <div className={styles.attachmentStrip}>
+              <div className={composerStyles.attachmentStrip}>
                 {pendingImages.map((image) => (
                   <button
-                    className={styles.attachmentChip}
+                    className={composerStyles.attachmentChip}
                     key={image.id}
                     onClick={() => onRemoveImage(image.id)}
                     title={text('Remove image', '移除图片')}
@@ -148,11 +149,11 @@ export function ChatPanel({
               </div>
             ) : null}
 
-            <div className={styles.composerFooter}>
-              <div className={styles.composerTools}>
+            <div className={composerStyles.composerFooter}>
+              <div className={composerStyles.composerTools}>
                 <button
                   aria-label={text('New project', '新项目')}
-                  className={styles.composerTool}
+                  className={composerStyles.composerTool}
                   data-tooltip={text('New project', '新项目')}
                   disabled={running || sessionLoading}
                   onClick={onNewProject}
@@ -161,18 +162,18 @@ export function ChatPanel({
                   <ToolbarIcon name="new-run" />
                 </button>
                 <label
-                  className={styles.composerTool}
+                  className={composerStyles.composerTool}
                   data-tooltip={text(
                     'Attach reference images',
                     '附加参考图',
                   )}
                 >
-                  <span className={styles.srOnly}>
+                  <span className={composerStyles.srOnly}>
                     {text('Attach reference images', '附加参考图')}
                   </span>
                   <input
                     accept={ACCEPTED_IMAGE_TYPES.join(',')}
-                    className={styles.srOnly}
+                    className={composerStyles.srOnly}
                     disabled={running || sessionLoading}
                     multiple
                     onChange={onSelectImages}
@@ -187,7 +188,7 @@ export function ChatPanel({
                     ? text('Stop current run', '停止当前执行')
                     : text('Send message', '发送消息')
                 }
-                className={styles.sendButton}
+                className={composerStyles.sendButton}
                 data-state={running ? 'stop' : 'send'}
                 disabled={
                   !running &&

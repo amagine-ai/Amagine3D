@@ -1,4 +1,4 @@
-import styles from '../../../apps/web/src/components/cad-workbench.module.css';
+import styles from './StorageDrawer.module.css';
 import type { ArtifactSummary, ArtifactWorkspace } from '../../types';
 import type { Language } from './types';
 import { translator } from './types';

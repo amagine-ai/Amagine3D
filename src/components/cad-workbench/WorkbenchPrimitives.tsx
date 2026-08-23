@@ -1,4 +1,4 @@
-import styles from '../../../apps/web/src/components/cad-workbench.module.css';
+import styles from './WorkbenchPrimitives.module.css';
 
 type ToolbarIconName = 'new-run' | 'send' | 'stop';
 

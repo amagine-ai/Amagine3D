@@ -1,0 +1,322 @@
+.leftPanel {
+  display: flex;
+  min-width: 0;
+  min-height: 34rem;
+  flex-direction: column;
+  margin-block-start: 0;
+  overflow: clip;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  box-shadow: 0 1px 2px var(--color-shadow-soft);
+}
+
+.leftPanel[data-menu-open='true'],
+.leftPanel[data-menu-open='true'] .panelHeader,
+.leftPanel[data-menu-open='true'] .panelTitle,
+.leftPanel[data-menu-open='true'] .panelTitleSelect {
+  overflow: visible;
+}
+
+.leftPanel[data-menu-open='true'] {
+  z-index: var(--z-tooltip);
+}
+
+.collapsedPanel {
+  min-height: auto;
+}
+
+.panelHeader {
+  display: flex;
+  min-height: 3.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 0.5rem 0.75rem;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+}
+
+.panelTitle,
+.panelControls {
+  display: flex;
+  align-items: center;
+}
+
+.panelTitle {
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--space-sm);
+}
+
+.panelTitle > div {
+  display: grid;
+  min-width: 0;
+}
+
+.panelTitle strong {
+  overflow: hidden;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelTitle small {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectMark {
+  width: 0.625rem;
+  height: 0.625rem;
+  flex: 0 0 auto;
+  border-radius: 0.125rem;
+  background: var(--color-primary);
+  transform: rotate(45deg) scale(0.78);
+}
+
+.panelTitleSelect {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--space-2xs);
+}
+
+.panelTitleButton {
+  appearance: none;
+  display: flex;
+  min-width: 0;
+  min-height: 2.25rem;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.panelTitleButton strong {
+  min-width: 0;
+  text-overflow: clip;
+}
+
+.panelTitleButton:focus-visible {
+  outline: 0;
+}
+
+.panelTitleButton:focus-visible strong {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.panelTitleChevron {
+  display: inline-grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--color-muted);
+}
+
+.panelTitleChevron svg {
+  width: 1rem;
+  height: 1rem;
+  overflow: visible;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.panelTitleChevron[data-open='true'] svg {
+  transform: rotate(180deg);
+}
+
+.executionMenu {
+  position: absolute;
+  z-index: var(--z-tooltip);
+  top: calc(100% + var(--space-xs));
+  left: 0;
+  display: grid;
+  width: min(30rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  max-height: min(28rem, 60dvh);
+  padding: var(--space-xs);
+  overflow: auto;
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-elevated);
+  box-shadow:
+    0 16px 32px rgb(0 0 0 / 0.1),
+    0 2px 8px rgb(0 0 0 / 0.06);
+}
+
+.executionMenuHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--color-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.executionMenuItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.executionMenuItem span,
+.executionMenuItem time {
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.executionMenuItem time {
+  color: var(--color-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.executionMenuItem[aria-selected='true'] {
+  background: var(--color-fill-strong);
+  color: var(--color-ink);
+}
+
+.bundledProjectBadge {
+  margin-inline-start: var(--space-xs);
+  padding: 0.1rem 0.35rem;
+  border: var(--rule-thin) solid var(--color-rule-strong);
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  font-family: var(--font-display);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.panelControls {
+  flex: 0 0 auto;
+  gap: var(--space-xs);
+}
+
+.panelCollapseButton {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.leftTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2xs);
+  margin: 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+}
+
+.leftTabs button {
+  min-height: 2.25rem;
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 540;
+  white-space: nowrap;
+}
+
+.leftTabs button[aria-selected='true'] {
+  background: var(--color-fill);
+  color: var(--color-ink);
+}
+
+.leftPanel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .panelCollapseButton:not(:disabled):hover,
+  .leftTabs button:not(:disabled):hover,
+  .executionMenuItem:not(:disabled):hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+  }
+}
+
+@media (min-width: 64rem) {
+  .leftPanel {
+    min-height: calc(100dvh - 5.25rem);
+    max-height: calc(100dvh - 5.25rem);
+  }
+
+  .collapsedPanel .panelHeader {
+    height: 100%;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+
+  .collapsedPanel .panelTitle {
+    display: none;
+  }
+}
+
+@media (max-width: 39.99rem) {
+  .executionMenu {
+    left: calc(-1 * var(--space-md));
+    width: min(22rem, calc(100vw - 1rem));
+  }
+
+  .executionMenuItem {
+    gap: var(--space-sm);
+  }
+}

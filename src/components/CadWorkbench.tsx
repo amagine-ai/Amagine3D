@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 
-import styles from '../../apps/web/src/components/cad-workbench.module.css';
+import styles from './CadWorkbench.module.css';
 import { LeftPanel } from './cad-workbench/LeftPanel';
 import { ParametersPanel } from './cad-workbench/ParametersPanel';
 import { PreviewPanel } from './cad-workbench/PreviewPanel';

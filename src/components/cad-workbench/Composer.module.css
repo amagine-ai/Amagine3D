@@ -1,3 +1,8 @@
+.composer {
+  padding: var(--space-xs) var(--space-sm) var(--space-sm);
+  background: transparent;
+}
+
 .composerForm,
 .composerShell {
   min-width: 0;
@@ -6,24 +11,40 @@
 .composerShell {
   position: relative;
   display: grid;
+  gap: 0.375rem;
+  padding: var(--space-xs);
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-raised);
+  box-shadow: 0 1px 2px var(--color-shadow-soft);
+  transition:
+    border-color var(--dur-micro) var(--ease-out),
+    box-shadow var(--dur-micro) var(--ease-out);
+}
+
+.composerShell:focus-within {
+  border-color: var(--color-rule-strong);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 .composer textarea {
   width: 100%;
-  border-radius: var(--radius-sm);
-  outline-offset: 1px;
-  font: inherit;
-}
-
-.composer textarea {
   min-height: 5rem;
   max-height: 14rem;
   padding: var(--space-sm);
+  overflow-y: auto;
   border: 0;
+  border-radius: var(--radius-sm);
   outline: 0;
   background: transparent;
-  overflow-y: auto;
+  color: var(--color-ink);
+  font: inherit;
+  line-height: 1.5;
   resize: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--color-muted);
 }
 
 .composerFooter,
@@ -40,45 +61,54 @@
 .attachmentStrip {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 0 0;
+  gap: 0.375rem;
+  padding-block-start: 0.375rem;
 }
 
 .attachmentChip {
+  padding: var(--space-2xs) var(--space-xs);
   border: var(--rule-thin) solid var(--color-rule);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-paper-raised);
   color: var(--color-ink-soft);
   cursor: pointer;
   font: inherit;
-  padding: 4px 8px;
 }
 
 .attachmentChip img {
-  width: 28px;
-  height: 28px;
-  border-radius: 4px;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-inline-end: 0.3125rem;
+  border-radius: var(--space-2xs);
   object-fit: cover;
   vertical-align: middle;
-  margin-right: 5px;
 }
 
 .composerTools {
   min-width: 0;
   flex: 1 1 auto;
-  gap: 0.125rem;
+  gap: var(--space-3xs);
 }
 
 .composerTool,
 .sendButton {
   display: inline-grid;
+  width: 2.125rem;
+  min-width: 2.125rem;
+  height: 2.125rem;
+  min-height: 2.125rem;
   place-items: center;
   padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-ink-soft);
   cursor: pointer;
   font: inherit;
   font-weight: 700;
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out);
 }
 
 .composerTool {
@@ -90,7 +120,7 @@
   width: 0.875rem;
   height: 0.875rem;
   overflow: visible;
-  stroke: currentColor;
+  stroke: currentcolor;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.75;
@@ -98,16 +128,15 @@
 
 .composerTool[data-active='true'],
 .composerTool[aria-expanded='true'] {
-  border: var(--rule-thin) solid transparent;
   background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 
 .composerTool::after {
   position: absolute;
+  z-index: var(--z-modal);
   inset-block-end: calc(100% + var(--space-xs));
   inset-inline-start: 50%;
-  z-index: var(--z-modal);
   width: max-content;
   max-width: 12rem;
   padding: var(--space-2xs) var(--space-xs);
@@ -130,13 +159,20 @@
 
 .sendButton {
   flex: 0 0 auto;
-  font-size: var(--text-lg);
+  background: var(--color-primary);
+  color: var(--color-primary-ink);
 }
 
 .sendButton[data-state='stop'] {
   background: var(--color-error-soft);
   color: var(--color-error);
+  box-shadow: inset 0 0 0 1px var(--color-error);
   font-size: var(--text-xs);
+}
+
+.composer :is(button, textarea):disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .srOnly {
@@ -145,18 +181,28 @@
   height: 1px;
   padding: 0;
   overflow: hidden;
+  border: 0;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
-  border: 0;
 }
 
-.parameterActions > button {
-  min-height: 2.75rem;
-  padding: var(--space-xs) var(--space-sm);
-  background: var(--color-primary);
-  color: var(--color-primary-ink);
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-  white-space: nowrap;
+@media (hover: hover) and (pointer: fine) {
+  .composerTool:not(:disabled):hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+  }
+
+  .composerTool:hover::after {
+    opacity: 1;
+    transition-delay: 800ms;
+  }
+
+  .sendButton[data-state='send']:not(:disabled):hover {
+    background: var(--color-primary-hover);
+  }
+
+  .sendButton[data-state='stop']:not(:disabled):hover {
+    background: var(--color-error-soft);
+    color: var(--color-error);
+  }
 }

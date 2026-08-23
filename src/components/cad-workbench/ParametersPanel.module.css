@@ -1,0 +1,210 @@
+.rightPanel {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 34rem;
+  flex-direction: column;
+  margin-block-start: 0;
+  overflow: clip;
+  border-radius: var(--radius-md);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+  box-shadow: 0 1px 2px var(--color-shadow-soft);
+}
+
+.collapsedPanel {
+  min-height: auto;
+}
+
+.panelHeader {
+  display: flex;
+  min-height: 3.5rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 0.5rem 0.75rem;
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+  color: var(--color-ink);
+}
+
+.panelTitle {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.panelTitle > div {
+  display: grid;
+  min-width: 0;
+}
+
+.panelTitle strong {
+  overflow: hidden;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelTitle small {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelCollapseButton {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.parameterScroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: var(--space-md);
+  overflow: auto;
+}
+
+.emptyState {
+  display: grid;
+  max-width: 38rem;
+  gap: var(--space-xs);
+  margin-block-start: var(--space-xl);
+  color: var(--color-ink-soft);
+}
+
+.emptyState strong {
+  color: var(--color-ink);
+}
+
+.exports {
+  margin-block: var(--space-xl);
+}
+
+.exports h2 {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.exports ul {
+  display: grid;
+  gap: var(--space-2xs);
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.exports li {
+  display: flex;
+  min-height: 3.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+}
+
+.exports li > div {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.exports small {
+  color: var(--color-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.exports button {
+  min-height: 2.25rem;
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.parameterActions {
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-block-start: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
+}
+
+.parameterActions p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .panelCollapseButton:not(:disabled):hover,
+  .exports button:not(:disabled):hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+  }
+}
+
+@media (min-width: 64rem) {
+  .rightPanel {
+    min-height: calc(100dvh - 5.25rem);
+    max-height: calc(100dvh - 5.25rem);
+  }
+
+  .collapsedPanel .panelHeader {
+    position: relative;
+    height: 100%;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: var(--space-2xs);
+  }
+
+  .collapsedPanel .panelTitle {
+    position: static;
+    display: flex;
+    width: 100%;
+    flex: 0 0 auto;
+    justify-content: center;
+  }
+
+  .collapsedPanel .panelTitle > div {
+    display: none;
+  }
+
+  .collapsedPanel .panelCollapseButton {
+    position: absolute;
+    inset-block-start: var(--space-2xs);
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+  }
+}

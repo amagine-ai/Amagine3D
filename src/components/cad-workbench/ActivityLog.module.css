@@ -1,71 +1,3 @@
-.canvasToolbar {
-  position: relative;
-  z-index: var(--z-raised);
-}
-
-.canvasBody {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  max-width: 100%;
-  overflow: auto;
-}
-
-.canvasBody > section {
-  min-height: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.codePreview {
-  max-width: 100%;
-  min-height: 100%;
-  margin: 0;
-  padding: var(--space-lg);
-  overflow: auto;
-  background: var(--color-paper);
-  color: var(--color-ink);
-  font-size: var(--text-sm);
-  line-height: 1.6;
-  tab-size: 2;
-  white-space: pre;
-}
-
-.emptyCanvas {
-  place-content: center;
-  min-height: 100%;
-  padding: var(--space-xl);
-  text-align: center;
-}
-
-.fileHeadingActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.fileHeadingActions > span {
-  color: var(--color-muted);
-  font-family: var(--font-display);
-  font-size: var(--text-xs);
-}
-
-.fileHeadingActions button {
-  min-height: 2rem;
-  padding: var(--space-2xs) var(--space-xs);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.fileHeadingActions button:hover {
-  background: var(--color-fill-strong);
-  color: var(--color-ink);
-}
-
 .logResizer {
   position: relative;
   z-index: var(--z-raised);
@@ -74,6 +6,7 @@
   min-height: 0;
   place-items: center;
   border: 0;
+  background: transparent;
   cursor: row-resize;
   touch-action: none;
 }
@@ -89,23 +22,27 @@
     transform var(--dur-micro) var(--ease-out);
 }
 
+.logResizer:focus-visible > span {
+  background: var(--color-accent);
+  opacity: 1;
+  transform: scaleX(1.25);
+}
+
 .activityLog {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
+  border-block-start: var(--rule-thin) solid var(--color-rule);
+  background: var(--color-paper-raised);
 }
 
 .activityLogHeader {
   display: flex;
+  min-height: 3.25rem;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm);
-  min-height: 3.25rem;
   padding: var(--space-xs) var(--space-md);
 }
 
@@ -137,23 +74,29 @@
   min-height: 2.25rem;
   place-items: center;
   padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
   cursor: pointer;
   font: inherit;
 }
 
 .activityLogCollapsed .activityLogHeader {
   flex: 1 1 auto;
-  border-block-end: 0;
 }
 
 .activityLogBody {
   display: grid;
-  gap: var(--space-xs);
   min-height: 0;
-  overflow: auto;
+  gap: var(--space-xs);
   padding: var(--space-sm) var(--space-md) var(--space-md);
+  overflow: auto;
+  background: var(--color-paper-raised);
   color: var(--color-ink-soft);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
   line-height: 1.45;
 }
 
@@ -185,8 +128,7 @@
   color: var(--color-error);
 }
 
-.runtimeEvents time,
-.runtimeEvents span {
+.runtimeEvents :is(time, span) {
   color: var(--color-muted);
   white-space: nowrap;
 }
@@ -211,4 +153,17 @@
 
 .platformNotices p {
   margin: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .activityLogHeader button:not(:disabled):hover {
+    background: var(--color-fill);
+    color: var(--color-ink);
+  }
+
+  .logResizer:not([aria-disabled='true']):hover > span {
+    background: var(--color-accent);
+    opacity: 1;
+    transform: scaleX(1.15);
+  }
 }

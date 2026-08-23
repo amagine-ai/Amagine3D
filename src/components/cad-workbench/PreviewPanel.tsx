@@ -4,7 +4,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
-import styles from '../../../apps/web/src/components/cad-workbench.module.css';
+import styles from './PreviewPanel.module.css';
+import activityStyles from './ActivityLog.module.css';
 import type { ArtifactSummary } from '../../types';
 import type { Language, RuntimeEntry } from './types';
 import { translator } from './types';
@@ -102,7 +103,7 @@ export function PreviewPanel({
       <div
         aria-disabled={logCollapsed}
         aria-label={text('Resize activity log', '调整活动日志高度')}
-        className={styles.logResizer}
+        className={activityStyles.logResizer}
         onPointerDown={onLogResize}
         role="separator"
       >
@@ -110,9 +111,9 @@ export function PreviewPanel({
       </div>
 
       <section
-        className={`${styles.activityLog} ${logCollapsed ? styles.activityLogCollapsed : ''}`}
+        className={`${activityStyles.activityLog} ${logCollapsed ? activityStyles.activityLogCollapsed : ''}`}
       >
-        <header className={styles.activityLogHeader}>
+        <header className={activityStyles.activityLogHeader}>
           <div>
             <strong>{text('Activity', '执行')}</strong>
             <small>{activity || connectionStatus}</small>
@@ -126,16 +127,16 @@ export function PreviewPanel({
           </button>
         </header>
         {logCollapsed ? null : (
-          <div className={styles.activityLogBody}>
+          <div className={activityStyles.activityLogBody}>
             {runtimeEntries.length === 0 ? (
-              <p className={styles.runtimeEventsEmpty}>
+              <p className={activityStyles.runtimeEventsEmpty}>
                 {text(
                   'Runtime events will appear here.',
                   '运行时事件会显示在这里。',
                 )}
               </p>
             ) : (
-              <ol className={styles.runtimeEvents}>
+              <ol className={activityStyles.runtimeEvents}>
                 {runtimeEntries.map((entry) => (
                   <li data-level={entry.level} key={entry.id}>
                     <time>{timeFormatter.format(entry.occurredAt)}</time>
@@ -145,7 +146,7 @@ export function PreviewPanel({
                 ))}
               </ol>
             )}
-            <div className={styles.platformNotices}>
+            <div className={activityStyles.platformNotices}>
               <p>
                 {text(
                   'Agent sessions and generated files are stored in repository folders.',

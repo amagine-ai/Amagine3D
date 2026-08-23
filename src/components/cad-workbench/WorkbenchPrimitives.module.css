@@ -1,0 +1,23 @@
+.loadingSpinner {
+  display: inline-block;
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: 0 0 auto;
+  border: var(--rule-thin) solid var(--color-rule-strong);
+  border-block-start-color: var(--color-accent);
+  border-radius: var(--radius-pill);
+  animation: activity-spin 800ms linear infinite;
+}
+
+@keyframes activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loadingSpinner {
+    animation: none;
+    border-color: var(--color-accent);
+  }
+}
