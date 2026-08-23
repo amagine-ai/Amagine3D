@@ -5,6 +5,7 @@ import styles from './LicensesPage.module.css';
 import projectStyles from './ProjectLicense.module.css';
 import runtimeStyles from './RuntimeLicenses.module.css';
 import { BrandLink } from './BrandLink';
+import { LicenseSection } from './licenses/LicenseSection';
 import {
   curatedLicenses,
   licensePageCopy,
@@ -91,14 +92,11 @@ export function LicensesPage() {
           <p className={styles.intro}>{copy.intro}</p>
         </section>
 
-        <section>
-          <div className={styles.sectionHeading}>
-            <p className={styles.sectionNumber}>01</p>
-            <div>
-              <h2>{copy.project}</h2>
-              <p>{copy.projectBody}</p>
-            </div>
-          </div>
+        <LicenseSection
+          description={copy.projectBody}
+          number="01"
+          title={copy.project}
+        >
           <div className={projectStyles.projectCard}>
             <div>
               <span>{copy.license}</span>
@@ -113,16 +111,13 @@ export function LicensesPage() {
               <a href="/licenses/amagine3d-notice.txt">{copy.notice}</a>
             </div>
           </div>
-        </section>
+        </LicenseSection>
 
-        <section>
-          <div className={styles.sectionHeading}>
-            <p className={styles.sectionNumber}>02</p>
-            <div>
-              <h2>{copy.runtime}</h2>
-              <p>{copy.runtimeBody}</p>
-            </div>
-          </div>
+        <LicenseSection
+          description={copy.runtimeBody}
+          number="02"
+          title={copy.runtime}
+        >
           <div className={runtimeStyles.componentTable} role="table">
             <div className={runtimeStyles.tableHeader} role="row">
               <span role="columnheader">{copy.component}</span>
@@ -155,16 +150,13 @@ export function LicensesPage() {
               </article>
             ))}
           </div>
-        </section>
+        </LicenseSection>
 
-        <section>
-          <div className={styles.sectionHeading}>
-            <p className={styles.sectionNumber}>03</p>
-            <div>
-              <h2>{copy.dependencies}</h2>
-              <p>{copy.dependencyBody}</p>
-            </div>
-          </div>
+        <LicenseSection
+          description={copy.dependencyBody}
+          number="03"
+          title={copy.dependencies}
+        >
           <div className={inventoryStyles.inventoryMeta}>
             <strong>{packages.length}</strong>
             <span>{copy.packages}</span>
@@ -197,7 +189,7 @@ export function LicensesPage() {
             </a>
             <p>{copy.generatedNote}</p>
           </div>
-        </section>
+        </LicenseSection>
 
         <footer>
           <span>© 2026 amagine-ai</span>

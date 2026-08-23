@@ -103,21 +103,15 @@
   padding: var(--space-3xl) 0 var(--space-xl);
 }
 
-.content section {
-  margin: 0;
-  padding: var(--space-2xl) 0;
-  border-block-start: var(--rule-thin) solid var(--color-rule-strong);
-}
-
 .content > .hero {
   display: grid;
   min-height: 28rem;
   align-content: end;
-  border-block-start: 0;
+  margin: 0;
+  padding: var(--space-2xl) 0;
 }
 
-.eyebrow,
-.sectionNumber {
+.eyebrow {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 600;
@@ -145,32 +139,6 @@
   color: var(--color-ink-soft);
   font-size: clamp(1.0625rem, 2vw, 1.375rem);
   line-height: 1.55;
-}
-
-.sectionHeading {
-  display: grid;
-  grid-template-columns: minmax(4rem, 1fr) minmax(0, 3fr);
-  gap: var(--space-xl);
-  margin-block-end: var(--space-xl);
-}
-
-.sectionNumber {
-  margin: 0;
-  color: var(--color-muted);
-}
-
-.sectionHeading h2 {
-  margin: 0;
-  font-size: clamp(1.75rem, 3vw, 2.5rem);
-  font-weight: 580;
-  letter-spacing: -0.045em;
-  line-height: 1.1;
-}
-
-.sectionHeading div > p {
-  max-width: 42rem;
-  margin: var(--space-md) 0 0;
-  color: var(--color-ink-soft);
 }
 
 .content footer {
@@ -229,7 +197,7 @@
     padding-block-start: var(--space-xl);
   }
 
-  .content section {
+  .hero {
     padding-block: var(--space-xl);
   }
 
@@ -243,11 +211,6 @@
 
   .intro {
     margin-block-start: var(--space-lg);
-  }
-
-  .sectionHeading {
-    grid-template-columns: 2rem minmax(0, 1fr);
-    gap: var(--space-sm);
   }
 
   .content footer {
