@@ -121,7 +121,7 @@
   padding: 0 var(--space-xs);
   color: var(--color-ink-soft);
   font-family: var(--font-display);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 600;
 }
 
