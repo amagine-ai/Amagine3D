@@ -27,7 +27,7 @@ export function activateProjectPython(projectRoot: string): PythonHealth {
     executable,
     [
       '-c',
-      'import platform, build123d, lib3mf, matplotlib, numpy, PIL, trimesh; print(platform.python_version())',
+      'import platform, build123d, lib3mf, matplotlib, numpy, PIL, rtree, trimesh; print(platform.python_version())',
     ],
     { encoding: 'utf8' },
   );

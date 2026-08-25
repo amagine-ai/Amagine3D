@@ -32,6 +32,7 @@ Technology.
 | build123d | `0.11.1` | Apache-2.0 | [`build123d.txt`](../public/licenses/build123d.txt), [`build123d-notice.txt`](../public/licenses/build123d-notice.txt) |
 | Open CASCADE Technology / CadQuery OCP | OCCT `7.9.3`, OCP `7.9.3.1.1` | LGPL-2.1 with Open CASCADE exception | [`opencascade-lgpl-2.1.txt`](../public/licenses/opencascade-lgpl-2.1.txt), [`opencascade-exception.txt`](../public/licenses/opencascade-exception.txt) |
 | trimesh | `5.0.0` | MIT | [`trimesh.txt`](../public/licenses/trimesh.txt) |
+| Rtree | `1.4.1` | MIT | [`rtree.txt`](../public/licenses/rtree.txt) |
 | lib3mf | `2.5.0` | BSD-2-Clause | [`lib3mf.txt`](../public/licenses/lib3mf.txt) |
 
 The complete production npm dependency graph and SPDX expressions are recorded

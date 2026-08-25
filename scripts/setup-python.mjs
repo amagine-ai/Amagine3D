@@ -108,7 +108,7 @@ const venvPython = environmentPython();
 if (currentMarker === fingerprint && existsSync(venvPython)) {
   const check = run(
     venvPython,
-    ['-c', 'import build123d, lib3mf, matplotlib, numpy, PIL, trimesh'],
+    ['-c', 'import build123d, lib3mf, matplotlib, numpy, PIL, rtree, trimesh'],
     { capture: true },
   );
   if (check.status === 0) {
@@ -150,7 +150,7 @@ if (installed.status !== 0) {
 
 const verified = run(
   venvPython,
-  ['-c', 'import build123d, lib3mf, matplotlib, numpy, PIL, trimesh'],
+  ['-c', 'import build123d, lib3mf, matplotlib, numpy, PIL, rtree, trimesh'],
   { capture: true },
 );
 if (verified.status !== 0) {
