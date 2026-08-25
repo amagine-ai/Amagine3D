@@ -16,6 +16,7 @@ import {
 } from '../src/types.ts';
 import { scanArtifacts } from './artifacts.ts';
 import { bundledPomodoroArtifacts } from './bundled-workspace.ts';
+import { discoverModelBuilds } from './model-builds.ts';
 import {
   restoredChatStages,
   RUN_STAGES_CUSTOM_TYPE,
@@ -157,8 +158,15 @@ export async function userSessionArtifacts(
 ): Promise<ArtifactCollection | undefined> {
   const root = sessionWorkspaceRoot(workspaceRoot, sessionId);
   if (!root) return undefined;
-  const artifacts = (await scanArtifacts(root)).map((artifact) => ({
+  const scannedArtifacts = await scanArtifacts(root);
+  const featuredPaths = new Set(
+    (await discoverModelBuilds(root, scannedArtifacts)).map(
+      ({ primaryPreviewPath }) => primaryPreviewPath,
+    ),
+  );
+  const artifacts = scannedArtifacts.map((artifact) => ({
     ...artifact,
+    ...(featuredPaths.has(artifact.path) ? { featured: true } : {}),
     url: `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/file?path=${encodeURIComponent(artifact.path)}`,
   }));
   return {

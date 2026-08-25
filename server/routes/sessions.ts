@@ -1,6 +1,9 @@
 import type { Express } from 'express';
 
-import { BUNDLED_POMODORO_SESSION_ID } from '../../src/types.ts';
+import {
+  BUNDLED_POMODORO_SESSION_ID,
+  type PythonHealth,
+} from '../../src/types.ts';
 import {
   createArtifactArchive,
   MAX_ARCHIVE_FILES,
@@ -15,6 +18,13 @@ import {
   resolveArtifactPath,
 } from '../artifacts.ts';
 import { bundledPomodoroArtifacts } from '../bundled-workspace.ts';
+import {
+  ParameterBuildError,
+  parameterModelsForWorkspace,
+  parseParameterBuildRequest,
+  rebuildModelWithParameters,
+} from '../model-parameters.ts';
+import { acquireSessionActivity } from '../session-activity.ts';
 import {
   artifactsForSession,
   BUILTIN_POMODORO_SESSION,
@@ -34,6 +44,7 @@ export interface SessionRoutePaths {
 export function registerSessionRoutes(
   app: Express,
   paths: SessionRoutePaths,
+  python: PythonHealth,
 ): void {
   app.get('/api/sessions', async (_request, response) => {
     response.json(await listSessionCatalog(paths.sessionRoot));
@@ -84,6 +95,104 @@ export function registerSessionRoutes(
     }
     response.json(collection);
   });
+
+  app.get('/api/sessions/:sessionId/parameters', async (request, response) => {
+    if (request.params.sessionId === BUNDLED_POMODORO_SESSION_ID) {
+      response.json({ models: [] });
+      return;
+    }
+    const workspaceRoot = sessionWorkspaceRoot(
+      paths.workspaceRoot,
+      request.params.sessionId,
+    );
+    if (!workspaceRoot) {
+      response.status(400).json({ message: 'Invalid session id.' });
+      return;
+    }
+    if (!python.ready || !python.executable) {
+      response.status(503).json({ message: 'Python CAD runtime is not ready.' });
+      return;
+    }
+    try {
+      const collection = await userSessionArtifacts(
+        paths.workspaceRoot,
+        request.params.sessionId,
+      );
+      response.json({
+        models: await parameterModelsForWorkspace(
+          workspaceRoot,
+          python.executable,
+          collection?.artifacts,
+        ),
+      });
+    } catch (error) {
+      response.status(500).json({
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Unable to inspect model parameters.',
+      });
+    }
+  });
+
+  app.post(
+    '/api/sessions/:sessionId/parameters/rebuild',
+    async (request, response) => {
+      if (request.params.sessionId === BUNDLED_POMODORO_SESSION_ID) {
+        response.status(403).json({ message: 'Built-in projects are read-only.' });
+        return;
+      }
+      const workspaceRoot = sessionWorkspaceRoot(
+        paths.workspaceRoot,
+        request.params.sessionId,
+      );
+      const buildRequest = parseParameterBuildRequest(request.body);
+      if (!workspaceRoot || !buildRequest) {
+        response.status(400).json({ message: 'Invalid parameter build request.' });
+        return;
+      }
+      if (!python.ready || !python.executable) {
+        response.status(503).json({ message: 'Python CAD runtime is not ready.' });
+        return;
+      }
+      const releaseSession = acquireSessionActivity(request.params.sessionId);
+      if (!releaseSession) {
+        response.status(409).json({
+          message: 'This session already has an active CAD operation.',
+        });
+        return;
+      }
+      try {
+        await rebuildModelWithParameters({
+          pythonExecutable: python.executable,
+          request: buildRequest,
+          workspaceRoot,
+        });
+        const collection = await userSessionArtifacts(
+          paths.workspaceRoot,
+          request.params.sessionId,
+        );
+        if (!collection) {
+          throw new ParameterBuildError('Invalid session id.', 400);
+        }
+        response.json({
+          ...collection,
+          models: await parameterModelsForWorkspace(
+            workspaceRoot,
+            python.executable,
+            collection.artifacts,
+          ),
+        });
+      } catch (error) {
+        response.status(error instanceof ParameterBuildError ? error.status : 500).json({
+          message:
+            error instanceof Error ? error.message : 'Parameter build failed.',
+        });
+      } finally {
+        releaseSession();
+      }
+    },
+  );
 
   app.get('/api/sessions/:sessionId/artifacts/file', async (request, response) => {
     const scopedWorkspaceRoot = sessionWorkspaceRoot(
