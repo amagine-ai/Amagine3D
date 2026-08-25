@@ -22,5 +22,7 @@ jobs:
       - run: npm run licenses:check
       - run: npm run typecheck
       - run: npm test
+      - run: npm run python:setup
+      - run: npm run test:python
       - run: npm run build
       - run: npm audit --audit-level=high
