@@ -135,6 +135,7 @@ def observe(shape, feature_id: str, role: str = "feature") -> None:
 def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
     """Subtract a tool and fail if it misses or produces an invalid result."""
     before = float(body.volume)
+    tool_stats = _stats(tool)
     try:
         result = body - tool
     except Exception as error:
@@ -144,6 +145,7 @@ def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
         "id": feature_id,
         "kind": "cut",
         "removed_mm3": round(removed, 6),
+        "tool": tool_stats,
     })
     if removed < min_removed_mm3:
         raise BuildInvariantError(

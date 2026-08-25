@@ -15,6 +15,7 @@
     "python:setup": "node scripts/setup-python.mjs",
     "start": "npm run python:setup && tsx server/index.ts",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:python": "node scripts/test-python.mjs",
     "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {

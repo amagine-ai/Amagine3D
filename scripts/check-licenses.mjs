@@ -29,6 +29,7 @@ const requiredFiles = [
   'opencascade-lgpl-2.1.txt',
   'pi.txt',
   'react.txt',
+  'rtree.txt',
   'three.txt',
   'trimesh.txt',
 ];

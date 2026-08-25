@@ -4,4 +4,5 @@ lib3mf==2.5.0
 matplotlib==3.10.9
 numpy==2.2.6
 pillow==12.3.0
+rtree==1.4.1
 trimesh==5.0.0

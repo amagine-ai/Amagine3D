@@ -1,0 +1,46 @@
+{
+  "derived": {
+    "arachne_min_bead_mm": 0.34,
+    "arachne_min_feature_mm": 0.1,
+    "process_wall_target_mm": 0.87,
+    "single_line_floor_mm": 0.42
+  },
+  "id": "bbl-a1-mini-0.4-t0-standard",
+  "machine": {
+    "bed_polygon_mm": [[0, 0], [180, 0], [180, 180], [0, 180]],
+    "excluded_polygons_mm": [],
+    "id": "a1-mini",
+    "name": "Bambu Lab A1 mini",
+    "printable_height_mm": 180,
+    "selected_tool": {
+      "height_mm": 180,
+      "index": 0,
+      "polygon_mm": [[0, 0], [180, 0], [180, 180], [0, 180]]
+    }
+  },
+  "process": {
+    "arachne_min_bead_nozzle_percent": 85,
+    "arachne_min_feature_nozzle_percent": 25,
+    "detect_thin_wall": false,
+    "inner_wall_line_width_mm": 0.45,
+    "layer_height_mm": 0.2,
+    "line_width_mm": 0.42,
+    "name": "0.20mm Standard",
+    "nozzle_diameter_mm": 0.4,
+    "outer_wall_line_width_mm": 0.42,
+    "support_enabled": false,
+    "support_threshold_angle_from_horizontal_deg": 30,
+    "support_type": "tree(auto)",
+    "wall_generator": "classic",
+    "wall_loops": 2
+  },
+  "schema": "evidence-bambu-printer-profile/v1",
+  "selection": {"assumed_default_machine": false, "tool_index": 0},
+  "upstream": {
+    "commit": "926a7192574bcb9b3a732e1ec59a46d79cb45466",
+    "release": "v02.08.02.61",
+    "repository": "https://github.com/bambulab/BambuStudio",
+    "vendor_config_version": "02.08.00.05"
+  },
+  "vendor": "Bambu Lab"
+}

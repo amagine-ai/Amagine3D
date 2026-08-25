@@ -1,31 +1,63 @@
 {
-  "schema": "evidence-color-intent/v2",
+  "schema": "evidence-color-intent/v3",
   "part": "example-two-color-tile",
+  "task_mode": "specification",
   "representation": "relief",
+  "reference_files": [],
   "dimensions_mm": {
     "x": {"value": 40, "source": "user", "confidence": "high"},
     "y": {"value": 20, "source": "user", "confidence": "high"},
     "z": {"value": 4, "source": "inferred", "confidence": "medium"}
   },
+  "features": [
+    {
+      "id": "left-field",
+      "evidence": "The specification assigns the left half to the primary color.",
+      "acceptance": "The red field covers X=0 through X=20 mm without gaps."
+    },
+    {
+      "id": "right-field",
+      "evidence": "The specification assigns the right half to the secondary color.",
+      "acceptance": "The blue field covers X=20 through X=40 mm without gaps."
+    },
+    {
+      "id": "center-boundary",
+      "evidence": "The two fields meet at the specified center line.",
+      "acceptance": "The material boundary is a single vertical interface at X=20 mm."
+    }
+  ],
   "color_regions": [
     {
       "name": "left_field",
       "hex": "#CC2233",
       "purpose": "Primary identity field",
       "boundary": "Left half of the parent volume split at X=0",
-      "evidence": "Reference left field is red."
+      "evidence": "Specification assigns red to the left field.",
+      "material": {"transmission": "opaque"}
     },
     {
       "name": "right_field",
       "hex": "#2255CC",
       "purpose": "Secondary identity field",
       "boundary": "Right half of the parent volume split at X=0",
-      "evidence": "Reference right field is blue."
+      "evidence": "Specification assigns blue to the right field.",
+      "material": {"transmission": "opaque"}
     }
   ],
   "palette_reduction": {
     "applied": false,
     "reason": "The two semantic colors map directly to two filaments."
+  },
+  "printability": {
+    "profile": {
+      "path": "bambu-a1-mini-0.4-standard.example.json",
+      "sha256": "f5bdfcc78cc4e55289a4a259c6d94a6cab18534494d50655b5f0d1d67b132386"
+    },
+    "build_axis": "+Z",
+    "bed_contact": "z-min",
+    "support_policy": "support-free",
+    "minimum_wall_target_mm": 0.87,
+    "critical_features": ["left-field", "right-field", "center-boundary"]
   },
   "visual": {
     "required": true,

@@ -102,6 +102,14 @@ export const curatedLicenses: CuratedLicense[] = [
     version: '5.0.0',
   },
   {
+    files: [{ href: '/licenses/rtree.txt', label: 'MIT' }],
+    license: 'MIT',
+    name: 'Rtree',
+    source: 'https://github.com/Toblerity/rtree/tree/1.4.1',
+    use: { en: 'Spatial index for mesh thickness queries', zh: '网格厚度查询空间索引' },
+    version: '1.4.1',
+  },
+  {
     files: [{ href: '/licenses/lib3mf.txt', label: 'BSD-2-Clause' }],
     license: 'BSD-2-Clause',
     name: 'lib3mf',
