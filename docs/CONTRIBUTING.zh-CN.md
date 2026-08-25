@@ -13,8 +13,8 @@ npm run build
 ```
 
 请保持浏览器代码与本地 API 之间的边界。React 不得直接访问模型凭据、
-PI session JSONL、上传目录或 session 工作区。服务端产物路由必须把所有路径
-限制在所选 PI session 的 `workspace/sessions/<sessionId>/` 目录内。
+Agent session JSONL、上传目录或 session 工作区。服务端产物路由必须把所有路径
+限制在所选 Agent session 的 `workspace/sessions/<sessionId>/` 目录内。
 
 每次提交一个聚焦的改动，并为新的公开行为附带测试和文档。自动化测试
 不得调用真实模型提供商。连接真实提供商的 CAD 运行属于手动检查，不得提交

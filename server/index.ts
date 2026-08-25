@@ -16,7 +16,9 @@ async function main(): Promise<void> {
     runtime = await PiRuntime.create(paths.projectRoot);
   } catch (error) {
     runtimeError = errorMessage(error);
-    console.error(`PI runtime initialization failed: ${runtimeError}`);
+    console.error(
+      `Amagine3D Agent initialization failed: ${runtimeError}`,
+    );
   }
 
   const port = Number(process.env.PORT ?? 6161);

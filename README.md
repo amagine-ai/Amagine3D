@@ -118,7 +118,7 @@ Our goal is to let a hardware concept begin with reference images, physical comp
 - Python 3.10 through 3.13
 - npm
 - A modern desktop browser
-- A model gateway compatible with one of the PI SDK protocols
+- A model gateway compatible with an Amagine3D Agent runtime protocol
 
 The setup script creates a repository-local `.venv` and installs the pinned
 build123d, OCP, trimesh, and lib3mf dependencies. A desktop CAD application is
@@ -155,10 +155,10 @@ AGENT_RUN_TIMEOUT_MS=1800000
 
 These values are read only by the local Express server. When
 `TAVILY_API_KEY` is configured, the composer exposes a **Web refs** control.
-Enabling it for a turn requires PI to search before CAD mutations, returns
-ranked dimension/specification sources, and passes up to three available
-reference images to the multimodal model. Missing images do not block the CAD
-Skill workflow. Do not expose API keys through client-side environment
+Enabling it for a turn requires Amagine3D Agent to search before CAD mutations,
+returns ranked dimension/specification sources, and passes up to three
+available reference images to the multimodal model. Missing images do not block
+the CAD Skill workflow. Do not expose API keys through client-side environment
 variables or commit `.env`.
 
 ## System Architecture

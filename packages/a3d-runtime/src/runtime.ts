@@ -153,7 +153,9 @@ export class PiRuntime {
       });
       model = modelRuntime.getModel(provider, id);
       if (!model) {
-        throw new Error(`PI could not load ${modelName} after registration.`);
+        throw new Error(
+          `Amagine3D Agent could not load ${modelName} after registration.`,
+        );
       }
     }
 

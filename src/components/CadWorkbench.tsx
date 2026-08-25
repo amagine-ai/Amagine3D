@@ -374,7 +374,12 @@ export function CadWorkbench({
     const connectionStatus = useMemo(() => {
       if (healthError) return text('Service unavailable', '服务未连接');
       if (!health) return text('Checking runtime…', '正在检查运行环境…');
-      if (!health.runtimeReady) return text('PI runtime unavailable', 'PI 运行时未就绪');
+      if (!health.runtimeReady) {
+        return text(
+          'Amagine3D Agent unavailable',
+          'Amagine3D Agent 未就绪',
+        );
+      }
       if (!health.python.ready) return text('Python unavailable', 'Python 未就绪');
       if (!health.configured) return text('API key required', '等待配置密钥');
       return text('Ready for a new CAD request.', '可以开始新的 CAD 请求。');
@@ -388,11 +393,17 @@ export function CadWorkbench({
       if (event.type === 'start') {
         startDraftStage(
           draftId,
-          text(`PI started ${event.model}`, `PI 已启动 ${event.model}`),
+          text(
+            `Amagine3D Agent started ${event.model}`,
+            `Amagine3D Agent 已启动 ${event.model}`,
+          ),
           'agent',
         );
         addRuntimeEntry(
-          text(`PI started ${event.model}`, `PI 已启动 ${event.model}`),
+          text(
+            `Amagine3D Agent started ${event.model}`,
+            `Amagine3D Agent 已启动 ${event.model}`,
+          ),
           'agent',
         );
         return;
@@ -506,7 +517,10 @@ export function CadWorkbench({
           stages: [
             {
               id: crypto.randomUUID(),
-              label: text('Starting PI Agent', '正在启动 PI Agent'),
+              label: text(
+                'Starting Amagine3D Agent',
+                '正在启动 Amagine3D Agent',
+              ),
               occurredAt: Date.now(),
               stage: 'start',
               status: 'running',
@@ -519,8 +533,13 @@ export function CadWorkbench({
       setPendingImages([]);
       setPrompt('');
       setRunning(true);
-      setActivity(text('Starting PI Agent', '正在启动 PI Agent'));
-      addRuntimeEntry(text('Starting PI Agent', '正在启动 PI Agent'), 'start');
+      setActivity(
+        text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent'),
+      );
+      addRuntimeEntry(
+        text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent'),
+        'start',
+      );
 
       try {
         await streamAgent({
@@ -538,8 +557,7 @@ export function CadWorkbench({
               ? {
                   ...message,
                   state: 'complete',
-                  text:
-                    message.text || text('Run completed.', '执行已完成。'),
+                  text: message.text,
                 }
               : message,
           ),

@@ -37,7 +37,7 @@ try {
   const runtime = await PiRuntime.create(projectRoot);
   checks.push({
     detail: `${runtime.modelName}; ${runtime.skills.length} skills`,
-    name: 'PI runtime',
+    name: 'Amagine3D Agent runtime',
     ready: runtime.runtimeReady && runtime.skillDiagnostics.length === 0,
   });
   for (const diagnostic of runtime.skillDiagnostics) {
@@ -46,7 +46,7 @@ try {
 } catch (error) {
   checks.push({
     detail: error instanceof Error ? error.message : String(error),
-    name: 'PI runtime',
+    name: 'Amagine3D Agent runtime',
     ready: false,
   });
 }

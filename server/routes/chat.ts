@@ -18,6 +18,7 @@ import type {
   ChatStage,
   PythonHealth,
 } from '../../src/types.ts';
+import { assistantMessageOutcome } from '../agent-events.ts';
 import { durationFromEnv, errorMessage } from '../http-utils.ts';
 import { isChatRequest } from '../protocol.ts';
 import { userSessionArtifacts } from '../sessions.ts';
@@ -99,7 +100,7 @@ export function registerChatRoute(
     const { python, runtime, runtimeError } = dependencies;
     if (!runtime) {
       response.status(503).json({
-        message: runtimeError || 'PI runtime is not ready.',
+        message: runtimeError || 'Amagine3D Agent is not ready.',
       });
       return;
     }
@@ -195,7 +196,7 @@ export function registerChatRoute(
     }, durationFromEnv(process.env.AGENT_RUN_TIMEOUT_MS, 1_800_000));
 
     try {
-      startStage('正在启动 PI Agent', 'start');
+      startStage('正在启动 Amagine3D Agent', 'start');
       session = await runtime.createSession(sessionId, { webSearchEnabled });
       if (clientDisconnected || terminalEventSent) {
         await session.abort();
@@ -208,9 +209,16 @@ export function registerChatRoute(
           providerError = undefined;
           return;
         }
+        const assistantOutcome = assistantMessageOutcome(event);
+        if (assistantOutcome) {
+          providerError =
+            assistantOutcome.status === 'error'
+              ? assistantOutcome.message
+              : undefined;
+          if (event.type === 'message_end') return;
+        }
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
-          if (update.type === 'start') providerError = undefined;
           if (update.type === 'text_delta') {
             if (!composingResponse) {
               composingResponse = true;
@@ -218,8 +226,6 @@ export function registerChatRoute(
             }
             streamedText += update.delta;
             writeEvent(response, { content: update.delta, type: 'token' });
-          } else if (update.type === 'error' && update.reason === 'error') {
-            providerError = update.error.errorMessage || 'Model request failed.';
           }
           return;
         }
@@ -253,7 +259,7 @@ export function registerChatRoute(
         skills: runtime.skills.map((skill) => skill.name),
         type: 'start',
       });
-      startStage(`PI 已启动 ${runtime.modelName}`, 'agent');
+      startStage(`Amagine3D Agent 已启动 ${runtime.modelName}`, 'agent');
       if (images.length > 0) startStage('正在保存参考图片', 'image');
       const savedImages = await saveImageAttachments(
         runtime.stateRoot,
@@ -303,7 +309,7 @@ export function registerChatRoute(
           writeEvent(response, {
             code: 'web_search_required',
             message:
-              '已开启联网参考，但 PI 未能完成必需的 Tavily 搜索。本轮结果已拦截，请检查密钥、额度或网络连接。',
+              '已开启联网参考，但 Amagine3D Agent 未能完成必需的 Tavily 搜索。本轮结果已拦截，请检查密钥、额度或网络连接。',
             type: 'error',
           });
           return;
@@ -369,7 +375,17 @@ export function registerChatRoute(
       }
 
       const answer = finalAssistantText(session) || streamedText;
-      if (answer) writeEvent(response, { content: answer, type: 'assistant' });
+      if (!answer.trim()) {
+        terminalEventSent = true;
+        persistRunTrace('failed');
+        writeEvent(response, {
+          code: 'empty_agent_response',
+          message: 'Amagine3D Agent 未返回最终回复，本轮不能标记为完成。',
+          type: 'error',
+        });
+        return;
+      }
+      writeEvent(response, { content: answer, type: 'assistant' });
       startStage('正在整理生成文件', 'files');
       const artifactCollection = await userSessionArtifacts(
         runtime.workspaceRoot,

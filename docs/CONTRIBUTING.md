@@ -13,9 +13,9 @@ npm run build
 ```
 
 Keep browser code behind the local API boundary. React must not access model
-credentials, PI session JSONL files, uploads, or session workspaces directly.
-Server artifact routes must keep every path inside the selected PI session's
-`workspace/sessions/<sessionId>/` directory.
+credentials, Agent session JSONL files, uploads, or session workspaces
+directly. Server artifact routes must keep every path inside the selected Agent
+session's `workspace/sessions/<sessionId>/` directory.
 
 Submit one focused change with tests and documentation for new public behavior.
 Automated tests must not call real model providers. Provider-backed CAD runs are
