@@ -101,23 +101,28 @@
   line-height: 1.5;
 }
 
+.parameterGroups {
+  display: grid;
+  gap: var(--space-lg);
+}
+
 .parameterGroup {
   display: grid;
-  padding: 0;
-  border: 0;
+  padding: var(--space-md);
+  border: var(--rule-thin) solid var(--color-rule);
+  border-radius: var(--radius-sm);
   margin: 0;
+  background: color-mix(in srgb, var(--color-fill) 38%, transparent);
   gap: var(--space-md);
 }
 
 .parameterGroup legend {
-  width: 100%;
-  padding: 0 0 var(--space-xs);
-  border-block-end: var(--rule-thin) solid var(--color-rule);
-  margin-block-end: var(--space-sm);
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  text-transform: uppercase;
+  width: auto;
+  padding: 0 var(--space-xs);
+  color: var(--color-ink-soft);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 .parameterField {
@@ -164,7 +169,7 @@
 }
 
 .parameterValueRow span,
-.parameterBounds,
+.parameterLimits,
 .parameterAffects {
   color: var(--color-muted);
   font-family: var(--font-mono);
@@ -175,9 +180,30 @@
   overflow-wrap: anywhere;
 }
 
-.parameterField input[type='range'] {
+.parameterRange {
+  display: grid;
+  gap: var(--space-2xs);
+}
+
+.parameterRange input[type='range'] {
   width: 100%;
   accent-color: var(--color-accent);
+}
+
+.parameterLimits {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.parameterLimits span:last-child {
+  text-align: end;
+}
+
+.parameterLimits b {
+  color: var(--color-ink-soft);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
 }
 
 .parameterGroup:disabled {
