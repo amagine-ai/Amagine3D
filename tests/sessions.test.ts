@@ -213,3 +213,37 @@ test('discovers artifacts only inside the selected session workspace', async () 
     await rm(root, { force: true, recursive: true });
   }
 });
+
+test('marks the build report top-level preview as featured', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-featured-model-'));
+  try {
+    const selectedRoot = sessionWorkspaceRoot(root, SESSION_ID)!;
+    await mkdir(selectedRoot, { recursive: true });
+    const sourcePath = join(selectedRoot, 'part.py');
+    const stlPath = join(selectedRoot, 'part.stl');
+    const stepPath = join(selectedRoot, 'part.step');
+    await writeFile(sourcePath, 'print("part")\n');
+    await writeFile(stlPath, 'solid part\nendsolid part\n');
+    await writeFile(stepPath, 'step');
+    await writeFile(
+      join(selectedRoot, 'part_report.json'),
+      JSON.stringify({
+        artifacts: {
+          step: { path: stepPath },
+          stl: { path: stlPath },
+        },
+        part: 'part',
+        schema: 'evidence-cad-build/v2',
+        source: { path: sourcePath },
+      }),
+    );
+
+    const collection = await userSessionArtifacts(root, SESSION_ID);
+    assert.equal(
+      collection?.artifacts.find(({ featured }) => featured)?.path,
+      'part.stl',
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

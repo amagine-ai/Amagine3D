@@ -3,6 +3,9 @@ import type {
   ArtifactCollection,
   HealthResponse,
   ImageAttachment,
+  ParameterBuildResult,
+  ParameterCollection,
+  ParameterModel,
   SessionCatalog,
   SessionDetail,
 } from '../types';
@@ -42,6 +45,43 @@ export async function fetchArtifacts(
   );
   if (!response.ok) throw new Error('无法读取工作区文件。');
   return (await response.json()) as ArtifactCollection;
+}
+
+export async function fetchModelParameters(
+  sessionId: string,
+): Promise<ParameterCollection> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/parameters`,
+  );
+  if (!response.ok) throw new Error('无法读取模型参数。');
+  return (await response.json()) as ParameterCollection;
+}
+
+export async function rebuildModelParameters(
+  sessionId: string,
+  model: ParameterModel,
+  values: Record<string, number>,
+): Promise<ParameterBuildResult> {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/parameters/rebuild`,
+    {
+      body: JSON.stringify({
+        primaryPreviewPath: model.primaryPreviewPath,
+        sourceHash: model.sourceHash,
+        sourcePath: model.sourcePath,
+        values,
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    },
+  );
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as {
+      message?: string;
+    };
+    throw new Error(body.message || '参数化重建失败。');
+  }
+  return (await response.json()) as ParameterBuildResult;
 }
 
 export async function fetchArtifactArchive(

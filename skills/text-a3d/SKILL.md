@@ -104,10 +104,17 @@ contract feature IDs. New sources use this runtime shape:
 import sys
 sys.path.insert(0, r"<SKILL_DIR>")
 from build123d import *
-from cad_helpers import observe, checked_cut, checked_fillet, export_part
+from cad_helpers import parameter, observe, checked_cut, checked_fillet, export_part
 
 NAME = "<name>"
 INTENT = "<name>_intent.json"
+WIDTH = parameter(
+    "overall-width", 40.0,
+    min_value=24.0, max_value=80.0, step=0.5,
+    unit="mm", label="Overall width", label_zh="总体宽度",
+    group="Envelope", group_zh="外形尺寸",
+    affects=("primary-envelope",),
+)
 
 # primary envelope -> observed identity volumes -> cuts -> controls -> finishes
 body = ...
@@ -130,6 +137,17 @@ Observe every manufacturing-critical additive feature before union. Checked
 cuts record tool bounds; checked finishes record actual size. These feature IDs
 let QA tell the model which source parameter to repair. Finishing degradation
 is forbidden unless the contract permits it.
+
+Expose every meaningful user-adjustable driving dimension with `parameter()`:
+overall dimensions, local feature sizes and positions, clearances, wall
+thicknesses, hole diameters, and finish sizes when applicable. Give each one a
+stable ID, conservative topology-safe bounds, a positive step, unit, label,
+group, concise `label_zh` and `group_zh` translations, and the contract feature
+IDs it affects. Localized fields are presentation metadata only: keep IDs and
+Python variable names stable in English. Derived coordinates remain ordinary
+expressions and must not be exposed as independent controls. A parameter change
+rebuilds and republishes the complete model, so never declare an output-only or
+unused value.
 
 ## 4. Prove geometry, then appearance
 

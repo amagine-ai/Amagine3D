@@ -21,6 +21,7 @@ import type {
 import { assistantMessageOutcome } from '../agent-events.ts';
 import { durationFromEnv, errorMessage } from '../http-utils.ts';
 import { isChatRequest } from '../protocol.ts';
+import { acquireSessionActivity } from '../session-activity.ts';
 import { userSessionArtifacts } from '../sessions.ts';
 import { appendSavedImageContext, saveImageAttachments } from '../uploads.ts';
 import {
@@ -34,7 +35,6 @@ import {
   webSearchRepairInstruction,
 } from '../web-search.ts';
 
-const activeSessionIds = new Set<string>();
 const MAX_VISUAL_REPAIR_ATTEMPTS = 3;
 const MAX_WEB_SEARCH_REPAIR_ATTEMPTS = 2;
 
@@ -130,13 +130,13 @@ export function registerChatRoute(
       });
       return;
     }
-    if (activeSessionIds.has(sessionId)) {
+    const releaseSession = acquireSessionActivity(sessionId);
+    if (!releaseSession) {
       response.status(409).json({
         message: 'This session already has an active turn.',
       });
       return;
     }
-    activeSessionIds.add(sessionId);
 
     response.status(200);
     response.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
@@ -424,7 +424,7 @@ export function registerChatRoute(
       response.off('close', abortForDisconnect);
       unsubscribe?.();
       session?.dispose();
-      activeSessionIds.delete(sessionId);
+      releaseSession();
       if (!response.writableEnded && !response.destroyed) response.end();
     }
   });
