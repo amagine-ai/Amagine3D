@@ -17,6 +17,7 @@ import { LoadingSpinner, ToolbarIcon } from './WorkbenchPrimitives';
 
 export interface ChatPanelProps {
   activity: string;
+  busy: boolean;
   conversationRef: RefObject<HTMLElement | null>;
   language: Language;
   messages: ChatMessage[];
@@ -39,6 +40,7 @@ export interface ChatPanelProps {
 
 export function ChatPanel({
   activity,
+  busy,
   conversationRef,
   language,
   messages,
@@ -123,9 +125,9 @@ export function ChatPanel({
         <form className={composerStyles.composerForm} onSubmit={onSubmit}>
           <div className={composerStyles.composerShell}>
             <textarea
-              aria-busy={running}
+              aria-busy={running || busy}
               aria-label={text('CAD request', 'CAD 请求')}
-              disabled={running || sessionLoading}
+              disabled={running || busy || sessionLoading}
               maxLength={8_000}
               onChange={(event) => onPromptChange(event.target.value)}
               onKeyDown={onKeyDown}
@@ -161,7 +163,7 @@ export function ChatPanel({
                   aria-label={text('New project', '新项目')}
                   className={composerStyles.composerTool}
                   data-tooltip={text('New project', '新项目')}
-                  disabled={running || sessionLoading}
+                  disabled={running || busy || sessionLoading}
                   onClick={onNewProject}
                   type="button"
                 >
@@ -180,7 +182,7 @@ export function ChatPanel({
                   <input
                     accept={ACCEPTED_IMAGE_TYPES.join(',')}
                     className={composerStyles.srOnly}
-                    disabled={running || sessionLoading}
+                    disabled={running || busy || sessionLoading}
                     multiple
                     onChange={onSelectImages}
                     type="file"
@@ -211,7 +213,7 @@ export function ChatPanel({
                         )
                   }
                   disabled={
-                    running || sessionLoading || !webSearchConfigured
+                    running || busy || sessionLoading || !webSearchConfigured
                   }
                   onClick={() =>
                     onWebSearchEnabledChange(!webSearchEnabled)
@@ -232,7 +234,8 @@ export function ChatPanel({
                 data-state={running ? 'stop' : 'send'}
                 disabled={
                   !running &&
-                  (sessionLoading ||
+                  (busy ||
+                    sessionLoading ||
                     (!prompt.trim() && pendingImages.length === 0))
                 }
                 onClick={running ? onStop : undefined}

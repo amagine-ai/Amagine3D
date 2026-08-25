@@ -32,8 +32,10 @@ import {
   fetchArtifactArchive,
   fetchArtifacts,
   fetchHealth,
+  fetchModelParameters,
   fetchSessionCatalog,
   fetchSessionDetail,
+  rebuildModelParameters,
   streamAgent,
   trashArtifacts,
 } from '../lib/agent-api';
@@ -51,6 +53,7 @@ import {
   type ArtifactWorkspace,
   type ChatMessage,
   type HealthResponse,
+  type ParameterModel,
   type SessionSummary,
 } from '../types';
 
@@ -81,6 +84,12 @@ export function CadWorkbench({
     const [leftView, setLeftView] = useState<LeftView>('chat');
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+    const [parameterBuilding, setParameterBuilding] = useState(false);
+    const [parameterIssue, setParameterIssue] = useState<string>();
+    const [parameterModels, setParameterModels] = useState<ParameterModel[]>([]);
+    const [parameterValues, setParameterValues] = useState<
+      Record<string, number>
+    >({});
     const [prompt, setPrompt] = useState('');
     const [running, setRunning] = useState(false);
     const [runtimeEntries, setRuntimeEntries] = useState<RuntimeEntry[]>([]);
@@ -95,6 +104,7 @@ export function CadWorkbench({
     const abortRef = useRef<AbortController | undefined>(undefined);
     const artifactSnapshotRef = useRef<ArtifactSummary[]>([]);
     const conversationRef = useRef<HTMLElement>(null);
+    const parameterBuildingRef = useRef(false);
     const sessionMenuRef = useDismissibleLayer<HTMLDivElement>({
       onDismiss: () => setSessionMenuOpen(false),
       open: sessionMenuOpen,
@@ -134,6 +144,15 @@ export function CadWorkbench({
       sessionId === BUNDLED_POMODORO_SESSION_ID
         ? text('Amagine3D Pomodoro Timer', 'Amagine3D 番茄钟')
         : sessionTitle(activeSession);
+    const activeParameterModel = useMemo(
+      () =>
+        selectedArtifact?.kind === 'model'
+          ? parameterModels.find(
+              (model) => model.primaryPreviewPath === selectedArtifact.path,
+            )
+          : undefined,
+      [parameterModels, selectedArtifact],
+    );
 
     function addRuntimeEntry(
       message: string,
@@ -238,7 +257,7 @@ export function CadWorkbench({
     }
 
     async function openSession(target: SessionSummary) {
-      if (running || sessionLoading || target.id === sessionId) {
+      if (running || parameterBuilding || sessionLoading || target.id === sessionId) {
         setSessionMenuOpen(false);
         return;
       }
@@ -254,15 +273,22 @@ export function CadWorkbench({
           setMessages([]);
           setArtifacts([]);
           setArtifactWorkspace(draftWorkspace(target.id));
+          setParameterModels([]);
+          setParameterIssue(undefined);
           setSelectedPath(undefined);
           setSelectedText(undefined);
           return;
         }
-        const detail = await fetchSessionDetail(target.id);
+        const [detail, parameterCollection] = await Promise.all([
+          fetchSessionDetail(target.id),
+          fetchModelParameters(target.id),
+        ]);
         setSessionId(detail.session.id);
         setMessages(detail.messages);
         setArtifacts(detail.artifacts);
         setArtifactWorkspace(detail.artifactWorkspace);
+        setParameterModels(parameterCollection.models);
+        setParameterIssue(undefined);
         selectInitialArtifact(detail.artifacts);
       } catch (error) {
         addRuntimeEntry(errorText(error, language), 'session', 'error');
@@ -274,9 +300,13 @@ export function CadWorkbench({
     async function refreshArtifacts() {
       setStorageLoading(true);
       try {
-        const next = await fetchArtifacts(sessionId);
+        const [next, parameterCollection] = await Promise.all([
+          fetchArtifacts(sessionId),
+          fetchModelParameters(sessionId),
+        ]);
         setArtifacts(next.artifacts);
         setArtifactWorkspace(next.artifactWorkspace);
+        setParameterModels(parameterCollection.models);
         setSelectedPath((current) => {
           if (
             current &&
@@ -293,6 +323,20 @@ export function CadWorkbench({
         setStorageLoading(false);
       }
     }
+
+    useEffect(() => {
+      setParameterIssue(undefined);
+      setParameterValues(
+        activeParameterModel
+          ? Object.fromEntries(
+              activeParameterModel.parameters.map((parameter) => [
+                parameter.id,
+                parameter.value,
+              ]),
+            )
+          : {},
+      );
+    }, [activeParameterModel]);
 
     useEffect(() => {
       let live = true;
@@ -323,12 +367,16 @@ export function CadWorkbench({
         .then(async (catalog) => {
           if (!live) return;
           setSessions(catalog.sessions);
-          const detail = await fetchSessionDetail(catalog.initialSessionId);
+          const [detail, parameterCollection] = await Promise.all([
+            fetchSessionDetail(catalog.initialSessionId),
+            fetchModelParameters(catalog.initialSessionId),
+          ]);
           if (!live) return;
           setSessionId(detail.session.id);
           setMessages(detail.messages);
           setArtifacts(detail.artifacts);
           setArtifactWorkspace(detail.artifactWorkspace);
+          setParameterModels(parameterCollection.models);
           selectInitialArtifact(detail.artifacts);
         })
         .catch((error: unknown) => {
@@ -456,6 +504,11 @@ export function CadWorkbench({
           preferredPreviewArtifact(changedArtifacts) ??
           preferredPreviewArtifact(event.artifacts);
         if (currentPreview) setSelectedPath(currentPreview.path);
+        void fetchModelParameters(event.sessionId)
+          .then((collection) => setParameterModels(collection.models))
+          .catch((error: unknown) => {
+            setParameterIssue(errorText(error, language));
+          });
         addRuntimeEntry(
           text(
             `${String(event.artifacts.length)} workspace files discovered`,
@@ -476,12 +529,68 @@ export function CadWorkbench({
       if (event.type === 'error') throw new Error(event.message);
     }
 
+    async function commitParameter(parameterId: string) {
+      const model = activeParameterModel;
+      const parameter = model?.parameters.find(({ id }) => id === parameterId);
+      const value = parameterValues[parameterId];
+      if (
+        !model ||
+        !parameter ||
+        value === undefined ||
+        value === parameter.value ||
+        parameterBuildingRef.current ||
+        running ||
+        artifactWorkspace.readOnly
+      ) {
+        return;
+      }
+      parameterBuildingRef.current = true;
+      setParameterBuilding(true);
+      setParameterIssue(undefined);
+      const parameterLabel =
+        language === 'zh' && parameter.labelZh?.trim()
+          ? parameter.labelZh.trim()
+          : parameter.label;
+      addRuntimeEntry(
+        text(
+          `Rebuilding complete model with ${parameterLabel}=${String(value)}`,
+          `正在以 ${parameterLabel}=${String(value)} 重建完整模型`,
+        ),
+        'parameters',
+      );
+      try {
+        const next = await rebuildModelParameters(sessionId, model, {
+          [parameterId]: value,
+        });
+        setArtifacts(next.artifacts);
+        setArtifactWorkspace(next.artifactWorkspace);
+        setParameterModels(next.models);
+        setSelectedPath(model.primaryPreviewPath);
+        addRuntimeEntry(
+          text('Complete model rebuilt', '完整模型已重建'),
+          'parameters',
+        );
+      } catch (error) {
+        setParameterIssue(errorText(error, language));
+        setParameterValues(
+          Object.fromEntries(
+            model.parameters.map((item) => [item.id, item.value]),
+          ),
+        );
+        addRuntimeEntry(errorText(error, language), 'parameters', 'error');
+      } finally {
+        parameterBuildingRef.current = false;
+        setParameterBuilding(false);
+      }
+    }
+
     async function submit(event?: FormEvent) {
       event?.preventDefault();
       const messageText = prompt.trim();
       if (
         (!messageText && pendingImages.length === 0) ||
         running ||
+        parameterBuilding ||
         sessionLoading
       ) {
         return;
@@ -642,6 +751,8 @@ export function CadWorkbench({
       setMessages([]);
       setArtifacts([]);
       setArtifactWorkspace(draftWorkspace(nextSessionId));
+      setParameterModels([]);
+      setParameterIssue(undefined);
       setSelectedPath(undefined);
       setSelectedText(undefined);
       if (!preserveComposer) {
@@ -655,7 +766,7 @@ export function CadWorkbench({
     }
 
     function beginFreshRun() {
-      if (running || sessionLoading) return;
+      if (running || parameterBuilding || sessionLoading) return;
       beginUserDraft();
     }
 
@@ -664,6 +775,7 @@ export function CadWorkbench({
         <LeftPanel
           chat={{
             activity,
+            busy: parameterBuilding,
             conversationRef,
             language,
             messages,
@@ -707,7 +819,7 @@ export function CadWorkbench({
           }
           onToggleMenu={() => setSessionMenuOpen((open) => !open)}
           onViewChange={setLeftView}
-          running={running}
+          running={running || parameterBuilding}
           sessionId={sessionId}
           sessionLoading={sessionLoading}
           sessionMenuRef={sessionMenuRef}
@@ -735,7 +847,7 @@ export function CadWorkbench({
           onLogResize={beginLogResize}
           onToggleLog={() => setLogCollapsed((collapsed) => !collapsed)}
           previewArtifact={previewArtifact}
-          running={running}
+          running={running || parameterBuilding}
           runtimeEntries={runtimeEntries}
           runtimeReady={Boolean(health?.runtimeReady)}
           selectedArtifact={selectedArtifact}
@@ -753,9 +865,22 @@ export function CadWorkbench({
         </div>
 
         <ParametersPanel
+          busy={parameterBuilding || running}
           collapsed={rightCollapsed}
+          hasParameterModels={parameterModels.length > 0}
+          issue={parameterIssue}
           language={language}
+          model={activeParameterModel}
+          onCommit={(parameterId) => void commitParameter(parameterId)}
           onToggle={() => setRightCollapsed((collapsed) => !collapsed)}
+          onValueChange={(parameterId, value) =>
+            setParameterValues((current) => ({
+              ...current,
+              [parameterId]: value,
+            }))
+          }
+          rebuilding={parameterBuilding}
+          values={parameterValues}
         />
         {storageOpen ? (
           <StorageDrawer

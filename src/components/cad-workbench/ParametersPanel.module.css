@@ -90,6 +90,100 @@
   margin-block-start: var(--space-xl);
 }
 
+.parameterIssue {
+  padding: var(--space-sm);
+  border: var(--rule-thin) solid color-mix(in srgb, var(--color-error) 38%, transparent);
+  border-radius: var(--radius-sm);
+  margin-block-end: var(--space-md);
+  background: color-mix(in srgb, var(--color-error) 8%, transparent);
+  color: var(--color-error);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.parameterGroup {
+  display: grid;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  gap: var(--space-md);
+}
+
+.parameterGroup legend {
+  width: 100%;
+  padding: 0 0 var(--space-xs);
+  border-block-end: var(--rule-thin) solid var(--color-rule);
+  margin-block-end: var(--space-sm);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.parameterField {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.parameterField > label {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.parameterField code {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  text-overflow: ellipsis;
+}
+
+.parameterValueRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.parameterValueRow input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  border: var(--rule-thin) solid var(--color-rule-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font: inherit;
+  font-family: var(--font-mono);
+}
+
+.parameterValueRow span,
+.parameterBounds,
+.parameterAffects {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.parameterAffects {
+  overflow-wrap: anywhere;
+}
+
+.parameterField input[type='range'] {
+  width: 100%;
+  accent-color: var(--color-accent);
+}
+
+.parameterGroup:disabled {
+  opacity: 0.62;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .panelCollapseButton:not(:disabled):hover {
     background: var(--color-fill);
