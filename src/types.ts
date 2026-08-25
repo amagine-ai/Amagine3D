@@ -74,6 +74,42 @@ export interface ArtifactCollection {
   artifactWorkspace: ArtifactWorkspace;
 }
 
+export interface ModelParameter {
+  affects: string[];
+  defaultValue: number;
+  group?: string;
+  groupZh?: string;
+  id: string;
+  kind: 'integer' | 'number';
+  label: string;
+  labelZh?: string;
+  maximum: number;
+  minimum: number;
+  name: string;
+  step: number;
+  unit?: string;
+  value: number;
+}
+
+export interface ParameterModel {
+  artifactPaths: string[];
+  modelId: string;
+  parameterError?: string;
+  parameters: ModelParameter[];
+  primaryPreviewPath: string;
+  reportPath: string;
+  sourceHash: string;
+  sourcePath: string;
+}
+
+export interface ParameterCollection {
+  models: ParameterModel[];
+}
+
+export interface ParameterBuildResult
+  extends ArtifactCollection,
+    ParameterCollection {}
+
 export type SessionKind = 'builtin' | 'user';
 
 export interface SessionSummary {

@@ -90,10 +90,17 @@ IDs:
 import sys
 sys.path.insert(0, r"<SKILL_DIR>")
 from build123d import *
-from cad_helpers import observe, checked_cut, export_regions
+from cad_helpers import parameter, observe, checked_cut, export_regions
 
 NAME = "<name>"
 INTENT = "<name>_intent.json"
+WIDTH = parameter(
+    "overall-width", 80.0,
+    min_value=48.0, max_value=140.0, step=0.5,
+    unit="mm", label="Overall width", label_zh="总体宽度",
+    group="Envelope", group_zh="外形尺寸",
+    affects=("complete-parent",),
+)
 parent = ...
 observe(parent, "complete-parent", "parent")
 
@@ -109,6 +116,17 @@ if __name__ == "__main__":
 
 For separately assembled inserts whose union intentionally differs from one
 parent, omit `parent=` only after recording that architecture in the contract.
+
+Expose every meaningful user-adjustable driving dimension with `parameter()`:
+overall dimensions plus local feature, interface, inset, clearance, and region
+boundary dimensions. Give each one a stable ID, conservative topology-safe
+bounds, a positive step, unit, label, group, and the feature or region IDs it
+affects. Add concise `label_zh` and `group_zh` translations while keeping IDs and
+Python variable names stable in English. Localized fields are presentation
+metadata only. Derived coordinates and palette values are not independent
+slider parameters. Every override must rebuild the entire region set and
+combined 3MF; never publish a parameter that is unused by the full model
+construction.
 
 ## 4. Audit meshes, archive, and appearance
 
