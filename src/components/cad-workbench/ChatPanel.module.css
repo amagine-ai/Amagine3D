@@ -160,8 +160,8 @@
   gap: var(--space-xs);
   max-height: 15rem;
   overflow: auto;
-  color: var(--color-muted);
-  font-size: var(--text-xs);
+  color: #000;
+  font-size: var(--text-sm);
   line-height: 1.55;
 }
 
@@ -170,16 +170,16 @@
 }
 
 .reasoningText :is(h3, h4) {
-  color: var(--color-ink-soft);
+  color: #000;
   font-family: var(--font-display);
 }
 
 .reasoningText h3 {
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
 }
 
 .reasoningText h4 {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 
 .reasoningText :is(ul, ol) {
