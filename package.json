@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit && vite build",
+    "benchmark:renderer": "node scripts/run-project-python.mjs scripts/benchmark_cpu_z_buffer.py",
     "dev": "npm run python:setup && concurrently -k -n api,web -c blue,white \"tsx watch server/index.ts\" \"vite\"",
     "doctor": "tsx server/doctor.ts",
     "licenses:check": "node scripts/check-licenses.mjs",

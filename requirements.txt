@@ -1,7 +1,6 @@
 # Pinned top-level CAD runtime. Transitive wheels are resolved for the host OS.
 build123d==0.11.1
 lib3mf==2.5.0
-matplotlib==3.10.9
 numpy==2.2.6
 pillow==12.3.0
 rtree==1.4.1

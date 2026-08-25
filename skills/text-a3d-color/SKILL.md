@@ -37,9 +37,15 @@ session working directory.
 - Read `references/color-architecture.md` before choosing region interfaces
 - Read `references/bambu-printability.md` before every printable color task
 
-Requires build123d, lib3mf, trimesh, Rtree, matplotlib, Pillow, and NumPy. When
-running outside Amagine3D's managed session, initialize the repository runtime
-and use its Python executable instead of an unrelated system Python.
+Requires build123d, lib3mf, trimesh, Rtree, Pillow, and NumPy. Preview rendering uses
+the headless, single-process CPU Z-buffer in `../cpu_z_buffer.py`; it does not
+need a GPU, display server, OpenGL, or Matplotlib.
+The renderer defaults to a 640-pixel output, 1x supersampling, a 1280-pixel
+internal view limit, and 500,000 input triangles. `--supersample 2`,
+`--max-resolution`, and
+`--max-triangles` may adjust those values within the built-in hard caps.
+When running outside Amagine3D's managed session, initialize the repository
+runtime and use its Python executable instead of an unrelated system Python.
 
 ## 0. Route and interpret color
 
