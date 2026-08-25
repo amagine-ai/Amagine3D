@@ -49,7 +49,7 @@ export function createApp(dependencies: AppDependencies): Express {
   app.get('/api/health', (_request, response) => {
     response.json(healthResponse(runtime, runtimeError, python));
   });
-  registerSessionRoutes(app, paths);
+  registerSessionRoutes(app, paths, python);
   registerChatRoute(app, { python, runtime, runtimeError });
 
   if (existsSync(paths.distPath)) {

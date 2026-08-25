@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import math
+import os
 from pathlib import Path
 import re
 import sys
@@ -20,8 +22,78 @@ class RegionInvariantError(RuntimeError):
 
 _FEATURES: dict[str, dict] = {}
 _OPERATIONS: list[dict] = []
+_PARAMETERS: dict[str, dict] = {}
 _REGION_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+_PARAMETER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
+
+
+def _parameter_overrides() -> dict:
+    raw = os.environ.get("AMAGINE3D_PARAMETER_OVERRIDES", "{}").strip() or "{}"
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RegionInvariantError("invalid parameter override payload") from error
+    if not isinstance(value, dict):
+        raise RegionInvariantError("parameter overrides must be an object")
+    return value
+
+
+def parameter(
+    parameter_id: str,
+    default: int | float,
+    *,
+    min_value: int | float,
+    max_value: int | float,
+    step: int | float,
+    unit: str | None = None,
+    label: str | None = None,
+    label_zh: str | None = None,
+    group: str | None = None,
+    group_zh: str | None = None,
+    affects: tuple[str, ...] | list[str] = (),
+) -> int | float:
+    """Declare one bounded user-adjustable driving value."""
+    if not _PARAMETER_ID.fullmatch(parameter_id) or parameter_id in _PARAMETERS:
+        raise RegionInvariantError(f"invalid or duplicate parameter id: {parameter_id!r}")
+    numbers = (default, min_value, max_value, step)
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numbers):
+        raise RegionInvariantError(f"parameter {parameter_id!r} must be numeric")
+    if any(not math.isfinite(value) for value in numbers):
+        raise RegionInvariantError(f"parameter {parameter_id!r} must be finite")
+    if min_value > max_value or not min_value <= default <= max_value or step <= 0:
+        raise RegionInvariantError(f"parameter {parameter_id!r} has invalid bounds")
+    overrides = _parameter_overrides()
+    value = overrides.get(parameter_id, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RegionInvariantError(f"parameter {parameter_id!r} override must be numeric")
+    if isinstance(default, int) and not isinstance(value, int):
+        raise RegionInvariantError(f"parameter {parameter_id!r} override must be an integer")
+    if not math.isfinite(value) or not min_value <= value <= max_value:
+        raise RegionInvariantError(f"parameter {parameter_id!r} override is out of bounds")
+    quotient = (value - min_value) / step
+    if not math.isclose(quotient, round(quotient), abs_tol=1e-8):
+        raise RegionInvariantError(f"parameter {parameter_id!r} override does not align with step")
+    feature_ids = list(affects)
+    if any(not isinstance(feature_id, str) or not feature_id for feature_id in feature_ids):
+        raise RegionInvariantError(f"parameter {parameter_id!r} has invalid feature IDs")
+    descriptor = {
+        "affects": feature_ids,
+        "default": default,
+        "group": group,
+        "label": label or parameter_id,
+        "maximum": max_value,
+        "minimum": min_value,
+        "step": step,
+        "unit": unit,
+        "value": value,
+    }
+    if isinstance(label_zh, str) and label_zh.strip():
+        descriptor["label_zh"] = label_zh.strip()
+    if isinstance(group_zh, str) and group_zh.strip():
+        descriptor["group_zh"] = group_zh.strip()
+    _PARAMETERS[parameter_id] = descriptor
+    return value
 
 
 def _digest(path: Path) -> str:
@@ -121,13 +193,14 @@ def export_regions(
     if len(regions) < 2:
         raise RegionInvariantError("multi-color output requires at least two regions")
 
-    output = Path(out_dir)
+    output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
     output.mkdir(parents=True, exist_ok=True)
     report = {
         "built_at": datetime.now(timezone.utc).isoformat(),
         "features": dict(_FEATURES),
         "operations": list(_OPERATIONS),
         "overlaps_mm3": {},
+        "parameters": dict(_PARAMETERS),
         "part": name,
         "regions": {},
         "schema": "evidence-color-build/v2",
