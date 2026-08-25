@@ -1,0 +1,169 @@
+{
+  "schema": "amagine-bambu-profile-catalog/v1",
+  "upstream": {
+    "repository": "https://github.com/bambulab/BambuStudio",
+    "release": "v02.08.02.61",
+    "commit": "926a7192574bcb9b3a732e1ec59a46d79cb45466",
+    "vendor_config_version": "02.08.00.05"
+  },
+  "default_machine": "a1-mini",
+  "machines": {
+    "a1-mini": {
+      "name": "Bambu Lab A1 mini",
+      "bed_polygon_mm": [[0, 0], [180, 0], [180, 180], [0, 180]],
+      "printable_height_mm": 180,
+      "excluded_polygons_mm": [],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [180, 0], [180, 180], [0, 180]], "height_mm": 180}]
+    },
+    "a1": {
+      "name": "Bambu Lab A1",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 256,
+      "excluded_polygons_mm": [],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 256}]
+    },
+    "a2l": {
+      "name": "Bambu Lab A2L",
+      "bed_polygon_mm": [[0, 0], [330, 0], [330, 320], [0, 320]],
+      "printable_height_mm": 325,
+      "excluded_polygons_mm": [],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [330, 0], [330, 320], [0, 320]], "height_mm": 325}]
+    },
+    "p1p": {
+      "name": "Bambu Lab P1P",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 250,
+      "excluded_polygons_mm": [[[0, 0], [18, 0], [18, 28], [0, 28]]],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 250}]
+    },
+    "p1s": {
+      "name": "Bambu Lab P1S",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 250,
+      "excluded_polygons_mm": [[[0, 0], [18, 0], [18, 28], [0, 28]]],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 250}]
+    },
+    "p2s": {
+      "name": "Bambu Lab P2S",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 256,
+      "excluded_polygons_mm": [],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 256}]
+    },
+    "x1": {
+      "name": "Bambu Lab X1",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 250,
+      "excluded_polygons_mm": [[[0, 0], [18, 0], [18, 28], [0, 28]]],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 250}]
+    },
+    "x1-carbon": {
+      "name": "Bambu Lab X1 Carbon",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 250,
+      "excluded_polygons_mm": [[[0, 0], [18, 0], [18, 28], [0, 28]]],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 250}]
+    },
+    "x1e": {
+      "name": "Bambu Lab X1E",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 250,
+      "excluded_polygons_mm": [[[0, 0], [18, 0], [18, 28], [0, 28]]],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 250}]
+    },
+    "h2s": {
+      "name": "Bambu Lab H2S",
+      "bed_polygon_mm": [[0, 0], [340, 0], [340, 320], [0, 320]],
+      "printable_height_mm": 340,
+      "excluded_polygons_mm": [],
+      "tools": [{"index": 0, "polygon_mm": [[0, 0], [340, 0], [340, 320], [0, 320]], "height_mm": 340}]
+    },
+    "h2d": {
+      "name": "Bambu Lab H2D",
+      "bed_polygon_mm": [[0, 0], [350, 0], [350, 320], [0, 320]],
+      "printable_height_mm": 325,
+      "excluded_polygons_mm": [],
+      "tools": [
+        {"index": 0, "polygon_mm": [[0, 0], [325, 0], [325, 320], [0, 320]], "height_mm": 320},
+        {"index": 1, "polygon_mm": [[25, 0], [350, 0], [350, 320], [25, 320]], "height_mm": 325}
+      ]
+    },
+    "h2d-pro": {
+      "name": "Bambu Lab H2D Pro",
+      "bed_polygon_mm": [[0, 0], [350, 0], [350, 320], [0, 320]],
+      "printable_height_mm": 325,
+      "excluded_polygons_mm": [],
+      "tools": [
+        {"index": 0, "polygon_mm": [[0, 0], [325, 0], [325, 320], [0, 320]], "height_mm": 320},
+        {"index": 1, "polygon_mm": [[25, 0], [350, 0], [350, 320], [25, 320]], "height_mm": 325}
+      ]
+    },
+    "h2c": {
+      "name": "Bambu Lab H2C",
+      "bed_polygon_mm": [[0, 0], [330, 0], [330, 320], [0, 320]],
+      "printable_height_mm": 325,
+      "excluded_polygons_mm": [],
+      "tools": [
+        {"index": 0, "polygon_mm": [[0, 0], [325, 0], [325, 320], [0, 320]], "height_mm": 320},
+        {"index": 1, "polygon_mm": [[25, 0], [330, 0], [330, 320], [25, 320]], "height_mm": 325}
+      ]
+    },
+    "x2d": {
+      "name": "Bambu Lab X2D",
+      "bed_polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]],
+      "printable_height_mm": 261,
+      "excluded_polygons_mm": [],
+      "tools": [
+        {"index": 0, "polygon_mm": [[0, 0], [256, 0], [256, 256], [0, 256]], "height_mm": 261},
+        {"index": 1, "polygon_mm": [[20.5, 0], [256, 0], [256, 256], [20.5, 256]], "height_mm": 256}
+      ]
+    }
+  },
+  "processes": {
+    "0.2": {
+      "name": "0.10mm Standard",
+      "nozzle_diameter_mm": 0.2,
+      "layer_height_mm": 0.1,
+      "line_width_mm": 0.22,
+      "outer_wall_line_width_mm": 0.22,
+      "inner_wall_line_width_mm": 0.22,
+      "wall_loops": 4
+    },
+    "0.4": {
+      "name": "0.20mm Standard",
+      "nozzle_diameter_mm": 0.4,
+      "layer_height_mm": 0.2,
+      "line_width_mm": 0.42,
+      "outer_wall_line_width_mm": 0.42,
+      "inner_wall_line_width_mm": 0.45,
+      "wall_loops": 2
+    },
+    "0.6": {
+      "name": "0.30mm Standard",
+      "nozzle_diameter_mm": 0.6,
+      "layer_height_mm": 0.3,
+      "line_width_mm": 0.62,
+      "outer_wall_line_width_mm": 0.62,
+      "inner_wall_line_width_mm": 0.62,
+      "wall_loops": 2
+    },
+    "0.8": {
+      "name": "0.40mm Standard",
+      "nozzle_diameter_mm": 0.8,
+      "layer_height_mm": 0.4,
+      "line_width_mm": 0.82,
+      "outer_wall_line_width_mm": 0.82,
+      "inner_wall_line_width_mm": 0.82,
+      "wall_loops": 2
+    }
+  },
+  "process_defaults": {
+    "wall_generator": "classic",
+    "detect_thin_wall": false,
+    "arachne_min_feature_nozzle_percent": 25,
+    "arachne_min_bead_nozzle_percent": 85,
+    "support_enabled": false,
+    "support_type": "tree(auto)",
+    "support_threshold_angle_from_horizontal_deg": 30
+  }
+}

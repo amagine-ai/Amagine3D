@@ -1,5 +1,5 @@
 {
-  "schema": "evidence-cad-intent/v2",
+  "schema": "evidence-cad-intent/v3",
   "part": "example-bracket",
   "task_mode": "specification",
   "representation": "full-3d",
@@ -20,6 +20,17 @@
       "acceptance": "A through-hole removes material through the full Z height."
     }
   ],
+  "printability": {
+    "profile": {
+      "path": "bambu-a1-mini-0.4-standard.example.json",
+      "sha256": "f5bdfcc78cc4e55289a4a259c6d94a6cab18534494d50655b5f0d1d67b132386"
+    },
+    "build_axis": "+Z",
+    "bed_contact": "z-min",
+    "support_policy": "support-free",
+    "minimum_wall_target_mm": 0.9,
+    "critical_features": ["mounting-hole"]
+  },
   "visual": {
     "required": false,
     "reference_view": "top",
