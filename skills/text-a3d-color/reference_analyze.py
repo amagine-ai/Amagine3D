@@ -43,7 +43,11 @@ def _pixel_grid(
     x, y, width, height = bbox
     crop = mask[y:y + height, x:x + width]
     scale = gcd(_run_gcd(crop), _run_gcd(crop.T))
-    if color_count > 64 or scale < 2:
+    if color_count > 64:
+        return None
+    if scale < 1:
+        scale = 1 if max(width, height) <= 64 else 0
+    if scale < 1 or (scale == 1 and max(width, height) > 64):
         return None
     grid_w = int(np.ceil(width / scale))
     grid_h = int(np.ceil(height / scale))

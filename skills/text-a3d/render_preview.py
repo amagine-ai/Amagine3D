@@ -32,6 +32,7 @@ VIEWS = {
     "side": View("side", 0, 0),
     "top": View("top", 89.9, -90),
 }
+REFERENCE_VIEWS = {**VIEWS, "bottom": View("bottom", -89.9, -90)}
 LIGHT = np.array([0.35, -0.55, 0.76], dtype=float)
 LIGHT /= np.linalg.norm(LIGHT)
 
@@ -113,7 +114,7 @@ def main() -> int:
     parser.add_argument("stl")
     parser.add_argument("--out")
     parser.add_argument("--size", type=int, default=900)
-    parser.add_argument("--reference-view", choices=VIEWS)
+    parser.add_argument("--reference-view", choices=REFERENCE_VIEWS)
     parser.add_argument("--reference-out")
     parser.add_argument("--report", help="Optional JSON evidence report")
     args = parser.parse_args()
@@ -143,7 +144,7 @@ def main() -> int:
     }
     if args.reference_view:
         matched = Path(args.reference_out)
-        _save_matched(mesh, colors, VIEWS[args.reference_view], matched, args.size)
+        _save_matched(mesh, colors, REFERENCE_VIEWS[args.reference_view], matched, args.size)
         result["matched_view"] = {
             "name": args.reference_view,
             "path": str(matched.resolve()),

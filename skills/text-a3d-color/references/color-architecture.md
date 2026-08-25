@@ -18,6 +18,9 @@ Use one of these interface patterns deliberately:
 Regions may touch at faces but may not overlap volumes. Avoid paper-thin color
 skins that disappear in slicing. For nozzle-based FDM, make visible insets at
 least one practical layer high and small strokes at least one extrusion width.
+Use the resolved profile's wall target for structural dividers and internal
+walls. For a co-printed body, keep `parent=` enabled so the manufacturing
+union is exported without internal region-interface faces.
 
 ## Palette planning
 
@@ -39,9 +42,12 @@ without recording the compromise.
 ## Closed-loop verification
 
 `export_regions()` checks region validity, overlap, optional parent coverage,
-and writes artifact hashes. `export_3mf.py` stores a shared palette and reads the
-archive XML back. `assembly_check.py` compares the expected region names/colors
-against what is actually stored in the 3MF.
+cross-checks the intent's region names/colors, exports the combined
+manufacturing STL and material plan, and writes artifact hashes.
+`export_3mf.py` stores a shared palette and reads the archive XML back.
+`assembly_check.py` compares the expected region names/colors against what is
+actually stored in the 3MF. Optical transmission remains a material-plan and
+slicer-assignment requirement because RGB readback cannot prove it.
 
 The colored four-view render is still mandatory: archive correctness cannot
 detect a geometrically misplaced color boundary.

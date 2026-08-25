@@ -19,7 +19,7 @@ class RegionInvariantError(RuntimeError):
 
 
 _FEATURES: dict[str, dict] = {}
-_OPERATIONS: list[dict] = []
+_EVENTS: list[dict] = []
 _REGION_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -36,7 +36,7 @@ def _valid(shape) -> bool:
 def _shape_record(shape) -> dict:
     bounds = shape.bounding_box()
     return {
-        "bounds_mm": {
+        "bbox_mm": {
             "min": [round(bounds.min.X, 4), round(bounds.min.Y, 4), round(bounds.min.Z, 4)],
             "max": [round(bounds.max.X, 4), round(bounds.max.Y, 4), round(bounds.max.Z, 4)],
             "size": [
@@ -59,12 +59,18 @@ def observe(shape, feature_id: str, role: str = "feature") -> None:
 
 def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
     before = float(body.volume)
+    tool_stats = _shape_record(tool)
     try:
         result = body - tool
     except Exception as error:
         raise RegionInvariantError(f"cut {feature_id!r} failed: {error}") from error
     removed = before - float(result.volume)
-    _OPERATIONS.append({"id": feature_id, "kind": "cut", "removed_mm3": removed})
+    _EVENTS.append({
+        "id": feature_id,
+        "kind": "cut",
+        "removed_mm3": round(removed, 6),
+        "tool": tool_stats,
+    })
     if removed < min_removed_mm3:
         raise RegionInvariantError(f"cut {feature_id!r} missed the parent solid")
     if not _valid(result):
@@ -86,8 +92,12 @@ def _checked_finish(shape, selector, size_mm: float, feature_id: str, kind: str)
         raise RegionInvariantError(f"{kind} {feature_id!r} failed: {error}") from error
     if not _valid(result):
         raise RegionInvariantError(f"{kind} {feature_id!r} produced invalid geometry")
-    _OPERATIONS.append({
-        "id": feature_id, "kind": kind, "size_mm": round(size_mm, 6),
+    _EVENTS.append({
+        "actual_mm": round(size_mm, 6),
+        "degraded": False,
+        "id": feature_id,
+        "kind": kind,
+        "requested_mm": size_mm,
     })
     return result
 
@@ -112,8 +122,8 @@ def export_regions(
     name: str,
     out_dir: str = ".",
     *,
+    intent_path: str,
     parent=None,
-    intent_path: str | None = None,
     source_path: str | None = None,
     max_coverage_error_mm3: float = 0.01,
 ) -> dict:
@@ -123,14 +133,42 @@ def export_regions(
 
     output = Path(out_dir)
     output.mkdir(parents=True, exist_ok=True)
+    intent = Path(intent_path).resolve()
+    try:
+        intent_data = json.loads(intent.read_text(encoding="utf-8"))
+    except Exception as error:
+        raise RegionInvariantError(f"could not read intent contract: {error}") from error
+    if intent_data.get("schema") != "evidence-color-intent/v3":
+        raise RegionInvariantError("intent contract must use evidence-color-intent/v3")
+    if intent_data.get("part") != name:
+        raise RegionInvariantError("intent part does not match the export name")
+    feature_items = intent_data.get("features", [])
+    declared_feature_ids = {
+        item.get("id") for item in feature_items if isinstance(item, dict)
+    }
+    raw_critical_features = intent_data.get("printability", {}).get(
+        "critical_features"
+    )
+    critical_feature_ids = (
+        set(raw_critical_features) if isinstance(raw_critical_features, list) else set()
+    )
+    if (
+        not feature_items
+        or len(declared_feature_ids) != len(feature_items)
+        or not critical_feature_ids
+        or not critical_feature_ids.issubset(declared_feature_ids)
+    ):
+        raise RegionInvariantError(
+            "intent critical features must uniquely reference declared features"
+        )
     report = {
         "built_at": datetime.now(timezone.utc).isoformat(),
+        "events": list(_EVENTS),
         "features": dict(_FEATURES),
-        "operations": list(_OPERATIONS),
         "overlaps_mm3": {},
         "part": name,
         "regions": {},
-        "schema": "evidence-color-build/v2",
+        "schema": "evidence-color-build/v3",
     }
 
     normalized: dict[str, tuple] = {}
@@ -146,6 +184,45 @@ def export_regions(
         normalized[region_name] = (shape, color)
         report["regions"][region_name] = {"color": color, **record}
 
+    declared_items = intent_data.get("color_regions", [])
+    declared = {
+        item.get("name"): item
+        for item in declared_items
+        if isinstance(item, dict)
+    }
+    if len(declared) != len(declared_items) or set(declared) != set(normalized):
+        raise RegionInvariantError(
+            "intent color-region names do not uniquely match exported region names"
+        )
+    material_regions = []
+    for region_name, (_, color) in normalized.items():
+        item = declared[region_name]
+        if str(item.get("hex", "")).upper() != color:
+            raise RegionInvariantError(
+                f"intent color for {region_name!r} does not match exported color"
+            )
+        material = item.get("material")
+        if not isinstance(material, dict):
+            raise RegionInvariantError(f"intent material for {region_name!r} is missing")
+        transmission = material.get("transmission")
+        if transmission not in {"opaque", "translucent", "transparent"}:
+            raise RegionInvariantError(
+                f"intent transmission for {region_name!r} is invalid"
+            )
+        filament = material.get("filament")
+        if transmission != "opaque" and not (
+            isinstance(filament, str) and filament.strip()
+        ):
+            raise RegionInvariantError(
+                f"non-opaque region {region_name!r} requires a filament assignment"
+            )
+        material_regions.append({
+            "color": color,
+            "filament": filament,
+            "name": region_name,
+            "transmission": transmission,
+        })
+
     names = list(normalized)
     for index, left in enumerate(names):
         for right in names[index + 1:]:
@@ -158,12 +235,12 @@ def export_regions(
 
     region_shapes = [shape for shape, _ in normalized.values()]
     region_volume = sum(float(shape.volume) for shape in region_shapes)
+    region_union = region_shapes[0]
+    for shape in region_shapes[1:]:
+        region_union = region_union + shape
     if parent is not None:
         if not _valid(parent):
             raise RegionInvariantError("coverage parent is invalid")
-        region_union = region_shapes[0]
-        for shape in region_shapes[1:]:
-            region_union = region_union + shape
         try:
             missing = float((parent - region_union).volume)
             outside = float((region_union - parent).volume)
@@ -198,6 +275,17 @@ def export_regions(
             "path": str(path.resolve()), "sha256": _digest(path),
         }
 
+    combined = parent if parent is not None else region_union
+    combined_record = _shape_record(combined)
+    if not combined_record["valid"]:
+        raise RegionInvariantError("combined manufacturing geometry is invalid")
+    combined_path = output / f"{name}-combined.stl"
+    export_stl(combined, str(combined_path), tolerance=0.01, angular_tolerance=0.1)
+    artifacts["stl:combined"] = {
+        "path": str(combined_path.resolve()), "sha256": _digest(combined_path),
+    }
+    report["combined"] = combined_record
+
     archive_path = output / f"{name}.3mf"
     report["three_mf"] = write_color_archive(entries, str(archive_path))
     artifacts["3mf"] = {"path": str(archive_path.resolve()), "sha256": _digest(archive_path)}
@@ -211,17 +299,33 @@ def export_regions(
     export_step(Compound(children=children), str(step_path), unit=Unit.MM)
     artifacts["step"] = {"path": str(step_path.resolve()), "sha256": _digest(step_path)}
 
+    material_plan_path = output / f"{name}_material-plan.json"
+    material_plan = {
+        "archive_encodes": ["region_name", "rgb"],
+        "archive_omits": ["filament", "transmission"],
+        "part": name,
+        "regions": material_regions,
+        "requires_manual_slicer_assignment": any(
+            item["transmission"] != "opaque" or item["filament"]
+            for item in material_regions
+        ),
+        "schema": "evidence-color-material-plan/v1",
+    }
+    material_plan_path.write_text(
+        json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
+    )
+    artifacts["material_plan"] = {
+        "path": str(material_plan_path.resolve()),
+        "sha256": _digest(material_plan_path),
+    }
+    report["material_semantics"] = material_plan
+
     source = Path(source_path or sys.argv[0]).resolve()
-    intent = Path(intent_path).resolve() if intent_path else None
     report["artifacts"] = artifacts
     report["source"] = (
         {"path": str(source), "sha256": _digest(source)} if source.is_file() else None
     )
-    report["intent"] = (
-        {"path": str(intent), "sha256": _digest(intent)}
-        if intent and intent.is_file()
-        else None
-    )
+    report["intent"] = {"path": str(intent), "sha256": _digest(intent)}
     report_path = output / f"{name}_report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))

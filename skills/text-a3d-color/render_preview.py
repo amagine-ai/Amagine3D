@@ -27,6 +27,7 @@ CAMERAS = {
     "side": (0, 0),
     "top": (89.9, -90),
 }
+REFERENCE_CAMERAS = {**CAMERAS, "bottom": (-89.9, -90)}
 LIGHT = np.array([0.35, -0.55, 0.76], dtype=float)
 LIGHT /= np.linalg.norm(LIGHT)
 
@@ -136,7 +137,7 @@ def main() -> int:
     parser.add_argument("--part", action="append", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--size", type=int, default=900)
-    parser.add_argument("--reference-view", choices=CAMERAS)
+    parser.add_argument("--reference-view", choices=REFERENCE_CAMERAS)
     parser.add_argument("--reference-out")
     parser.add_argument("--report", help="Optional JSON evidence report")
     args = parser.parse_args()
@@ -172,7 +173,7 @@ def main() -> int:
     }
     if args.reference_view:
         matched = Path(args.reference_out)
-        _matched(regions, CAMERAS[args.reference_view], matched, args.size)
+        _matched(regions, REFERENCE_CAMERAS[args.reference_view], matched, args.size)
         result["matched_view"] = {
             "name": args.reference_view,
             "path": str(matched.resolve()),
