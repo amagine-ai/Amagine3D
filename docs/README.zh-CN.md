@@ -145,14 +145,18 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
+TAVILY_API_KEY=... # 可选；启用“联网参考”开关
 
 PORT=6161
 WEB_PORT=6160
 AGENT_RUN_TIMEOUT_MS=1800000
 ```
 
-这些值只由本地 Express 服务端读取。请勿通过客户端环境变量暴露 API 密钥，
-也不要提交 `.env`。
+这些值只由本地 Express 服务端读取。配置 `TAVILY_API_KEY` 后，输入区会显示
+“联网参考”开关。为某轮开启后，PI 必须先搜索再执行 CAD 写入或构建；搜索会返回
+靠前的尺寸与规格来源，并尽力向多模态模型提供最多三张参考图。缺少合适图片不会
+阻断原有 CAD Skill 流程。请勿通过客户端环境变量暴露 API 密钥，也不要提交
+`.env`。
 
 ## 系统架构
 

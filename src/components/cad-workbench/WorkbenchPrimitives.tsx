@@ -1,12 +1,17 @@
 import styles from './WorkbenchPrimitives.module.css';
 
-type ToolbarIconName = 'new-run' | 'send' | 'stop';
+type ToolbarIconName = 'new-run' | 'search' | 'send' | 'stop';
 
 export function ToolbarIcon({ name }: { name: ToolbarIconName }) {
   return (
     <svg aria-hidden="true" fill="none" focusable="false" viewBox="0 0 24 24">
       {name === 'new-run' ? (
         <path d="M12 5v14M5 12h14" />
+      ) : name === 'search' ? (
+        <>
+          <circle cx="11" cy="11" r="6" />
+          <path d="m15.5 15.5 4 4M5 11h12M11 5c2 2.2 2 9.8 0 12M11 5c-2 2.2-2 9.8 0 12" />
+        </>
       ) : name === 'send' ? (
         <path d="M12 19V5M6 11l6-6 6 6" />
       ) : (

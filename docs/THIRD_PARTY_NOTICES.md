@@ -23,6 +23,7 @@ Technology.
 | Component | Version | License | Checked-in text or notice |
 | --- | --- | --- | --- |
 | PI coding agent | `0.84.2` | MIT | [`pi.txt`](../public/licenses/pi.txt) |
+| Tavily JavaScript SDK | `0.7.7` | MIT | [`npm-production-licenses.json`](../public/licenses/npm-production-licenses.json) |
 | IBM Plex Sans Variable | Fontsource `5.3.0`, font v23 | OFL-1.1 | [`ibm-plex-sans.txt`](../public/licenses/ibm-plex-sans.txt) |
 | JetBrains Mono Variable | Fontsource `5.3.0`, font v24 | OFL-1.1 | [`jetbrains-mono.txt`](../public/licenses/jetbrains-mono.txt) |
 | three.js | `0.182.0` | MIT | [`three.txt`](../public/licenses/three.txt) |

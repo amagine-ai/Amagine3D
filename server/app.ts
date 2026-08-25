@@ -29,6 +29,7 @@ function healthResponse(
     ...(runtimeError ? { runtimeError } : {}),
     runtimeReady: Boolean(runtime),
     skills: runtime ? [...runtime.skills] : [],
+    webSearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()),
     workspace: 'workspace/',
   };
 }

@@ -27,11 +27,14 @@ export interface ChatPanelProps {
   onSelectImages: (event: ChangeEvent<HTMLInputElement>) => void;
   onStop: () => void;
   onSubmit: (event: FormEvent) => void;
+  onWebSearchEnabledChange: (enabled: boolean) => void;
   pendingImages: PendingImage[];
   prompt: string;
   running: boolean;
   sessionLoading: boolean;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  webSearchConfigured: boolean;
+  webSearchEnabled: boolean;
 }
 
 export function ChatPanel({
@@ -46,11 +49,14 @@ export function ChatPanel({
   onSelectImages,
   onStop,
   onSubmit,
+  onWebSearchEnabledChange,
   pendingImages,
   prompt,
   running,
   sessionLoading,
   textareaRef,
+  webSearchConfigured,
+  webSearchEnabled,
 }: ChatPanelProps) {
   const text = translator(language);
   return (
@@ -181,6 +187,40 @@ export function ChatPanel({
                   />
                   <span aria-hidden="true">▧</span>
                 </label>
+                <button
+                  aria-label={
+                    webSearchConfigured
+                      ? text('Toggle web references', '切换联网参考')
+                      : text(
+                          'Configure TAVILY_API_KEY to use web references',
+                          '配置 TAVILY_API_KEY 后可使用联网参考',
+                        )
+                  }
+                  aria-pressed={webSearchEnabled}
+                  className={`${composerStyles.composerTool} ${composerStyles.webSearchToggle}`}
+                  data-active={webSearchEnabled}
+                  data-tooltip={
+                    webSearchConfigured
+                      ? text(
+                          'Require web references while enabled',
+                          '开启时每轮强制使用联网参考',
+                        )
+                      : text(
+                          'Tavily API key is not configured',
+                          '尚未配置 Tavily API 密钥',
+                        )
+                  }
+                  disabled={
+                    running || sessionLoading || !webSearchConfigured
+                  }
+                  onClick={() =>
+                    onWebSearchEnabledChange(!webSearchEnabled)
+                  }
+                  type="button"
+                >
+                  <ToolbarIcon name="search" />
+                  <span>{text('Web refs', '联网参考')}</span>
+                </button>
               </div>
               <button
                 aria-label={

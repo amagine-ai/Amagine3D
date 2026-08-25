@@ -1,6 +1,6 @@
 export type ChatRole = 'assistant' | 'user';
 
-export const API_VERSION = 5;
+export const API_VERSION = 6;
 export const BUNDLED_POMODORO_SESSION_ID = 'builtin:amagine3d-pomodoro';
 export const ACCEPTED_IMAGE_TYPES = [
   'image/png',
@@ -110,6 +110,7 @@ export interface HealthResponse {
   runtimeError?: string;
   runtimeReady: boolean;
   skills: SkillSummary[];
+  webSearchConfigured: boolean;
   workspace: string;
 }
 

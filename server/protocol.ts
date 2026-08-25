@@ -12,6 +12,7 @@ export interface ChatRequest {
   images?: ImageAttachment[];
   message: string;
   sessionId: string;
+  webSearchEnabled?: boolean;
 }
 
 const acceptedImageTypes = new Set<string>(ACCEPTED_IMAGE_TYPES);
@@ -53,6 +54,8 @@ export function isChatRequest(value: unknown): value is ChatRequest {
     images.reduce((total, image) => total + base64ByteLength(image.data), 0) <=
       MAX_TOTAL_IMAGE_BYTES &&
     (candidate.message.trim().length > 0 || images.length > 0) &&
+    (candidate.webSearchEnabled === undefined ||
+      typeof candidate.webSearchEnabled === 'boolean') &&
     typeof candidate.sessionId === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       candidate.sessionId,

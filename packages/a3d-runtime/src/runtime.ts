@@ -14,6 +14,11 @@ import {
 
 import { createRestrictedToolDefinitions } from './restricted-tools.ts';
 import {
+  createRequiredWebSearchExtension,
+  createTavilySearchTool,
+  TAVILY_SEARCH_TOOL_NAME,
+} from './tavily-search.ts';
+import {
   booleanValue,
   inputModalities,
   optionalApiType,
@@ -26,6 +31,10 @@ import {
 export interface SkillSummary {
   description: string;
   name: string;
+}
+
+export interface PiSessionOptions {
+  webSearchEnabled?: boolean;
 }
 
 type PiModel = NonNullable<ReturnType<ModelRuntime['getModel']>>;
@@ -173,8 +182,18 @@ export class PiRuntime {
     });
   }
 
-  async createSession(sessionId: string): Promise<AgentSession> {
+  async createSession(
+    sessionId: string,
+    options: PiSessionOptions = {},
+  ): Promise<AgentSession> {
     const scopedWorkspaceRoot = this.workspaceRootForSession(sessionId);
+    const webSearchEnabled = options.webSearchEnabled ?? false;
+    const tavilyApiKey = process.env.TAVILY_API_KEY?.trim();
+    if (webSearchEnabled && !tavilyApiKey) {
+      throw new Error(
+        'TAVILY_API_KEY is required when web references are enabled.',
+      );
+    }
     mkdirSync(scopedWorkspaceRoot, { recursive: true });
     const resourceLoader = new DefaultResourceLoader({
       agentDir: this.agentDir,
@@ -189,6 +208,9 @@ export class PiRuntime {
         'Place generated CAD source, models, reports, and previews directly in the current working directory so the user interface can discover them.',
       ],
       cwd: scopedWorkspaceRoot,
+      extensionFactories: webSearchEnabled
+        ? [createRequiredWebSearchExtension()]
+        : [],
       noExtensions: true,
       noPromptTemplates: true,
       noThemes: true,
@@ -211,6 +233,17 @@ export class PiRuntime {
           id: sessionId,
         });
 
+    const tavilySearchTool = webSearchEnabled
+      ? createTavilySearchTool({
+          apiKey: tavilyApiKey,
+          includeImagesByDefault: true,
+          searchDepthByDefault: 'advanced',
+        })
+      : undefined;
+    const customTools = [
+      ...createRestrictedToolDefinitions(scopedWorkspaceRoot),
+      ...(tavilySearchTool ? [tavilySearchTool] : []),
+    ];
     const { session } = await createAgentSession({
       agentDir: this.agentDir,
       cwd: scopedWorkspaceRoot,
@@ -223,8 +256,17 @@ export class PiRuntime {
         images: { autoResize: false },
       }),
       thinkingLevel: this.thinkingLevel,
-      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
-      customTools: createRestrictedToolDefinitions(scopedWorkspaceRoot),
+      tools: [
+        'read',
+        'bash',
+        'edit',
+        'write',
+        'grep',
+        'find',
+        'ls',
+        ...(tavilySearchTool ? [TAVILY_SEARCH_TOOL_NAME] : []),
+      ],
+      customTools,
     });
     return session;
   }

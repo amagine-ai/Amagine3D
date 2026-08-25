@@ -4,6 +4,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   PiRuntime,
+  TAVILY_SEARCH_TOOL_NAME,
 } from '@amagine3d/a3d-runtime';
 import type { Express, Response } from 'express';
 
@@ -27,9 +28,14 @@ import {
   visualValidationInstruction,
   visualValidationRepairInstruction,
 } from '../visual-audit.ts';
+import {
+  requiredWebSearchInstruction,
+  webSearchRepairInstruction,
+} from '../web-search.ts';
 
 const activeSessionIds = new Set<string>();
 const MAX_VISUAL_REPAIR_ATTEMPTS = 3;
+const MAX_WEB_SEARCH_REPAIR_ATTEMPTS = 2;
 
 export interface ChatRouteDependencies {
   python: PythonHealth;
@@ -51,6 +57,7 @@ function toolActivity(toolName: string): string {
     grep: '正在检索工作区',
     ls: '正在检查输出目录',
     read: '正在读取文件或预览图',
+    web_search: '正在搜索网络资料',
     write: '正在写入生成文件',
   };
   return labels[toolName] ?? `正在运行 ${toolName}`;
@@ -109,7 +116,19 @@ export function registerChatRoute(
       return;
     }
 
-    const { images = [], message, sessionId } = request.body;
+    const {
+      images = [],
+      message,
+      sessionId,
+      webSearchEnabled = false,
+    } = request.body;
+    if (webSearchEnabled && !process.env.TAVILY_API_KEY?.trim()) {
+      response.status(503).json({
+        message:
+          'Web references are enabled, but TAVILY_API_KEY is not configured in .env.',
+      });
+      return;
+    }
     if (activeSessionIds.has(sessionId)) {
       response.status(409).json({
         message: 'This session already has an active turn.',
@@ -133,6 +152,7 @@ export function registerChatRoute(
     let runStages: ChatStage[] = [];
     let runTracePersisted = false;
     let composingResponse = false;
+    let webSearchSucceeded = false;
 
     const startStage = (label: string, stage = 'agent') => {
       runStages = startChatStage(runStages, {
@@ -176,7 +196,7 @@ export function registerChatRoute(
 
     try {
       startStage('正在启动 PI Agent', 'start');
-      session = await runtime.createSession(sessionId);
+      session = await runtime.createSession(sessionId, { webSearchEnabled });
       if (clientDisconnected || terminalEventSent) {
         await session.abort();
         return;
@@ -206,6 +226,14 @@ export function registerChatRoute(
         if (event.type === 'tool_execution_start') {
           composingResponse = false;
           startStage(toolActivity(event.toolName), event.toolName);
+          return;
+        }
+        if (
+          event.type === 'tool_execution_end' &&
+          event.toolName === TAVILY_SEARCH_TOOL_NAME &&
+          !event.isError
+        ) {
+          webSearchSucceeded = true;
           return;
         }
         if (event.type === 'compaction_start') {
@@ -239,6 +267,7 @@ export function registerChatRoute(
       const basePrompt = message.trim() || '请查看并分析我上传的图片。';
       const promptText = [
         appendSavedImageContext(basePrompt, savedImages),
+        requiredWebSearchInstruction(webSearchEnabled),
         visualValidationInstruction(visualValidationRequired, images.length > 0),
       ]
         .filter(Boolean)
@@ -253,6 +282,45 @@ export function registerChatRoute(
         images: imageContents,
         source: 'rpc',
       });
+
+      let webSearchRepairAttempts = 0;
+      while (webSearchEnabled && !webSearchSucceeded) {
+        if (providerError) {
+          terminalEventSent = true;
+          persistRunTrace('failed');
+          writeEvent(response, {
+            code: 'provider_error',
+            message: errorMessage(providerError),
+            type: 'error',
+          });
+          return;
+        }
+        if (
+          webSearchRepairAttempts >= MAX_WEB_SEARCH_REPAIR_ATTEMPTS
+        ) {
+          terminalEventSent = true;
+          persistRunTrace('failed');
+          writeEvent(response, {
+            code: 'web_search_required',
+            message:
+              '已开启联网参考，但 PI 未能完成必需的 Tavily 搜索。本轮结果已拦截，请检查密钥、额度或网络连接。',
+            type: 'error',
+          });
+          return;
+        }
+        webSearchRepairAttempts += 1;
+        startStage(
+          `未完成联网参考，正在强制搜索 ${webSearchRepairAttempts}/${MAX_WEB_SEARCH_REPAIR_ATTEMPTS}`,
+          'web-search-audit',
+        );
+        await session.prompt(
+          webSearchRepairInstruction(
+            webSearchRepairAttempts,
+            MAX_WEB_SEARCH_REPAIR_ATTEMPTS,
+          ),
+          { source: 'rpc' },
+        );
+      }
 
       let visualRepairAttempts = 0;
       while (true) {

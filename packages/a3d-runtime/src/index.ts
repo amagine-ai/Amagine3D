@@ -1,4 +1,18 @@
-export { PiRuntime, type SkillSummary } from './runtime.ts';
+export {
+  PiRuntime,
+  type PiSessionOptions,
+  type SkillSummary,
+} from './runtime.ts';
+export {
+  createRequiredWebSearchExtension,
+  createTavilySearchTool,
+  loadPublicReferenceImage,
+  shouldBlockCadToolBeforeWebSearch,
+  TAVILY_SEARCH_TOOL_NAME,
+  type ReferenceImage,
+  type ReferenceImageLoader,
+  type TavilySearchToolOptions,
+} from './tavily-search.ts';
 export {
   assertWritablePath,
   createRestrictedToolDefinitions,

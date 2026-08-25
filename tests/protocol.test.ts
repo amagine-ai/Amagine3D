@@ -14,6 +14,14 @@ test('accepts a valid chat request', () => {
     }),
     true,
   );
+  assert.equal(
+    isChatRequest({
+      message: '搜索产品尺寸后建模',
+      sessionId: '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93',
+      webSearchEnabled: true,
+    }),
+    true,
+  );
 });
 
 test('accepts image attachments, including an image-only request', () => {
@@ -37,6 +45,14 @@ test('rejects malformed or empty chat requests', () => {
   assert.equal(isChatRequest({ message: '', sessionId: crypto.randomUUID() }), false);
   assert.equal(isChatRequest({ message: 'hello', sessionId: 'not-a-uuid' }), false);
   assert.equal(isChatRequest(null), false);
+  assert.equal(
+    isChatRequest({
+      message: 'hello',
+      sessionId: crypto.randomUUID(),
+      webSearchEnabled: 'true',
+    }),
+    false,
+  );
   assert.equal(
     isChatRequest({
       images: [{ data: 'not base64!', mimeType: 'image/png', name: 'part.png' }],

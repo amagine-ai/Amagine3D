@@ -91,6 +91,7 @@ export function CadWorkbench({
     const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
     const [storageLoading, setStorageLoading] = useState(false);
+    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
     const abortRef = useRef<AbortController | undefined>(undefined);
     const artifactSnapshotRef = useRef<ArtifactSummary[]>([]);
     const conversationRef = useRef<HTMLElement>(null);
@@ -529,6 +530,7 @@ export function CadWorkbench({
             updateDraft(agentEvent, draftId, requestSessionId),
           sessionId: requestSessionId,
           signal: controller.signal,
+          webSearchEnabled,
         });
         setMessages((current) =>
           current.map((message) =>
@@ -657,11 +659,14 @@ export function CadWorkbench({
             onSelectImages: (event) => void selectImages(event),
             onStop: () => abortRef.current?.abort(),
             onSubmit: (event) => void submit(event),
+            onWebSearchEnabledChange: setWebSearchEnabled,
             pendingImages,
             prompt,
             running,
             sessionLoading,
             textareaRef,
+            webSearchConfigured: Boolean(health?.webSearchConfigured),
+            webSearchEnabled,
           }}
           collapsed={leftCollapsed}
           connectionStatus={connectionStatus}

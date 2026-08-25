@@ -146,14 +146,20 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
+TAVILY_API_KEY=... # optional; enables the Web refs control
 
 PORT=6161
 WEB_PORT=6160
 AGENT_RUN_TIMEOUT_MS=1800000
 ```
 
-These values are read only by the local Express server. Do not expose API keys
-through client-side environment variables or commit `.env`.
+These values are read only by the local Express server. When
+`TAVILY_API_KEY` is configured, the composer exposes a **Web refs** control.
+Enabling it for a turn requires PI to search before CAD mutations, returns
+ranked dimension/specification sources, and passes up to three available
+reference images to the multimodal model. Missing images do not block the CAD
+Skill workflow. Do not expose API keys through client-side environment
+variables or commit `.env`.
 
 ## System Architecture
 

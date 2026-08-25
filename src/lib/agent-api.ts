@@ -13,6 +13,7 @@ interface StreamAgentOptions {
   onEvent: (event: AgentEvent) => void;
   sessionId: string;
   signal: AbortSignal;
+  webSearchEnabled: boolean;
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
@@ -80,9 +81,10 @@ export async function streamAgent({
   onEvent,
   sessionId,
   signal,
+  webSearchEnabled,
 }: StreamAgentOptions): Promise<void> {
   const response = await fetch('/api/chat', {
-    body: JSON.stringify({ images, message, sessionId }),
+    body: JSON.stringify({ images, message, sessionId, webSearchEnabled }),
     headers: { 'Content-Type': 'application/json' },
     method: 'POST',
     signal,
