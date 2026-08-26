@@ -173,7 +173,9 @@ export function CadWorkbench({
       () =>
         selectedArtifact?.kind === 'model'
           ? parameterModels.find(
-              (model) => model.primaryPreviewPath === selectedArtifact.path,
+              (model) =>
+                model.primaryPreviewPath === selectedArtifact.path ||
+                model.displayPreviewPath === selectedArtifact.path,
             )
           : undefined,
       [parameterModels, selectedArtifact],
@@ -645,7 +647,7 @@ export function CadWorkbench({
         setArtifacts(next.artifacts);
         setArtifactWorkspace(next.artifactWorkspace);
         setParameterModels(next.models);
-        setSelectedPath(model.primaryPreviewPath);
+        setSelectedPath(model.displayPreviewPath);
         addRuntimeEntry(
           text('Complete model rebuilt', '完整模型已重建'),
           'parameters',

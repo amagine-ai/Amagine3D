@@ -18,6 +18,7 @@ import {
   type Object3D,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 
@@ -98,8 +99,12 @@ async function parseModel(
       }),
     );
   }
+  if (artifact.format === 'glb') {
+    const gltf = await new GLTFLoader().parseAsync(buffer, '');
+    return gltf.scene;
+  }
   if (artifact.format === '3mf') return new ThreeMFLoader().parse(buffer);
-  throw new Error('STEP files can be downloaded; browser preview supports STL and 3MF.');
+  throw new Error('Browser preview supports STL, 3MF, and GLB.');
 }
 
 function ToolButton({
@@ -155,7 +160,7 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
 
   const statusText =
     state === 'ready'
-      ? `${triangles.toLocaleString()} triangles · assembly coordinates`
+      ? `${triangles.toLocaleString()} triangles · ${artifact?.format === 'glb' ? 'display model' : 'print mesh'}`
       : state === 'loading'
         ? 'Reading model data…'
         : state === 'error'
@@ -176,7 +181,7 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
       setState(artifact ? 'error' : 'empty');
       setError(
         artifact
-          ? 'STEP files can be downloaded; browser preview supports STL and 3MF.'
+          ? 'Browser preview supports STL, 3MF, and GLB display artifacts.'
           : '',
       );
       return;
@@ -371,7 +376,7 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
 
         {state === 'empty' ? (
           <StatePanel
-            detail="Load a run with an STL or 3MF preview artifact."
+            detail="Load a run with an STL, 3MF, or GLB preview artifact."
             title="No model loaded"
             tone="empty"
           />

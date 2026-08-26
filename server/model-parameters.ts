@@ -271,7 +271,7 @@ async function requireCandidateFiles(
   }
   if (!paths.includes(build.primaryPreviewPath)) {
     throw new ParameterBuildError(
-      'Parameter build report does not own the selected top-level preview.',
+      'Parameter build report does not own the selected print root.',
       409,
     );
   }
@@ -408,7 +408,7 @@ export async function rebuildModelWithParameters(options: {
 }): Promise<void> {
   const { pythonExecutable, request, workspaceRoot } = options;
   safeTopLevelPath(request.sourcePath, 'Model source');
-  safeTopLevelPath(request.primaryPreviewPath, 'Top-level preview');
+  safeTopLevelPath(request.primaryPreviewPath, 'Top-level print root');
   const artifacts = await scanArtifacts(workspaceRoot);
   const build = (await discoverModelBuilds(workspaceRoot, artifacts)).find(
     (candidate) =>
@@ -417,7 +417,7 @@ export async function rebuildModelWithParameters(options: {
   );
   if (!build) {
     throw new ParameterBuildError(
-      'The selected artifact is not a recognized top-level model preview.',
+      'The selected artifact is not a recognized top-level print root.',
       409,
     );
   }

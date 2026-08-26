@@ -164,7 +164,7 @@ export async function userSessionArtifacts(
   const scannedArtifacts = await scanArtifacts(root);
   const featuredPaths = new Set(
     (await discoverModelBuilds(root, scannedArtifacts)).map(
-      ({ primaryPreviewPath }) => primaryPreviewPath,
+      ({ displayPreviewPath }) => displayPreviewPath,
     ),
   );
   const artifacts = scannedArtifacts.map((artifact) => ({
