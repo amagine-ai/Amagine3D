@@ -93,10 +93,11 @@ test('honors the explicit preview of a bundled project', () => {
   );
 });
 
-test('shows only model files and PNG images in the file section', () => {
+test('shows only previewable model files and PNG images in the file section', () => {
   const artifacts = [
     artifact('part.py', 'source'),
     model('part-display.glb', 'glb', '2026-08-23T08:00:05.000Z'),
+    model('part-assemble.step', undefined, '2026-08-23T08:00:04.000Z'),
     artifact('preview.PNG', 'image'),
     artifact('reference.webp', 'image'),
     artifact('part_report.json', 'report'),

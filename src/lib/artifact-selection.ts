@@ -40,15 +40,21 @@ function isPngImage(artifact: ArtifactSummary): boolean {
   );
 }
 
+function isPreviewModel(artifact: ArtifactSummary): boolean {
+  return (
+    artifact.kind === 'model' &&
+    artifact.format !== undefined &&
+    CURRENT_PREVIEW_FORMATS.has(artifact.format)
+  );
+}
+
 export function fileSectionArtifacts(
   artifacts: readonly ArtifactSummary[],
 ): ArtifactSummary[] {
   const preferredPath = preferredPreviewArtifact(artifacts)?.path;
   return artifacts
     .map((artifact, index) => ({ artifact, index }))
-    .filter(
-      ({ artifact }) => artifact.kind === 'model' || isPngImage(artifact),
-    )
+    .filter(({ artifact }) => isPreviewModel(artifact) || isPngImage(artifact))
     .sort(
       (left, right) =>
         Number(right.artifact.path === preferredPath) -
