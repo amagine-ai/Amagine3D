@@ -23,16 +23,19 @@
   "features": [
     {
       "id": "left-field",
+      "kind": "region",
       "evidence": "The specification assigns the left half to the primary color.",
       "acceptance": "The red field covers X=0 through X=20 mm without gaps."
     },
     {
       "id": "right-field",
+      "kind": "region",
       "evidence": "The specification assigns the right half to the secondary color.",
       "acceptance": "The blue field covers X=20 through X=40 mm without gaps."
     },
     {
       "id": "center-boundary",
+      "kind": "interface",
       "evidence": "The two fields meet at the specified center line.",
       "acceptance": "The material boundary is a single vertical interface at X=20 mm."
     }

@@ -34,6 +34,10 @@ targets merely to match a generated artifact.
   "features": [
     {
       "id": "screen-recess",
+      "kind": "recess",
+      "face": "front",
+      "direction": "-Y",
+      "edge_crossing": "forbidden",
       "evidence": "dark centered rectangle in front reference",
       "acceptance": "centered; width 72 ± 1 mm; depth 1.2 ± 0.2 mm"
     }
@@ -77,8 +81,27 @@ use `bottom` when the appearance-bearing face is intentionally printed at Z0.
 The coordinate system is fixed for generated geometry: `+X` means user right,
 `+Y` means object back, and `+Z` means object top. Describe ports, holes,
 buttons, seams, and logos by semantic face and insertion direction before
-using numeric offsets. A bottom opening is allowed, but an opening that crosses
-the front/bottom edge must be declared explicitly.
+using numeric offsets. For ports, holes, slots, cutouts, windows, cavities, and
+recesses, put flat fields directly on the feature: `kind`, `face`,
+`direction`, and `edge_crossing`. A bottom opening is allowed, but an opening
+that crosses the front/bottom edge must be declared explicitly.
+
+Use these semantic feature values:
+
+- `kind`: `port`, `hole`, `slot`, `cutout`, `window`, `cavity`, `recess`,
+  `button`, `seam`, `logo`, `interface`, `region`, `envelope`, `surface`,
+  `detail`, `additive`, `part`, `control`, `fastener`, `mount`, or
+  `clearance`.
+- `face`: `front`, `back`, `left`, `right`, `top`, `bottom`, `internal`, or
+  `multiple`.
+- `direction`: `+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`, `through-X`, `through-Y`,
+  `through-Z`, `surface-normal`, `none`, or `multiple`.
+- `edge_crossing`: `forbidden`, `allowed`, `required`, or `not-applicable`.
+
+For a feature on a single outside face, the direction must follow the semantic
+normal or pass through that axis: bottom uses `-Z` or `through-Z`, front uses
+`-Y` or `through-Y`, and so on. Set `edge_crossing` to `forbidden` unless a
+feature is intentionally on an edge or corner.
 
 ## Manufacturing structure
 
@@ -127,6 +150,8 @@ explicitly asks for a one-piece slip-on sleeve.
 - A photograph proves visible relationships, not hidden-side dimensions.
 - Landmarks describe identity-bearing relationships. “Looks similar” is not
   an acceptance criterion.
+- Critical functional features must be backed by named `observe()` or
+  checked-operation evidence. Natural-language acceptance alone is not proof.
 - For pixel art, use `reference_analyze.py` cells and colors directly. Do not
   redraw coordinates from memory.
 - If a required target remains unknowable and changes function or identity,

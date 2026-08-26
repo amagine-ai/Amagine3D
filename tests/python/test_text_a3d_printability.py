@@ -227,6 +227,143 @@ class PrintabilityGeometryTests(unittest.TestCase):
         )
         self.assertEqual(min(item["minimum_size_mm"] for item in measured), 0.3)
 
+    def test_semantic_feature_placement_detects_wrong_edge_cut(self):
+        intent = {
+            "features": [
+                {
+                    "id": "charging-port",
+                    "kind": "port",
+                    "face": "bottom",
+                    "direction": "-Z",
+                    "edge_crossing": "forbidden",
+                    "evidence": "port belongs on the bottom face",
+                    "acceptance": "exits through z-min without touching front",
+                }
+            ]
+        }
+        report = {
+            "shape": {
+                "bbox_mm": {
+                    "min": [-20, -10, 0],
+                    "max": [20, 10, 40],
+                    "size": [40, 20, 40],
+                },
+            },
+            "features": {},
+            "events": [
+                {
+                    "id": "charging-port",
+                    "kind": "cut",
+                    "tool": {
+                        "bbox_mm": {
+                            "min": [-3, -2, -1],
+                            "max": [3, 2, 2],
+                            "size": [6, 4, 3],
+                        }
+                    },
+                }
+            ],
+        }
+        good = qa_check.semantic_placement_observation(intent, report)
+        self.assertEqual(good["offenders"], [])
+        self.assertEqual(good["passed_feature_ids"], ["charging-port"])
+
+        report["events"][0]["tool"]["bbox_mm"] = {
+            "min": [-3, -11, -1],
+            "max": [3, -8, 2],
+            "size": [6, 3, 3],
+        }
+        bad = qa_check.semantic_placement_observation(intent, report)
+        self.assertEqual(bad["offenders"][0]["feature_id"], "charging-port")
+        self.assertEqual(bad["offenders"][0]["adjacent_external_faces"], ["front"])
+
+    def test_cli_fails_when_critical_feature_has_no_build_evidence(self):
+        profile = bambu_profile.resolve_profile(
+            self.catalog, machine_name="a1-mini", nozzle=0.4, tool_index=0
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            intent_path = root / "intent.json"
+            report_path = root / "report.json"
+            mesh_path = root / "body.stl"
+            profile_path.write_text(bambu_profile.serialize(profile), encoding="utf-8")
+            profile_hash = sha256(profile_path.read_bytes()).hexdigest()
+            intent_path.write_text(
+                json.dumps({
+                    "schema": "evidence-cad-intent/v4",
+                    "part": "body",
+                    "task_mode": "specification",
+                    "representation": "full-3d",
+                    "coordinate_system": COORDINATE_SYSTEM,
+                    "reference_files": [],
+                    "dimensions_mm": {
+                        "x": {"value": 20, "source": "user", "confidence": "high"},
+                        "y": {"value": 10, "source": "user", "confidence": "high"},
+                        "z": {"value": 4, "source": "user", "confidence": "high"},
+                    },
+                    "features": [
+                        {
+                            "id": "missing-detail",
+                            "kind": "detail",
+                            "evidence": "fixture declares a critical detail",
+                            "acceptance": "must appear in build evidence",
+                        }
+                    ],
+                    "manufacturing": {"mode": "single-part"},
+                    "printability": {
+                        "profile": {
+                            "path": profile_path.name,
+                            "sha256": profile_hash,
+                        },
+                        "build_axis": "+Z",
+                        "bed_contact": "z-min",
+                        "support_policy": "support-free",
+                        "minimum_wall_target_mm": 0.87,
+                        "critical_features": ["missing-detail"],
+                    },
+                    "visual": {"required": False, "reference_view": "top", "landmarks": []},
+                    "assumptions": [],
+                }),
+                encoding="utf-8",
+            )
+            report_path.write_text(
+                json.dumps({"events": [], "features": {}}),
+                encoding="utf-8",
+            )
+            mesh = trimesh.creation.box(extents=[20, 10, 4])
+            mesh.apply_translation([0, 0, 2])
+            mesh.export(mesh_path)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "qa_check.py"),
+                    str(mesh_path),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(report_path),
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(result.stdout)
+            coverage = next(
+                item for item in payload["checks"]
+                if item["name"] == "printability_critical_feature_coverage"
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(coverage["status"], "fail")
+            self.assertEqual(
+                coverage["observed"]["missing_feature_ids"],
+                ["missing-detail"],
+            )
+
     def test_cli_keeps_warnings_non_blocking_and_bed_overflow_blocking(self):
         profile = bambu_profile.resolve_profile(
             self.catalog, machine_name="a1-mini", nozzle=0.4, tool_index=0
@@ -661,6 +798,20 @@ class ContractTests(unittest.TestCase):
         ]
         errors = intent_contract.validate(data, example_path.parent)
         self.assertTrue(any("distinct parts" in error for error in errors), errors)
+
+    def test_flat_semantic_feature_fields_are_validated(self):
+        example_path = SKILL / "examples" / "intent.example.json"
+        data = json.loads(example_path.read_text(encoding="utf-8"))
+        self.assertEqual(intent_contract.validate(data, example_path.parent), [])
+
+        data["features"][1]["direction"] = "+Y"
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("direction must be one of" in item for item in errors))
+
+        data["features"][1]["direction"] = "through-Z"
+        data["features"][1].pop("edge_crossing")
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertIn("features[1].edge_crossing is required for kind hole", errors)
 
     def test_contract_requires_manufacturing_decision(self):
         example_path = SKILL / "examples" / "intent.example.json"

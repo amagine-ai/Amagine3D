@@ -93,10 +93,11 @@ python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 ```
 
 The contract must bind the profile hash, fixed object coordinate system, build
-orientation, support policy, wall target, functional acceptance criteria,
-critical feature IDs, and each region's optical transmission. Critical IDs
-must later resolve to named build evidence; for routed cavities, observe a
-representative local cross-section.
+orientation, support policy, wall target, feature kind/face/direction for
+functional openings, functional acceptance criteria, critical feature IDs, and
+each region's optical transmission. Critical IDs must later resolve to named
+build evidence; for routed cavities, observe a representative local
+cross-section.
 
 ## 2. Design region architecture
 

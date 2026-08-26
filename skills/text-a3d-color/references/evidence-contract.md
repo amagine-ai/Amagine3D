@@ -31,11 +31,19 @@ skill's `intent_contract.py`.
   "features": [
     {
       "id": "fastener-clearance",
+      "kind": "hole",
+      "face": "top",
+      "direction": "through-Z",
+      "edge_crossing": "forbidden",
       "evidence": "The assembly specification requires a through fastener.",
       "acceptance": "Clear diameter 3.4 mm; continuous through the housing wall."
     },
     {
       "id": "accent-inset",
+      "kind": "recess",
+      "face": "front",
+      "direction": "-Y",
+      "edge_crossing": "forbidden",
       "evidence": "The contrasting front insert is identity-bearing.",
       "acceptance": "Centered inset; printable boundary and no overlap with housing."
     }
@@ -102,6 +110,10 @@ optical assignments.
 
 Declare functional and identity-bearing requirements independently in
 `features`. Every item needs evidence and a concrete acceptance condition.
+Use flat semantic fields directly on features when placement matters:
+`kind`, `face`, `direction`, and `edge_crossing`. Ports, holes, slots,
+cutouts, windows, cavities, and recesses must name a semantic face and
+direction rather than relying on prose offsets.
 Every `printability.critical_features` ID must reference that list and must
 later appear as a named `observe()` record or checked operation in the v4
 build report. For routed cavities, record a representative cross-section as a

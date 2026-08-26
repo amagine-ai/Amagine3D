@@ -15,10 +15,12 @@ through the same primitive stack.
 
 Declare the fixed object semantic frame in the intent contract: `+X` is user
 right, `+Y` is object back, `+Z` is object top, front is `Y-min`, and bottom is
-`Z-min`. Declare `manufacturing.mode` before modeling. Use `single-part`
-unless the user asked for or the object requires separate same-material pieces
-such as a lid, cover, insert, hinge leaf, latch, or sliding member. Model in
-dependency order:
+`Z-min`. Declare flat semantic feature fields before modeling: `kind`, `face`,
+`direction`, and `edge_crossing` for every port, hole, slot, cutout, window,
+cavity, or recess. Declare `manufacturing.mode` before modeling. Use
+`single-part` unless the user asked for or the object requires separate
+same-material pieces such as a lid, cover, insert, hinge leaf, latch, or
+sliding member. Model in dependency order:
 
 1. primary envelope
 2. identity-bearing additive volumes
@@ -44,8 +46,9 @@ material is single color.
 - Primitive alignment is explicit. Print artifacts are normalized to Z0 by the
   exporter; assembly STEP and display GLB files preserve object/assembly intent.
 - Cutting tools extend beyond both target faces to avoid coplanar ambiguity.
-- Use transforms as a readable frame chain; do not scatter unexplained signed
-  coordinates through the source.
+- Define named datum variables for semantic faces, such as `FRONT_Y`,
+  `BACK_Y`, `BOTTOM_Z`, and `TOP_Z`, then derive cut positions from those
+  names. Do not scatter unexplained signed coordinates through the source.
 - Select finish edges by semantic geometry or position. `checked_fillet()` and
   `checked_chamfer()` are strict by default; allow reduction only when the
   contract permits it, then report the actual size.

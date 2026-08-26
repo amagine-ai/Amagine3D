@@ -32,6 +32,7 @@ def load_module(name: str, path: Path):
 
 color_profile = load_module("color_bambu_profile", COLOR / "bambu_profile.py")
 color_intent = load_module("color_intent_contract", COLOR / "intent_contract.py")
+color_qa = load_module("color_qa_check", COLOR / "qa_check.py")
 color_step_check = load_module("color_step_check", COLOR / "step_check.py")
 single_intent = load_module("single_intent_contract", SINGLE / "intent_contract.py")
 
@@ -464,6 +465,66 @@ class ColorContractTests(unittest.TestCase):
         data["color_regions"][1]["material"] = {"transmission": "translucent"}
         errors = color_intent.validate(data, example_path.parent)
         self.assertTrue(any("filament is required" in item for item in errors))
+
+    def test_flat_semantic_feature_fields_are_validated(self):
+        example_path = COLOR / "examples" / "intent.example.json"
+        data = json.loads(example_path.read_text())
+        self.assertEqual(color_intent.validate(data, example_path.parent), [])
+
+        data["features"][0].update({
+            "kind": "port",
+            "face": "bottom",
+            "direction": "-Y",
+            "edge_crossing": "forbidden",
+        })
+        errors = color_intent.validate(data, example_path.parent)
+        self.assertTrue(any("direction must be one of" in item for item in errors))
+
+        data["features"][0]["direction"] = "-Z"
+        data["features"][0].pop("edge_crossing")
+        errors = color_intent.validate(data, example_path.parent)
+        self.assertIn("features[0].edge_crossing is required for kind port", errors)
+
+    def test_semantic_feature_placement_detects_wrong_edge_cut(self):
+        intent = {
+            "features": [
+                {
+                    "id": "charging-port",
+                    "kind": "port",
+                    "face": "bottom",
+                    "direction": "-Z",
+                    "edge_crossing": "forbidden",
+                }
+            ]
+        }
+        report = {
+            "assembly": {
+                "shape": {
+                    "bbox_mm": {
+                        "min": [-20, -10, 0],
+                        "max": [20, 10, 40],
+                        "size": [40, 20, 40],
+                    },
+                }
+            },
+            "events": [
+                {
+                    "id": "charging-port",
+                    "kind": "cut",
+                    "tool": {
+                        "bbox_mm": {
+                            "min": [-3, -11, -1],
+                            "max": [3, -8, 2],
+                            "size": [6, 3, 3],
+                        }
+                    },
+                }
+            ],
+            "features": {},
+        }
+        observed = color_qa.semantic_placement_observation(intent, report)
+        self.assertEqual(observed["offenders"][0]["feature_id"], "charging-port")
+        self.assertEqual(observed["offenders"][0]["adjacent_external_faces"], ["front"])
 
     def test_single_color_contract_accepts_bottom_matched_view(self):
         example_path = SINGLE / "examples" / "intent.example.json"

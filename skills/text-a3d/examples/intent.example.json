@@ -22,11 +22,16 @@
   "features": [
     {
       "id": "primary-envelope",
+      "kind": "envelope",
       "evidence": "The requested overall footprint is 40 x 24 mm.",
       "acceptance": "The final X and Y bounds are 40 mm and 24 mm within tolerance."
     },
     {
       "id": "mounting-hole",
+      "kind": "hole",
+      "face": "top",
+      "direction": "through-Z",
+      "edge_crossing": "forbidden",
       "evidence": "A centered mounting hole is required.",
       "acceptance": "A through-hole removes material through the full Z height."
     }

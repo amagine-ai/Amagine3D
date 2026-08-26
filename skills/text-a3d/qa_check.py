@@ -12,6 +12,25 @@ import numpy as np
 import trimesh
 
 
+FACE_AXES = {
+    "back": (1, "max"),
+    "bottom": (2, "min"),
+    "front": (1, "min"),
+    "left": (0, "min"),
+    "right": (0, "max"),
+    "top": (2, "max"),
+}
+PLACED_OPENING_KINDS = {
+    "cavity",
+    "cutout",
+    "hole",
+    "port",
+    "recess",
+    "slot",
+    "window",
+}
+
+
 class Audit:
     def __init__(self) -> None:
         self.checks: list[dict] = []
@@ -184,6 +203,19 @@ def _bbox_size(record: dict) -> list[float] | None:
     return values if all(np.isfinite(values)) else None
 
 
+def _bbox_bounds(record: dict) -> np.ndarray | None:
+    bbox = record.get("bbox_mm", {}) if isinstance(record, dict) else {}
+    if not isinstance(bbox.get("min"), list) or not isinstance(bbox.get("max"), list):
+        return None
+    try:
+        bounds = np.asarray([bbox["min"], bbox["max"]], dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if bounds.shape != (2, 3) or not np.isfinite(bounds).all():
+        return None
+    return bounds
+
+
 def _owned_by(record: dict, part_name: str | None) -> bool:
     return part_name is None or record.get("part") == part_name
 
@@ -273,6 +305,188 @@ def feature_measurements(
                     "size_mm": [float(actual)],
                 })
     return measurements
+
+
+def evidence_feature_ids(
+    report: dict | None,
+    part_name: str | None = None,
+) -> set[str]:
+    """Return every stable feature ID backed by an observation or operation."""
+    if report is None:
+        return set()
+    identifiers = {
+        feature_id
+        for feature_id, record in report.get("features", {}).items()
+        if isinstance(feature_id, str)
+        and feature_id.strip()
+        and isinstance(record, dict)
+        and _owned_by(record, part_name)
+    }
+    identifiers.update(
+        event["id"]
+        for event in report.get("events", [])
+        if isinstance(event, dict)
+        and isinstance(event.get("id"), str)
+        and event["id"].strip()
+        and _owned_by(event, part_name)
+    )
+    return identifiers
+
+
+def _body_bounds(report: dict, part_name: str | None) -> np.ndarray | None:
+    if part_name is not None:
+        record = report.get("parts", {}).get(part_name, {})
+        return _bbox_bounds(record)
+    if isinstance(report.get("shape"), dict):
+        bounds = _bbox_bounds(report["shape"])
+        if bounds is not None:
+            return bounds
+    assembly = report.get("assembly", {})
+    if isinstance(assembly, dict):
+        return _bbox_bounds(assembly.get("shape", {}))
+    return None
+
+
+def _feature_records(
+    report: dict,
+    feature_id: str,
+    part_name: str | None,
+) -> list[dict]:
+    records = []
+    for event in report.get("events", []):
+        if (
+            isinstance(event, dict)
+            and event.get("id") == feature_id
+            and _owned_by(event, part_name)
+        ):
+            source = f"event:{event.get('kind', 'operation')}"
+            bounds = _bbox_bounds(event.get("tool", {})) if event.get("kind") == "cut" else None
+            if bounds is not None:
+                records.append({"bounds": bounds, "source": source})
+    feature = report.get("features", {}).get(feature_id)
+    if isinstance(feature, dict) and _owned_by(feature, part_name):
+        bounds = _bbox_bounds(feature)
+        if bounds is not None:
+            records.append({"bounds": bounds, "source": "feature"})
+    return records
+
+
+def _touches_face(
+    bounds: np.ndarray,
+    body_bounds: np.ndarray,
+    face: str,
+    tolerance: float,
+) -> bool:
+    axis, side = FACE_AXES[face]
+    limit = body_bounds[0, axis] if side == "min" else body_bounds[1, axis]
+    return bool(bounds[0, axis] <= limit + tolerance and bounds[1, axis] >= limit - tolerance)
+
+
+def _adjacent_external_faces(
+    bounds: np.ndarray,
+    body_bounds: np.ndarray,
+    target_face: str,
+    tolerance: float,
+) -> list[str]:
+    target_axis = FACE_AXES[target_face][0]
+    touched = []
+    for face, (axis, _) in FACE_AXES.items():
+        if axis != target_axis and _touches_face(bounds, body_bounds, face, tolerance):
+            touched.append(face)
+    return sorted(touched)
+
+
+def _rounded_bounds(bounds: np.ndarray) -> list[list[float]]:
+    return bounds.round(5).tolist()
+
+
+def semantic_placement_observation(
+    intent: dict | None,
+    report: dict | None,
+    part_name: str | None = None,
+    *,
+    tolerance: float = 0.25,
+) -> dict:
+    result = {
+        "examined": 0,
+        "offenders": [],
+        "passed_feature_ids": [],
+        "skipped": [],
+        "tolerance_mm": tolerance,
+    }
+    if intent is None or report is None:
+        return result
+    body_bounds = _body_bounds(report, part_name)
+    if body_bounds is None:
+        result["skipped"].append({
+            "feature_id": None,
+            "reason": "body bounds are unavailable",
+        })
+        return result
+    for feature in intent.get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        feature_id = feature.get("id")
+        kind = feature.get("kind")
+        face = feature.get("face")
+        edge_crossing = feature.get("edge_crossing", "allowed")
+        if (
+            kind not in PLACED_OPENING_KINDS
+            and face is None
+            and edge_crossing == "allowed"
+        ):
+            continue
+        if not isinstance(feature_id, str) or not feature_id.strip():
+            continue
+        if face not in FACE_AXES:
+            result["skipped"].append({
+                "feature_id": feature_id,
+                "reason": f"face {face!r} is not an auditable outside face",
+            })
+            continue
+        records = _feature_records(report, feature_id, part_name)
+        result["examined"] += 1
+        if not records:
+            result["offenders"].append({
+                "feature_id": feature_id,
+                "reason": "no observed feature or checked cut bounds",
+            })
+            continue
+        record_results = []
+        for record in records:
+            bounds = record["bounds"]
+            adjacent = _adjacent_external_faces(bounds, body_bounds, face, tolerance)
+            record_results.append({
+                "adjacent_external_faces": adjacent,
+                "bounds_mm": _rounded_bounds(bounds),
+                "source": record["source"],
+                "touches_declared_face": _touches_face(
+                    bounds, body_bounds, face, tolerance
+                ),
+            })
+        touches_declared = any(item["touches_declared_face"] for item in record_results)
+        adjacent_faces = sorted({
+            face_name
+            for item in record_results
+            for face_name in item["adjacent_external_faces"]
+        })
+        crossing_ok = (
+            edge_crossing not in {"forbidden", "required"}
+            or (edge_crossing == "forbidden" and not adjacent_faces)
+            or (edge_crossing == "required" and bool(adjacent_faces))
+        )
+        if touches_declared and crossing_ok:
+            result["passed_feature_ids"].append(feature_id)
+        else:
+            result["offenders"].append({
+                "adjacent_external_faces": adjacent_faces,
+                "edge_crossing": edge_crossing,
+                "expected_face": face,
+                "feature_id": feature_id,
+                "kind": kind,
+                "records": record_results,
+            })
+    return result
 
 
 def _report_feature_bounds(
@@ -589,7 +803,60 @@ def main() -> int:
     if profile is not None:
         floor = float(profile["derived"]["single_line_floor_mm"])
         target = float(profile["derived"]["process_wall_target_mm"])
+        if intent is not None:
+            intent_target = intent.get("printability", {}).get("minimum_wall_target_mm")
+            if (
+                isinstance(intent_target, (int, float))
+                and not isinstance(intent_target, bool)
+                and intent_target > target
+            ):
+                target = float(intent_target)
         measurements = feature_measurements(report, report_part)
+        if intent is not None and report is not None:
+            critical = intent.get("printability", {}).get("critical_features")
+            if isinstance(critical, list) and all(
+                isinstance(item, str) and item.strip() for item in critical
+            ):
+                observed_ids = evidence_feature_ids(report, report_part)
+                missing_critical = sorted(set(critical) - observed_ids)
+                audit.add(
+                    "printability_critical_feature_coverage",
+                    not missing_critical,
+                    {
+                        "observed_feature_ids": sorted(observed_ids),
+                        "missing_feature_ids": missing_critical,
+                    },
+                    {"critical_feature_ids": sorted(set(critical))},
+                    category="printability",
+                    repair={
+                        "goal": "Observe every critical feature or record its checked operation."
+                    },
+                )
+            else:
+                audit.add(
+                    "printability_critical_feature_coverage",
+                    False,
+                    critical,
+                    "list of feature IDs",
+                    category="printability",
+                    repair="Validate the intent contract before QA.",
+                )
+            semantic = semantic_placement_observation(intent, report, report_part)
+            if semantic["examined"] or semantic["offenders"]:
+                audit.add(
+                    "semantic_feature_placement",
+                    not semantic["offenders"],
+                    semantic,
+                    "declared feature face and edge crossing",
+                    category="geometry",
+                    repair={
+                        "goal": "Move each feature to its declared semantic face or update the intent before modeling.",
+                        "preferred_actions": [
+                            "Derive the cut position from named face datum variables.",
+                            "Set edge_crossing to allowed or required only for intentional edge or corner features.",
+                        ],
+                    },
+                )
         if report is None:
             audit.skip(
                 "printability_feature_resolution",

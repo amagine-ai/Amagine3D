@@ -93,11 +93,12 @@ python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 ```
 
 The contract must expose inferred dimensions, hidden-side assumptions, the
-object coordinate system, profile path and hash, build orientation, minimum
-wall target, critical feature IDs, support policy, and manufacturing mode. Use
-`single-part` by default; use `multipart` whenever separate covers, lids,
-inserts, hinges, latches, or replacement pieces are part of the requested
-object. Do not weaken it later to match the output.
+object coordinate system, feature kind/face/direction for functional openings,
+profile path and hash, build orientation, minimum wall target, critical feature
+IDs, support policy, and manufacturing mode. Use `single-part` by default; use
+`multipart` whenever separate covers, lids, inserts, hinges, latches, or
+replacement pieces are part of the requested object. Do not weaken it later to
+match the output.
 
 ## 2. Choose construction from evidence
 
@@ -105,9 +106,12 @@ Read `references/construction-strategies.md` and
 `references/bambu-printability.md`. Pick full 3D, orthographic solid, relief,
 or surface-led construction deliberately. Use the required object frame:
 `+X` is user right, `+Y` is object back, `+Z` is object top; front is `Y-min`
-and bottom is `Z-min`. Establish the print orientation, wall parameters, and a
-feature dependency graph before code. Pixel/icon inputs use analyzer cells;
-never hand-copy their coordinates.
+and bottom is `Z-min`. Put ports, holes, and cutouts on named semantic faces.
+A bottom opening is valid when the contract says it belongs on the bottom; an
+accidental front/bottom edge cut is a design failure, not a Z0 rule failure.
+Establish the print orientation, wall parameters, and a feature dependency
+graph before code. Pixel/icon inputs use analyzer cells; never hand-copy their
+coordinates.
 
 ## 3. Build with observable operations
 

@@ -23,6 +23,62 @@ CONFIDENCE = {"high", "low", "medium"}
 MANUFACTURING_MODES = {"multipart", "single-part"}
 INTENT_SCHEMA = "evidence-cad-intent/v4"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
+FEATURE_KINDS = {
+    "additive",
+    "button",
+    "cavity",
+    "clearance",
+    "control",
+    "cutout",
+    "detail",
+    "envelope",
+    "fastener",
+    "hole",
+    "interface",
+    "logo",
+    "mount",
+    "part",
+    "port",
+    "recess",
+    "region",
+    "seam",
+    "slot",
+    "surface",
+    "window",
+}
+PLACED_OPENING_KINDS = {
+    "cavity",
+    "cutout",
+    "hole",
+    "port",
+    "recess",
+    "slot",
+    "window",
+}
+FACES = {"back", "bottom", "front", "internal", "left", "multiple", "right", "top"}
+DIRECTIONS = {
+    "+X",
+    "+Y",
+    "+Z",
+    "-X",
+    "-Y",
+    "-Z",
+    "multiple",
+    "none",
+    "surface-normal",
+    "through-X",
+    "through-Y",
+    "through-Z",
+}
+EDGE_CROSSING = {"allowed", "forbidden", "not-applicable", "required"}
+FACE_DIRECTIONS = {
+    "back": {"+Y", "through-Y"},
+    "bottom": {"-Z", "through-Z"},
+    "front": {"-Y", "through-Y"},
+    "left": {"-X", "through-X"},
+    "right": {"+X", "through-X"},
+    "top": {"+Z", "through-Z"},
+}
 COORDINATE_SYSTEM = {
     "back": "y-max",
     "bottom": "z-min",
@@ -190,6 +246,44 @@ def validate_coordinate_system(coordinate_system) -> list[str]:
     return errors
 
 
+def validate_feature_semantics(feature: dict, index: int) -> list[str]:
+    errors: list[str] = []
+    feature_id = f"features[{index}]"
+    kind = feature.get("kind")
+    face = feature.get("face")
+    direction = feature.get("direction")
+    edge_crossing = feature.get("edge_crossing")
+
+    if kind is not None and kind not in FEATURE_KINDS:
+        errors.append(f"{feature_id}.kind is invalid")
+    if face is not None and face not in FACES:
+        errors.append(f"{feature_id}.face is invalid")
+    if direction is not None and direction not in DIRECTIONS:
+        errors.append(f"{feature_id}.direction is invalid")
+    if edge_crossing is not None and edge_crossing not in EDGE_CROSSING:
+        errors.append(f"{feature_id}.edge_crossing is invalid")
+    if direction is not None and face is None:
+        errors.append(f"{feature_id}.direction requires face")
+    if edge_crossing is not None and face is None:
+        errors.append(f"{feature_id}.edge_crossing requires face")
+    if kind in PLACED_OPENING_KINDS:
+        for key, value in (
+            ("face", face),
+            ("direction", direction),
+            ("edge_crossing", edge_crossing),
+        ):
+            if value is None:
+                errors.append(f"{feature_id}.{key} is required for kind {kind}")
+    if (
+        face in FACE_DIRECTIONS
+        and direction not in {None, "none", "surface-normal"}
+        and direction not in FACE_DIRECTIONS[face]
+    ):
+        expected = ", ".join(sorted(FACE_DIRECTIONS[face]))
+        errors.append(f"{feature_id}.direction must be one of {expected} for {face}")
+    return errors
+
+
 def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     if not isinstance(data, dict):
         return ["intent must contain a JSON object"]
@@ -234,7 +328,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(f"features[{index}].{key} is required")
             feature_id = feature.get("id")
             if isinstance(feature_id, str) and feature_id.strip():
+                if not ID_PATTERN.fullmatch(feature_id):
+                    errors.append(f"features[{index}].id is invalid")
                 ids.append(feature_id)
+            errors.extend(validate_feature_semantics(feature, index))
         if len(ids) != len(set(ids)):
             errors.append("feature ids must be unique")
     feature_ids = (
