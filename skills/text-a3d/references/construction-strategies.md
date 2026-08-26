@@ -14,7 +14,9 @@ through the same primitive stack.
 ## Frame and feature graph
 
 Declare world axes and the reference-facing direction in the intent contract.
-Model in dependency order:
+Declare `manufacturing.mode` before modeling. Use `single-part` unless the user
+asked for or the object requires separate same-material pieces such as a lid,
+cover, insert, hinge leaf, latch, or sliding member. Model in dependency order:
 
 1. primary envelope
 2. identity-bearing additive volumes
@@ -25,6 +27,12 @@ Model in dependency order:
 Give every measured or subtractive feature a stable ID. Call `observe()` before
 union and `checked_cut()` for subtraction. Failed operations raise immediately;
 do not continue with an unchanged body.
+
+For multipart work, give each printed part its own envelope, features, and
+mating-interface parameters. Keep the parts as separate valid solids and export
+with `export_assembly()`. Pass `part_name=` to every `observe()`, checked cut,
+and checked finish so per-part QA reads only its own evidence. Do not union
+separate requested parts only because the material is single color.
 
 ## build123d guardrails
 

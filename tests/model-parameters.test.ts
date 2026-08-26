@@ -362,3 +362,108 @@ if __name__ == "__main__":
     }
   },
 );
+
+test(
+  'treats the combined STL as the adjustable top-level single-color assembly preview',
+  { skip: !existsSync(VENV_PYTHON) },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), 'amagine-assembly-parameter-'));
+    try {
+      const skillRoot = join(PROJECT_ROOT, 'skills', 'text-a3d');
+      const source = `import sys
+sys.path.insert(0, ${JSON.stringify(skillRoot)})
+from build123d import Align, Box, Pos
+from cad_helpers import export_assembly, observe, parameter
+
+NAME = "shell_case"
+INTENT = "shell_case_intent.json"
+WIDTH = parameter(
+    "overall-width", 20.0,
+    min_value=10.0, max_value=30.0, step=0.5,
+    unit="mm", label="Overall width", group="Envelope",
+    affects=("lower-shell", "top-lid"),
+)
+lower_shell = Box(WIDTH, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
+top_lid = Pos(0, 0, 6) * Box(WIDTH, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN))
+observe(lower_shell, "lower-shell", "part", part_name="lower-shell")
+observe(top_lid, "top-lid", "part", part_name="top-lid")
+
+if __name__ == "__main__":
+    export_assembly(
+        {"lower-shell": lower_shell, "top-lid": top_lid},
+        NAME,
+        intent_path=INTENT,
+        source_path=__file__,
+    )
+`;
+      await writeFile(join(root, 'shell_case.py'), source);
+      await writeFile(
+        join(root, 'shell_case_intent.json'),
+        JSON.stringify({
+          schema: 'evidence-cad-intent/v4',
+          part: 'shell_case',
+          manufacturing: {
+            mode: 'multipart',
+            parts: [
+              {
+                acceptance: 'one lower shell',
+                name: 'lower-shell',
+                role: 'base',
+              },
+              {
+                acceptance: 'one top lid',
+                name: 'top-lid',
+                role: 'cover',
+              },
+            ],
+            interfaces: [
+              {
+                acceptance: 'named parts form one case',
+                between: ['lower-shell', 'top-lid'],
+                id: 'case-seam',
+              },
+            ],
+          },
+        }),
+      );
+      await execFileAsync(VENV_PYTHON, ['shell_case.py'], { cwd: root });
+      const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
+      assert.ok(model);
+      assert.equal(model.primaryPreviewPath, 'shell_case-combined.stl');
+      assert.deepEqual(
+        model.artifactPaths.slice().sort(),
+        [
+          'shell_case-lower-shell.stl',
+          'shell_case-top-lid.stl',
+          'shell_case-combined.stl',
+          'shell_case.step',
+        ].sort(),
+      );
+      await rebuildModelWithParameters({
+        pythonExecutable: VENV_PYTHON,
+        request: {
+          primaryPreviewPath: model.primaryPreviewPath,
+          sourceHash: model.sourceHash,
+          sourcePath: model.sourcePath,
+          values: { 'overall-width': 24 },
+        },
+        workspaceRoot: root,
+      });
+      const report = JSON.parse(
+        await readFile(join(root, 'shell_case_report.json'), 'utf8'),
+      ) as {
+        combined: { bbox_mm: { size: number[] }; solid_count: number };
+        parts: Record<string, { bbox_mm: { size: number[] } }>;
+      };
+      assert.equal(report.combined.solid_count, 2);
+      assert.deepEqual(report.combined.bbox_mm.size, [24, 10, 8]);
+      assert.deepEqual(report.parts['top-lid']?.bbox_mm.size, [24, 10, 2]);
+      assert.match(
+        await readFile(join(root, 'shell_case.py'), 'utf8'),
+        /"overall-width", 24\.0/u,
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  },
+);

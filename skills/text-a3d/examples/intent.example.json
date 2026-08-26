@@ -1,5 +1,5 @@
 {
-  "schema": "evidence-cad-intent/v3",
+  "schema": "evidence-cad-intent/v4",
   "part": "example-bracket",
   "task_mode": "specification",
   "representation": "full-3d",
@@ -20,6 +20,9 @@
       "acceptance": "A through-hole removes material through the full Z height."
     }
   ],
+  "manufacturing": {
+    "mode": "single-part"
+  },
   "printability": {
     "profile": {
       "path": "bambu-a1-mini-0.4-standard.example.json",

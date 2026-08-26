@@ -8,7 +8,7 @@ targets merely to match a generated artifact.
 
 ```json
 {
-  "schema": "evidence-cad-intent/v3",
+  "schema": "evidence-cad-intent/v4",
   "part": "part-name",
   "task_mode": "reference-reproduction",
   "representation": "full-3d",
@@ -27,6 +27,9 @@ targets merely to match a generated artifact.
       "acceptance": "centered; width 72 ± 1 mm; depth 1.2 ± 0.2 mm"
     }
   ],
+  "manufacturing": {
+    "mode": "single-part"
+  },
   "printability": {
     "profile": {
       "path": "part-name_printer-profile.json",
@@ -60,6 +63,45 @@ unless supports are explicitly accepted or unavoidable.
 Matched visual views may be `front`, `side`, `top`, `bottom`, or `isometric`;
 use `bottom` when the appearance-bearing face is intentionally printed at Z0.
 
+## Manufacturing structure
+
+Always declare `manufacturing`. Use `single-part` for one printed body. Use
+`multipart` when the requested object needs separate same-material parts such
+as a lower shell and top lid, snap-on cap, removable cover, insert, hinge leaf,
+latch, or slide.
+
+Multipart contracts must declare every printed part and assembly interface:
+
+```json
+"manufacturing": {
+  "mode": "multipart",
+  "parts": [
+    {
+      "name": "lower-shell",
+      "role": "main protective sleeve",
+      "acceptance": "open cavity, bottom port opening, and retention lip"
+    },
+    {
+      "name": "top-lid",
+      "role": "separate cap over the original device lid",
+      "acceptance": "covers the lid area and preserves 0.3 mm assembly clearance"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "lid-body-seam",
+      "between": ["lower-shell", "top-lid"],
+      "clearance_mm": 0.3,
+      "acceptance": "non-overlapping mating faces with a visible seam"
+    }
+  ]
+}
+```
+
+Each multipart `parts[].name` becomes an exported STL suffix. Do not convert a
+separate requested lid or cover into an open-top single body unless the user
+explicitly asks for a one-piece slip-on sleeve.
+
 ## Evidence rules
 
 - User values outrank standards, standards outrank reference measurement, and
@@ -79,6 +121,8 @@ use `bottom` when the appearance-bearing face is intentionally printed at Z0.
   `not_evaluated` rather than crashing or passing.
 - Overflow of the selected tool's printable polygon or height is a hard
   failure. Bed exclusions and a 90-degree XY placement are considered.
+- For multipart assemblies, every part is audited as an individual printable
+  body and the combined STL is audited with the expected component count.
 - A sub-line-width named feature is a warning tied to its feature ID.
 - Local wall thickness below the process wall target is a warning with sampled
   risk bounds. It does not prove mechanical strength.

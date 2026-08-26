@@ -29,6 +29,14 @@ parameter tied to a contract feature ID. Call `observe()` on additive feature
 solids before union. Use checked operations so subtractive tool bounds and
 finish sizes enter the build report.
 
+For same-material multipart assemblies, keep every printed part as one valid
+solid, export them with `export_assembly()`, audit each part STL individually,
+then run a topology-only component audit on `<name>-combined.stl` and use
+`assembly_check.py` for report integrity. A part STL may retain an assembly-space
+translation, so evaluate its orientation and dimensions but require Z0 only when
+the authored coordinates already describe bed placement. The combined STL is
+assembly evidence, not a print-board or per-part printability result.
+
 ## Support-free construction
 
 The profile's support angle is measured up from the horizontal plane: 0
@@ -40,7 +48,8 @@ plan.
 - Replace shelf undersides with slopes at or above the profile threshold.
 - Use chamfers or arches under ledges and teardrop profiles for horizontal
   holes.
-- Split the model only when the intent contract permits assembly.
+- Split the model when the intent contract permits assembly; prefer this over
+  hiding unavoidable overhangs in a one-piece body.
 - When geometry cannot be made support-free, set `support_policy` to
   `supports-required` and disclose the reported regions.
 

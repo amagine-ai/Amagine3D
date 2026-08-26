@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 from hashlib import sha256
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -9,12 +11,15 @@ import sys
 import tempfile
 import unittest
 
+from build123d import Align, Box, Pos
 import numpy as np
 import trimesh
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "text-a3d"
+if str(SKILL) not in sys.path:
+    sys.path.insert(0, str(SKILL))
 
 
 def load_module(name: str, path: Path):
@@ -27,6 +32,9 @@ def load_module(name: str, path: Path):
 
 bambu_profile = load_module("bambu_profile", SKILL / "bambu_profile.py")
 qa_check = load_module("qa_check", SKILL / "qa_check.py")
+cad_helpers = load_module("single_cad_helpers", SKILL / "cad_helpers.py")
+assembly_check = load_module("single_assembly_check", SKILL / "assembly_check.py")
+intent_contract = load_module("single_intent_contract", SKILL / "intent_contract.py")
 
 
 class BambuProfileTests(unittest.TestCase):
@@ -274,6 +282,287 @@ class PrintabilityGeometryTests(unittest.TestCase):
             self.assertIn("printability_bed_fit", fail_payload["errors"])
 
 
+class SingleMaterialAssemblyTests(unittest.TestCase):
+    def setUp(self):
+        cad_helpers._FEATURES.clear()
+        cad_helpers._EVENTS.clear()
+        cad_helpers._PARAMETERS.clear()
+
+    def test_export_assembly_writes_part_stls_combined_stl_and_auditable_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            intent_path = root / "case_intent.json"
+            intent_path.write_text(
+                json.dumps({
+                    "schema": "evidence-cad-intent/v4",
+                    "part": "case",
+                    "manufacturing": {
+                        "mode": "multipart",
+                        "parts": [
+                            {
+                                "name": "lower-shell",
+                                "role": "main sleeve",
+                                "acceptance": "one printable lower shell",
+                            },
+                            {
+                                "name": "top-lid",
+                                "role": "separate lid cap",
+                                "acceptance": "one printable top lid",
+                            },
+                        ],
+                        "interfaces": [
+                            {
+                                "id": "lid-body-seam",
+                                "between": ["lower-shell", "top-lid"],
+                                "clearance_mm": 0.3,
+                                "acceptance": "non-overlapping separated parts",
+                            }
+                        ],
+                    },
+                }),
+                encoding="utf-8",
+            )
+            lower = Box(20, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
+            lid = Pos(0, 0, 6) * Box(
+                20, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            cad_helpers.observe(
+                lower,
+                "lower-shell-envelope",
+                "part",
+                part_name="lower-shell",
+            )
+            cad_helpers.observe(
+                lid,
+                "top-lid-envelope",
+                "part",
+                part_name="top-lid",
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = cad_helpers.export_assembly(
+                    {"top-lid": lid, "lower-shell": lower},
+                    "case",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                )
+
+            self.assertEqual(report["schema"], "evidence-cad-assembly-build/v1")
+            self.assertEqual(report["combined"]["solid_count"], 2)
+            self.assertEqual(
+                sorted(report["overlaps_mm3"]),
+                ["lower-shell&top-lid"],
+            )
+            self.assertEqual(
+                sorted(report["parts"]),
+                ["lower-shell", "top-lid"],
+            )
+            self.assertTrue((root / "case-lower-shell.stl").is_file())
+            self.assertTrue((root / "case-top-lid.stl").is_file())
+            self.assertTrue((root / "case-combined.stl").is_file())
+            self.assertTrue((root / "case.step").is_file())
+
+            audit = assembly_check.audit_report(
+                root / "case_report.json",
+                combined_stl=root / "case-combined.stl",
+                max_overlap_mm3=0.01,
+            )
+            self.assertTrue(audit["pass"], audit)
+            self.assertEqual(
+                [
+                    item["feature_id"]
+                    for item in qa_check.feature_measurements(report, "top-lid")
+                ],
+                ["top-lid-envelope"],
+            )
+
+            top_lid = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "qa_check.py"),
+                    str(root / "case-top-lid.stl"),
+                    "--report",
+                    str(root / "case_report.json"),
+                    "--components",
+                    "1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(top_lid.returncode, 0, top_lid.stdout + top_lid.stderr)
+            self.assertEqual(json.loads(top_lid.stdout)["report_part"], "top-lid")
+
+            combined = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "qa_check.py"),
+                    str(root / "case-combined.stl"),
+                    "--report",
+                    str(root / "case_report.json"),
+                    "--components",
+                    "2",
+                    "--expect-x",
+                    "20",
+                    "--expect-y",
+                    "10",
+                    "--expect-z",
+                    "8",
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(combined.returncode, 0, combined.stdout + combined.stderr)
+
+            preview_report = root / "case_views.json"
+            preview = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "render_preview.py"),
+                    "--part",
+                    str(root / "case-lower-shell.stl"),
+                    "--part",
+                    str(root / "case-top-lid.stl"),
+                    "--out",
+                    str(root / "case_views.png"),
+                    "--report",
+                    str(preview_report),
+                    "--size",
+                    "320",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(preview.returncode, 0, preview.stdout + preview.stderr)
+            self.assertTrue((root / "case_views.png").is_file())
+            preview_payload = json.loads(preview_report.read_text(encoding="utf-8"))
+            self.assertEqual(len(preview_payload["meshes"]), 2)
+            self.assertEqual(preview_payload["dimensions_mm"], [20.0, 10.0, 8.0])
+            self.assertTrue(
+                all("preview_color_rgb" in item for item in preview_payload["meshes"])
+            )
+
+            report_path = root / "case_report.json"
+            incomplete = json.loads(report_path.read_text(encoding="utf-8"))
+            incomplete["overlaps_mm3"] = {}
+            report_path.write_text(json.dumps(incomplete), encoding="utf-8")
+            incomplete_audit = assembly_check.audit_report(
+                report_path,
+                combined_stl=root / "case-combined.stl",
+            )
+            self.assertFalse(incomplete_audit["pass"])
+            self.assertIn("part_overlaps", incomplete_audit["errors"])
+
+    def test_export_assembly_requires_matching_multipart_intent_parts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            intent_path = root / "case_intent.json"
+            intent_path.write_text(
+                json.dumps({
+                    "schema": "evidence-cad-intent/v4",
+                    "part": "case",
+                    "manufacturing": {
+                        "mode": "multipart",
+                        "parts": [
+                            {
+                                "name": "lower-shell",
+                                "role": "main sleeve",
+                                "acceptance": "one printable lower shell",
+                            },
+                            {
+                                "name": "wrong-lid",
+                                "role": "separate lid cap",
+                                "acceptance": "one printable top lid",
+                            },
+                        ],
+                        "interfaces": [
+                            {
+                                "id": "lid-body-seam",
+                                "between": ["lower-shell", "wrong-lid"],
+                                "acceptance": "named parts form one interface",
+                            }
+                        ],
+                    },
+                }),
+                encoding="utf-8",
+            )
+            lower = Box(20, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
+            lid = Pos(0, 0, 6) * Box(
+                20, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            with self.assertRaisesRegex(
+                cad_helpers.BuildInvariantError,
+                "part names do not match",
+            ):
+                cad_helpers.export_assembly(
+                    {"lower-shell": lower, "top-lid": lid},
+                    "case",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                )
+
+    def test_touching_parts_produce_a_structured_component_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            intent_path = root / "touching_intent.json"
+            intent_path.write_text(
+                json.dumps({
+                    "schema": "evidence-cad-intent/v4",
+                    "part": "touching",
+                    "manufacturing": {
+                        "mode": "multipart",
+                        "parts": [
+                            {"name": "base", "role": "base", "acceptance": "base"},
+                            {"name": "lid", "role": "lid", "acceptance": "lid"},
+                        ],
+                        "interfaces": [
+                            {
+                                "id": "contact",
+                                "between": ["base", "lid"],
+                                "acceptance": "touching faces",
+                            }
+                        ],
+                    },
+                }),
+                encoding="utf-8",
+            )
+            base = Box(10, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN))
+            lid = Pos(0, 0, 2) * Box(
+                10, 10, 1, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            cad_helpers.observe(base, "base", "part", part_name="base")
+            cad_helpers.observe(lid, "lid", "part", part_name="lid")
+            with contextlib.redirect_stdout(io.StringIO()):
+                cad_helpers.export_assembly(
+                    {"base": base, "lid": lid},
+                    "touching",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "qa_check.py"),
+                    str(root / "touching-combined.stl"),
+                    "--report",
+                    str(root / "touching_report.json"),
+                    "--components",
+                    "2",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertIn("connected_components", payload["errors"])
+
+
 class ContractTests(unittest.TestCase):
     def test_hash_bound_example_profiles_use_stable_lf_bytes(self):
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
@@ -302,6 +591,72 @@ class ContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["pass"])
+
+    def test_multipart_contract_validates_parts_and_interfaces(self):
+        example_path = SKILL / "examples" / "intent.example.json"
+        data = json.loads(example_path.read_text(encoding="utf-8"))
+        data["manufacturing"] = {
+            "mode": "multipart",
+            "parts": [
+                {
+                    "name": "lower-shell",
+                    "role": "main sleeve",
+                    "acceptance": "one printable lower shell",
+                },
+                {
+                    "name": "top-lid",
+                    "role": "separate lid cap",
+                    "acceptance": "one printable top lid",
+                },
+            ],
+            "interfaces": [
+                {
+                    "id": "lid-body-seam",
+                    "between": ["lower-shell", "top-lid"],
+                    "clearance_mm": 0.3,
+                    "acceptance": "non-overlapping mating faces",
+                }
+            ],
+        }
+        self.assertEqual(intent_contract.validate(data, example_path.parent), [])
+
+        data["manufacturing"]["interfaces"][0]["between"] = [
+            "lower-shell",
+            "missing-lid",
+        ]
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("unknown parts" in error for error in errors), errors)
+
+        data["manufacturing"]["interfaces"][0]["between"] = [
+            "lower-shell",
+            "lower-shell",
+        ]
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("distinct parts" in error for error in errors), errors)
+
+    def test_contract_requires_manufacturing_decision(self):
+        example_path = SKILL / "examples" / "intent.example.json"
+        data = json.loads(example_path.read_text(encoding="utf-8"))
+        data.pop("manufacturing")
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertIn("manufacturing must be an object", errors)
+
+    def test_contract_rejects_old_schema_and_mode_specific_fields(self):
+        example_path = SKILL / "examples" / "intent.example.json"
+        data = json.loads(example_path.read_text(encoding="utf-8"))
+        data["schema"] = "evidence-cad-intent/v3"
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("evidence-cad-intent/v4" in error for error in errors))
+
+        data["schema"] = "evidence-cad-intent/v4"
+        data["manufacturing"] = {
+            "mode": "single-part",
+            "parts": [{"name": "ignored"}],
+            "interfaces": [],
+        }
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertIn("manufacturing.parts is only valid for multipart", errors)
+        self.assertIn("manufacturing.interfaces is only valid for multipart", errors)
 
 
 if __name__ == "__main__":

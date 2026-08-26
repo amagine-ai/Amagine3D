@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from hashlib import sha256
+import math
 from pathlib import Path
 import re
 import sys
@@ -19,10 +20,27 @@ MODES = {
 REPRESENTATIONS = {"full-3d", "orthographic-solid", "relief", "surface-led"}
 SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
+MANUFACTURING_MODES = {"multipart", "single-part"}
+INTENT_SCHEMA = "evidence-cad-intent/v4"
+ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
 
 
 def _positive_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _non_negative_number(value) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> dict | None:
@@ -47,6 +65,9 @@ def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> 
     except Exception as error:
         errors.append(f"printability profile cannot be read: {error}")
         return None
+    if not isinstance(profile, dict):
+        errors.append("printability profile must contain a JSON object")
+        return None
     if isinstance(digest, str) and sha256(payload).hexdigest() != digest:
         errors.append("printability profile hash does not match")
     if profile.get("schema") != "evidence-bambu-printer-profile/v1":
@@ -59,10 +80,101 @@ def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> 
     return profile
 
 
-def validate(data: dict, base_dir: Path | None = None) -> list[str]:
+def validate_manufacturing(manufacturing) -> list[str]:
     errors: list[str] = []
-    if data.get("schema") != "evidence-cad-intent/v3":
-        errors.append("schema must be evidence-cad-intent/v3")
+    if not isinstance(manufacturing, dict):
+        return ["manufacturing must be an object"]
+    mode = manufacturing.get("mode")
+    if mode not in MANUFACTURING_MODES:
+        errors.append("manufacturing.mode must be single-part or multipart")
+    raw_parts = manufacturing.get("parts")
+    part_names: set[str] = set()
+    if mode == "single-part":
+        if "parts" in manufacturing:
+            errors.append("manufacturing.parts is only valid for multipart")
+        if "interfaces" in manufacturing:
+            errors.append("manufacturing.interfaces is only valid for multipart")
+    elif mode == "multipart":
+        if not isinstance(raw_parts, list) or len(raw_parts) < 2:
+            errors.append("manufacturing.parts must declare at least two parts")
+        else:
+            names: list[str] = []
+            for index, part in enumerate(raw_parts):
+                if not isinstance(part, dict):
+                    errors.append(f"manufacturing.parts[{index}] must be an object")
+                    continue
+                part_name = part.get("name")
+                if not isinstance(part_name, str) or not ID_PATTERN.fullmatch(part_name):
+                    errors.append(f"manufacturing.parts[{index}].name is invalid")
+                else:
+                    names.append(part_name)
+                for key in ("role", "acceptance"):
+                    if not isinstance(part.get(key), str) or not part[key].strip():
+                        errors.append(f"manufacturing.parts[{index}].{key} is required")
+            if len(names) != len(set(names)):
+                errors.append("manufacturing part names must be unique")
+            part_names = set(names)
+        interfaces = manufacturing.get("interfaces")
+        if not isinstance(interfaces, list) or not interfaces:
+            errors.append("manufacturing.interfaces must declare at least one interface")
+        else:
+            interface_ids: list[str] = []
+            for index, interface in enumerate(interfaces):
+                if not isinstance(interface, dict):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}] must be an object"
+                    )
+                    continue
+                interface_id = interface.get("id")
+                if not isinstance(interface_id, str) or not ID_PATTERN.fullmatch(
+                    interface_id
+                ):
+                    errors.append(f"manufacturing.interfaces[{index}].id is invalid")
+                else:
+                    interface_ids.append(interface_id)
+                between = interface.get("between")
+                if (
+                    not isinstance(between, list)
+                    or len(between) != 2
+                    or not all(isinstance(item, str) for item in between)
+                ):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].between must name two parts"
+                    )
+                elif between[0] == between[1]:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].between must name two distinct parts"
+                    )
+                elif part_names and not set(between).issubset(part_names):
+                    errors.append(
+                        "manufacturing.interfaces"
+                        f"[{index}].between references unknown parts"
+                    )
+                if (
+                    "clearance_mm" in interface
+                    and not _non_negative_number(interface.get("clearance_mm"))
+                ):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].clearance_mm must be finite and non-negative"
+                    )
+                if (
+                    not isinstance(interface.get("acceptance"), str)
+                    or not interface["acceptance"].strip()
+                ):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].acceptance is required"
+                    )
+            if len(interface_ids) != len(set(interface_ids)):
+                errors.append("manufacturing interface ids must be unique")
+    return errors
+
+
+def validate(data: dict, base_dir: Path | None = None) -> list[str]:
+    if not isinstance(data, dict):
+        return ["intent must contain a JSON object"]
+    errors: list[str] = []
+    if data.get("schema") != INTENT_SCHEMA:
+        errors.append(f"schema must be {INTENT_SCHEMA}")
     if not re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", str(data.get("part", ""))):
         errors.append("part must be a lowercase filename-safe slug")
     if data.get("task_mode") not in MODES:
@@ -87,20 +199,29 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 errors.append(f"dimensions_mm.{axis}.confidence is invalid")
 
     features = data.get("features")
+    ids: list[str] = []
     if not isinstance(features, list) or not features:
         errors.append("features must be a non-empty list")
     else:
-        ids = []
         for index, feature in enumerate(features):
             if not isinstance(feature, dict):
                 errors.append(f"features[{index}] must be an object")
                 continue
-            ids.append(feature.get("id"))
             for key in ("id", "evidence", "acceptance"):
                 if not isinstance(feature.get(key), str) or not feature[key].strip():
                     errors.append(f"features[{index}].{key} is required")
+            feature_id = feature.get("id")
+            if isinstance(feature_id, str) and feature_id.strip():
+                ids.append(feature_id)
         if len(ids) != len(set(ids)):
             errors.append("feature ids must be unique")
+    feature_ids = (
+        {item for item in ids if isinstance(item, str)}
+        if isinstance(features, list)
+        else set()
+    )
+
+    errors.extend(validate_manufacturing(data.get("manufacturing")))
 
     visual = data.get("visual")
     if not isinstance(visual, dict) or not isinstance(visual.get("required"), bool):
@@ -148,6 +269,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             isinstance(item, str) and item.strip() for item in critical
         ):
             errors.append("printability.critical_features must be a list of feature IDs")
+        elif feature_ids and not set(critical).issubset(feature_ids):
+            errors.append(
+                "printability.critical_features must reference declared feature IDs"
+            )
     return errors
 
 
@@ -165,9 +290,9 @@ def main() -> int:
     result = {
         "errors": errors,
         "intent": str(path.resolve()),
-        "part": data.get("part"),
+        "part": data.get("part") if isinstance(data, dict) else None,
         "pass": not errors,
-        "schema": "intent-validation/v3",
+        "schema": "intent-validation/v4",
     }
     print(json.dumps(result, indent=2))
     return 0 if not errors else 1

@@ -1,4 +1,4 @@
-"""Create orthographic visual evidence for a single-material STL."""
+"""Create orthographic visual evidence for single-material STL files."""
 
 from __future__ import annotations
 
@@ -27,9 +27,19 @@ from cpu_z_buffer import (  # noqa: E402
     MeshInput,
     RenderLimits,
     load_mesh,
+    mesh_bounds,
     render_contact_sheet,
     render_view,
     triangle_count,
+)
+
+
+PART_TINTS = (
+    DEFAULT_MATERIAL,
+    (104, 145, 181),
+    (140, 174, 205),
+    (92, 126, 158),
+    (156, 187, 214),
 )
 
 
@@ -44,7 +54,12 @@ def _save_png(image, destination: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stl")
+    parser.add_argument("stl", nargs="?")
+    parser.add_argument(
+        "--part",
+        action="append",
+        help="STL to include in a single-material multipart preview",
+    )
     parser.add_argument("--out")
     parser.add_argument("--size", type=int, default=DEFAULT_OUTPUT_SIZE)
     parser.add_argument(
@@ -72,6 +87,12 @@ def main() -> int:
     args = parser.parse_args()
     if bool(args.reference_view) != bool(args.reference_out):
         parser.error("--reference-view and --reference-out must be used together")
+    if args.stl and args.part:
+        parser.error("use either the positional STL or repeated --part inputs")
+    if not args.stl and not args.part:
+        parser.error("provide a positional STL or at least one --part")
+    if args.part and len(args.part) < 2:
+        parser.error("multipart preview requires at least two --part inputs")
     if args.size < 320:
         parser.error("--size must be at least 320")
 
@@ -89,19 +110,27 @@ def main() -> int:
                 "matched-view internal resolution exceeds the configured maximum "
                 f"of {limits.max_resolution} pixels"
             )
-        source = Path(args.stl).resolve()
+        sources = [Path(item).resolve() for item in (args.part or [args.stl])]
         destination = Path(
-            args.out or source.with_name(f"{source.stem}_views.png")
+            args.out or sources[0].with_name(f"{sources[0].stem}_views.png")
         ).resolve()
-        mesh = load_mesh(source)
-        inputs = [MeshInput(source.stem, mesh, DEFAULT_MATERIAL, source)]
+        inputs = [
+            MeshInput(
+                source.stem,
+                load_mesh(source),
+                PART_TINTS[index % len(PART_TINTS)],
+                source,
+            )
+            for index, source in enumerate(sources)
+        ]
         count = triangle_count(inputs)
         if count > limits.max_triangles:
             raise ValueError(
                 f"mesh has {count} triangles; configured maximum is "
                 f"{limits.max_triangles}"
             )
-        dimensions = mesh.extents
+        lower, upper = mesh_bounds(inputs)
+        dimensions = upper - lower
         contact = render_contact_sheet(
             inputs,
             args.size,
@@ -137,11 +166,22 @@ def main() -> int:
         result = {
             "checks": {
                 "finite_vertices": True,
-                "watertight": bool(mesh.is_watertight),
-                "winding_consistent": bool(mesh.is_winding_consistent),
+                "watertight": all(bool(item.mesh.is_watertight) for item in inputs),
+                "winding_consistent": all(
+                    bool(item.mesh.is_winding_consistent) for item in inputs
+                ),
             },
-            "dimensions_mm": [round(float(value), 4) for value in mesh.extents],
-            "mesh": {"path": str(source), "sha256": _digest(source)},
+            "dimensions_mm": [round(float(value), 4) for value in dimensions],
+            "meshes": [
+                {
+                    "name": item.name,
+                    "path": str(item.path),
+                    "preview_color_rgb": list(item.color),
+                    "sha256": _digest(item.path),
+                }
+                for item in inputs
+                if item.path is not None
+            ],
             "performance": {
                 "four_view_seconds": round(contact.elapsed_seconds, 6),
                 "parallel_views": False,
@@ -161,6 +201,11 @@ def main() -> int:
             "supported_views": list(SUPPORTED_VIEWS),
             "views": list(CONTACT_VIEWS),
         }
+        if len(inputs) == 1 and inputs[0].path is not None:
+            result["mesh"] = {
+                "path": str(inputs[0].path),
+                "sha256": _digest(inputs[0].path),
+            }
         if matched_path is not None and matched_stats is not None:
             result["matched_view"] = {
                 "name": args.reference_view,

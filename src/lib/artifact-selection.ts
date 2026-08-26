@@ -10,10 +10,11 @@ function modifiedTime(artifact: ArtifactSummary): number {
 /**
  * Choose the printable model produced by the latest CAD build.
  *
- * Single-color builds emit one combined STL. Multi-color builds emit a combined
- * 3MF after their per-region STLs. STEP is an export format here, not a browser
- * preview source. A same-time 3MF wins the tie without relying on filename
- * keywords such as "currentmodel".
+ * Single-color builds emit a top-level STL, using a combined STL for multipart
+ * assemblies. Multi-color builds emit a combined 3MF after their per-region
+ * STLs. STEP is an export format here, not a browser preview source. A
+ * same-time 3MF wins the tie without relying on filename keywords such as
+ * "currentmodel".
  */
 export function preferredPreviewArtifact(
   artifacts: readonly ArtifactSummary[],

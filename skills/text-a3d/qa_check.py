@@ -184,12 +184,60 @@ def _bbox_size(record: dict) -> list[float] | None:
     return values if all(np.isfinite(values)) else None
 
 
-def feature_measurements(report: dict | None) -> list[dict]:
+def _owned_by(record: dict, part_name: str | None) -> bool:
+    return part_name is None or record.get("part") == part_name
+
+
+def _report_part_for_stl(
+    report: dict | None,
+    stl_path: Path,
+    report_dir: Path | None = None,
+) -> str | None:
+    if report is None or report.get("schema") != "evidence-cad-assembly-build/v1":
+        return None
+    digest = sha256(stl_path.read_bytes()).hexdigest()
+    matches = [
+        key
+        for key, reference in report.get("artifacts", {}).items()
+        if key.startswith("stl:")
+        and isinstance(reference, dict)
+        and reference.get("sha256") == digest
+    ]
+    resolved_stl = stl_path.resolve()
+    path_matches = []
+    for key in matches:
+        raw_path = report["artifacts"][key].get("path")
+        if not isinstance(raw_path, str):
+            continue
+        candidate = Path(raw_path)
+        if not candidate.is_absolute() and report_dir is not None:
+            candidate = report_dir / candidate
+        if candidate.resolve() == resolved_stl:
+            path_matches.append(key)
+    if len(path_matches) == 1:
+        matches = path_matches
+    elif len(matches) != 1:
+        raise ValueError("assembly build report does not bind the audited STL")
+    key = matches[0]
+    if key == "stl:combined":
+        return None
+    part_name = key.removeprefix("stl:")
+    if part_name not in report.get("parts", {}):
+        raise ValueError("assembly build report references an unknown STL part")
+    return part_name
+
+
+def feature_measurements(
+    report: dict | None,
+    part_name: str | None = None,
+) -> list[dict]:
     if report is None:
         return []
     measurements = []
     ignored_roles = {"body", "envelope", "parent"}
     for feature_id, record in report.get("features", {}).items():
+        if not isinstance(record, dict) or not _owned_by(record, part_name):
+            continue
         size = _bbox_size(record)
         if size is None or record.get("role") in ignored_roles:
             continue
@@ -202,6 +250,8 @@ def feature_measurements(report: dict | None) -> list[dict]:
                 "size_mm": size,
             })
     for event in report.get("events", []):
+        if not isinstance(event, dict) or not _owned_by(event, part_name):
+            continue
         if event.get("kind") == "cut":
             size = _bbox_size(event.get("tool", {}))
             if size is not None:
@@ -225,26 +275,37 @@ def feature_measurements(report: dict | None) -> list[dict]:
     return measurements
 
 
-def _report_feature_bounds(report: dict | None) -> list[tuple[str, np.ndarray]]:
+def _report_feature_bounds(
+    report: dict | None,
+    part_name: str | None = None,
+) -> list[tuple[str, np.ndarray]]:
     if report is None:
         return []
     records = []
     for feature_id, record in report.get("features", {}).items():
+        if not isinstance(record, dict) or not _owned_by(record, part_name):
+            continue
         bbox = record.get("bbox_mm", {})
         if isinstance(bbox.get("min"), list) and isinstance(bbox.get("max"), list):
             records.append((feature_id, np.asarray([bbox["min"], bbox["max"]], dtype=float)))
     for event in report.get("events", []):
+        if not isinstance(event, dict) or not _owned_by(event, part_name):
+            continue
         bbox = event.get("tool", {}).get("bbox_mm", {})
         if isinstance(bbox.get("min"), list) and isinstance(bbox.get("max"), list):
             records.append((event.get("id", "unnamed-cut"), np.asarray([bbox["min"], bbox["max"]], dtype=float)))
     return records
 
 
-def _affected_features(bounds: np.ndarray | None, report: dict | None) -> list[str]:
+def _affected_features(
+    bounds: np.ndarray | None,
+    report: dict | None,
+    part_name: str | None = None,
+) -> list[str]:
     if bounds is None:
         return []
     result = []
-    for feature_id, feature_bounds in _report_feature_bounds(report):
+    for feature_id, feature_bounds in _report_feature_bounds(report, part_name):
         if np.all(bounds[1] >= feature_bounds[0]) and np.all(feature_bounds[1] >= bounds[0]):
             result.append(feature_id)
     return sorted(set(result))
@@ -256,6 +317,7 @@ def thickness_observation(
     target_mm: float,
     sample_limit: int,
     report: dict | None,
+    part_name: str | None = None,
 ) -> dict:
     triangle_centers = np.asarray(mesh.triangles_center, dtype=float)
     face_areas = np.asarray(mesh.area_faces, dtype=float)
@@ -305,7 +367,7 @@ def thickness_observation(
     p05_index = int(np.searchsorted(cumulative, cumulative[-1] * 0.05, side="left"))
     p05 = float(sorted_values[min(p05_index, len(sorted_values) - 1)])
     return {
-        "affected_feature_ids": _affected_features(risk_bounds, report),
+        "affected_feature_ids": _affected_features(risk_bounds, report, part_name),
         "minimum_mm": round(float(values.min()), 5),
         "p05_mm": round(p05, 5),
         "risk_bounds_mm": risk_bounds.round(5).tolist() if risk_bounds is not None else None,
@@ -323,6 +385,7 @@ def overhang_observation(
     threshold_deg: float,
     build_plane_tolerance: float,
     report: dict | None,
+    part_name: str | None = None,
 ) -> dict:
     normals = np.asarray(mesh.face_normals, dtype=float)
     triangles = np.asarray(mesh.triangles, dtype=float)
@@ -345,7 +408,7 @@ def overhang_observation(
     points = triangles[risky].reshape((-1, 3))
     risk_bounds = np.asarray([points.min(axis=0), points.max(axis=0)])
     return {
-        "affected_feature_ids": _affected_features(risk_bounds, report),
+        "affected_feature_ids": _affected_features(risk_bounds, report, part_name),
         "area_mm2": round(float(areas[risky].sum()), 5),
         "face_count": int(np.count_nonzero(risky)),
         "minimum_slope_deg": round(float(slopes[risky].min()), 5),
@@ -376,6 +439,11 @@ def main() -> int:
         profile, profile_hash = _load_profile(args.profile) if args.profile else (None, None)
         intent = _load_json(args.intent) if args.intent else None
         report = _load_json(args.report) if args.report else None
+        report_part = _report_part_for_stl(
+            report,
+            Path(args.stl),
+            Path(args.report).resolve().parent if args.report else None,
+        )
         if intent is not None:
             if profile is None:
                 raise ValueError("--intent requires the resolved --profile")
@@ -420,8 +488,24 @@ def main() -> int:
         {"max_ratio": args.max_degenerate_ratio},
     )
 
-    components = len(mesh.split(only_watertight=False)) if len(faces) else 0
-    audit.add("connected_components", components == args.components, components, args.components)
+    try:
+        components = (
+            len(mesh.split(only_watertight=False, repair=False)) if len(faces) else 0
+        )
+        audit.add(
+            "connected_components",
+            components == args.components,
+            components,
+            args.components,
+        )
+    except Exception as error:
+        components = None
+        audit.add(
+            "connected_components",
+            False,
+            {"error": str(error)},
+            args.components,
+        )
     volume = float(mesh.volume) if mesh.is_watertight and len(faces) else None
     positive_volume = volume is not None and np.isfinite(volume) and volume > 1e-6
     audit.add("positive_volume", positive_volume, volume, "> 0")
@@ -505,7 +589,7 @@ def main() -> int:
     if profile is not None:
         floor = float(profile["derived"]["single_line_floor_mm"])
         target = float(profile["derived"]["process_wall_target_mm"])
-        measurements = feature_measurements(report)
+        measurements = feature_measurements(report, report_part)
         if report is None:
             audit.skip(
                 "printability_feature_resolution",
@@ -547,6 +631,7 @@ def main() -> int:
                     target_mm=target,
                     sample_limit=max(args.thickness_samples, 32),
                     report=report,
+                    part_name=report_part,
                 )
                 audit.add(
                     "printability_wall_thickness",
@@ -615,6 +700,7 @@ def main() -> int:
                 ),
                 build_plane_tolerance=1e-4,
                 report=report,
+                part_name=report_part,
             )
             audit.add(
                 "printability_overhang",
@@ -680,6 +766,7 @@ def main() -> int:
             else None
         ),
         "report": str(Path(args.report).resolve()) if args.report else None,
+        "report_part": report_part,
         "schema": "evidence-mesh-audit/v3",
         "status": audit.status,
         "stl": str(Path(args.stl).resolve()),

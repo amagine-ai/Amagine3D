@@ -17,7 +17,8 @@ import re
 import sys
 from typing import Callable, Iterable
 
-from build123d import Unit, chamfer, export_step, export_stl, fillet
+from build123d import Compound, Unit, chamfer, export_step, export_stl, fillet
+from intent_contract import INTENT_SCHEMA, validate_manufacturing
 
 
 class BuildInvariantError(RuntimeError):
@@ -27,7 +28,8 @@ class BuildInvariantError(RuntimeError):
 _EVENTS: list[dict] = []
 _FEATURES: dict[str, dict] = {}
 _PARAMETERS: dict[str, dict] = {}
-_PARAMETER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
+_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
+_MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 
 
 def _parameter_overrides() -> dict:
@@ -56,7 +58,7 @@ def parameter(
     affects: tuple[str, ...] | list[str] = (),
 ) -> int | float:
     """Declare one bounded user-adjustable driving value."""
-    if not _PARAMETER_ID.fullmatch(parameter_id) or parameter_id in _PARAMETERS:
+    if not _ID_PATTERN.fullmatch(parameter_id) or parameter_id in _PARAMETERS:
         raise BuildInvariantError(f"invalid or duplicate parameter id: {parameter_id!r}")
     numbers = (default, min_value, max_value, step)
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numbers):
@@ -125,14 +127,31 @@ def _stats(shape) -> dict:
     }
 
 
-def observe(shape, feature_id: str, role: str = "feature") -> None:
+def observe(
+    shape,
+    feature_id: str,
+    role: str = "feature",
+    *,
+    part_name: str | None = None,
+) -> None:
     """Capture evidence before a feature disappears into a boolean result."""
     if feature_id in _FEATURES:
         raise BuildInvariantError(f"duplicate feature id: {feature_id}")
-    _FEATURES[feature_id] = {"role": role, **_stats(shape)}
+    _FEATURES[feature_id] = {
+        "role": role,
+        **({"part": part_name} if part_name is not None else {}),
+        **_stats(shape),
+    }
 
 
-def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
+def checked_cut(
+    body,
+    tool,
+    feature_id: str,
+    min_removed_mm3: float = 0.001,
+    *,
+    part_name: str | None = None,
+):
     """Subtract a tool and fail if it misses or produces an invalid result."""
     before = float(body.volume)
     tool_stats = _stats(tool)
@@ -146,6 +165,7 @@ def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
         "kind": "cut",
         "removed_mm3": round(removed, 6),
         "tool": tool_stats,
+        **({"part": part_name} if part_name is not None else {}),
     })
     if removed < min_removed_mm3:
         raise BuildInvariantError(
@@ -163,6 +183,7 @@ def _finish(
     feature_id: str,
     kind: str,
     allow_reduce: bool,
+    part_name: str | None,
 ):
     edges = list(selector(shape) if callable(selector) else selector)
     if not edges:
@@ -185,6 +206,7 @@ def _finish(
                 "id": feature_id,
                 "kind": kind,
                 "requested_mm": requested,
+                **({"part": part_name} if part_name is not None else {}),
             })
             return result
         except Exception as error:
@@ -201,8 +223,17 @@ def checked_fillet(
     feature_id: str,
     *,
     allow_reduce: bool = False,
+    part_name: str | None = None,
 ):
-    return _finish(shape, selector, radius_mm, feature_id, "fillet", allow_reduce)
+    return _finish(
+        shape,
+        selector,
+        radius_mm,
+        feature_id,
+        "fillet",
+        allow_reduce,
+        part_name,
+    )
 
 
 def checked_chamfer(
@@ -212,8 +243,86 @@ def checked_chamfer(
     feature_id: str,
     *,
     allow_reduce: bool = False,
+    part_name: str | None = None,
 ):
-    return _finish(shape, selector, length_mm, feature_id, "chamfer", allow_reduce)
+    return _finish(
+        shape,
+        selector,
+        length_mm,
+        feature_id,
+        "chamfer",
+        allow_reduce,
+        part_name,
+    )
+
+
+def _source_record(source_path: str | None) -> dict | None:
+    source = Path(source_path or sys.argv[0]).resolve()
+    return {"path": str(source), "sha256": _digest(source)} if source.is_file() else None
+
+
+def _intent_record(intent_path: str | None) -> tuple[Path | None, dict | None]:
+    if intent_path is None:
+        return None, None
+    intent = Path(intent_path).resolve()
+    if not intent.is_file():
+        raise BuildInvariantError(f"intent contract not found: {intent}")
+    return intent, {"path": str(intent), "sha256": _digest(intent)}
+
+
+def _validate_assembly_intent(
+    intent_path: Path,
+    name: str,
+    part_names: set[str],
+) -> dict:
+    try:
+        intent_data = json.loads(intent_path.read_text(encoding="utf-8"))
+    except Exception as error:
+        raise BuildInvariantError(f"could not read intent contract: {error}") from error
+    if not isinstance(intent_data, dict):
+        raise BuildInvariantError("intent contract must contain a JSON object")
+    if intent_data.get("schema") != INTENT_SCHEMA:
+        raise BuildInvariantError(f"intent contract must use {INTENT_SCHEMA}")
+    if intent_data.get("part") != name:
+        raise BuildInvariantError("intent part does not match the export name")
+    manufacturing = intent_data.get("manufacturing")
+    if not isinstance(manufacturing, dict) or manufacturing.get("mode") != "multipart":
+        raise BuildInvariantError(
+            "export_assembly requires manufacturing.mode='multipart' in the intent"
+        )
+    manufacturing_errors = validate_manufacturing(manufacturing)
+    if manufacturing_errors:
+        raise BuildInvariantError(
+            "invalid manufacturing contract: " + "; ".join(manufacturing_errors)
+        )
+    declared_names = {item["name"] for item in manufacturing["parts"]}
+    if declared_names != part_names:
+        raise BuildInvariantError(
+            "intent manufacturing part names do not match exported part names"
+        )
+    return manufacturing
+
+
+def _validate_assembly_evidence(part_names: set[str]) -> None:
+    observed_parts: set[str] = set()
+    for feature_id, record in _FEATURES.items():
+        owner = record.get("part")
+        if owner not in part_names:
+            raise BuildInvariantError(
+                f"assembly feature {feature_id!r} must name one exported part"
+            )
+        observed_parts.add(owner)
+    missing = sorted(part_names - observed_parts)
+    if missing:
+        raise BuildInvariantError(
+            f"every assembly part must have observed evidence; missing {missing}"
+        )
+    for event in _EVENTS:
+        owner = event.get("part")
+        if owner not in part_names:
+            raise BuildInvariantError(
+                f"assembly event {event.get('id')!r} must name one exported part"
+            )
 
 
 def export_part(
@@ -239,8 +348,7 @@ def export_part(
     export_step(shape, str(step_path), unit=Unit.MM)
     export_stl(shape, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
 
-    source = Path(source_path or sys.argv[0]).resolve()
-    intent = Path(intent_path).resolve() if intent_path else None
+    _, intent = _intent_record(intent_path) if intent_path else (None, None)
     report = {
         "artifacts": {
             "step": {"path": str(step_path.resolve()), "sha256": _digest(step_path)},
@@ -249,21 +357,132 @@ def export_part(
         "built_at": datetime.now(timezone.utc).isoformat(),
         "events": list(_EVENTS),
         "features": dict(_FEATURES),
-        "intent": (
-            {"path": str(intent), "sha256": _digest(intent)}
-            if intent and intent.is_file()
-            else None
-        ),
+        "intent": intent,
         "parameters": dict(_PARAMETERS),
         "part": name,
         "schema": "evidence-cad-build/v2",
         "shape": stats,
-        "source": (
-            {"path": str(source), "sha256": _digest(source)}
-            if source.is_file()
-            else None
-        ),
+        "source": _source_record(source_path),
     }
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2))
+    return report
+
+
+def export_assembly(
+    parts: dict,
+    name: str,
+    out_dir: str = ".",
+    *,
+    intent_path: str,
+    source_path: str | None = None,
+    max_overlap_mm3: float = 0.01,
+) -> dict:
+    """Export a single-material multi-part assembly.
+
+    Each named part must be one valid solid. The combined assembly STL may
+    contain multiple connected components, and the STEP keeps the same part
+    names as assembly children.
+    """
+    if not isinstance(parts, dict) or len(parts) < 2:
+        raise BuildInvariantError("export_assembly requires at least two parts")
+    if not isinstance(name, str) or not _MODEL_NAME.fullmatch(name):
+        raise BuildInvariantError(f"invalid assembly name: {name!r}")
+    if (
+        isinstance(max_overlap_mm3, bool)
+        or not isinstance(max_overlap_mm3, (int, float))
+        or not math.isfinite(max_overlap_mm3)
+        or max_overlap_mm3 < 0
+    ):
+        raise BuildInvariantError("max_overlap_mm3 must be finite and non-negative")
+
+    normalized = {}
+    for part_name, shape in parts.items():
+        if not isinstance(part_name, str) or not _ID_PATTERN.fullmatch(part_name):
+            raise BuildInvariantError(f"invalid assembly part name: {part_name!r}")
+        stats = _stats(shape)
+        if not stats["valid"] or stats["solid_count"] != 1:
+            raise BuildInvariantError(
+                f"assembly part {part_name!r} must be one valid solid, "
+                f"got {stats['solid_count']}"
+            )
+        normalized[part_name] = (shape, stats)
+
+    intent_path_resolved, intent = _intent_record(intent_path)
+    if intent_path_resolved is None or intent is None:
+        raise BuildInvariantError("export_assembly requires an intent contract")
+    manufacturing = _validate_assembly_intent(
+        intent_path_resolved, name, set(normalized)
+    )
+    _validate_assembly_evidence(set(normalized))
+    output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
+    output.mkdir(parents=True, exist_ok=True)
+
+    overlaps = {}
+    names = list(normalized)
+    for index, left in enumerate(names):
+        for right in names[index + 1:]:
+            try:
+                overlap = float((normalized[left][0] & normalized[right][0]).volume)
+            except Exception as error:
+                raise BuildInvariantError(
+                    f"could not compare overlap for {left!r} and {right!r}: {error}"
+                ) from error
+            pair_id = "&".join(sorted((left, right)))
+            overlaps[pair_id] = round(overlap, 6)
+            if overlap > max_overlap_mm3:
+                raise BuildInvariantError(
+                    f"assembly parts {left!r} and {right!r} overlap by "
+                    f"{overlap:.6f} mm^3"
+                )
+
+    artifacts = {}
+    children = []
+    for part_name, (shape, stats) in normalized.items():
+        path = output / f"{name}-{part_name}.stl"
+        export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        artifacts[f"stl:{part_name}"] = {
+            "path": str(path.resolve()),
+            "sha256": _digest(path),
+        }
+        try:
+            shape.label = part_name
+        except Exception:
+            pass
+        children.append(shape)
+
+    combined = Compound(children=children)
+    combined_stats = _stats(combined)
+    if not combined_stats["valid"]:
+        raise BuildInvariantError("combined assembly geometry is invalid")
+    combined_path = output / f"{name}-combined.stl"
+    export_stl(combined, str(combined_path), tolerance=0.01, angular_tolerance=0.1)
+    artifacts["stl:combined"] = {
+        "path": str(combined_path.resolve()),
+        "sha256": _digest(combined_path),
+    }
+
+    step_path = output / f"{name}.step"
+    export_step(combined, str(step_path), unit=Unit.MM)
+    artifacts["step"] = {"path": str(step_path.resolve()), "sha256": _digest(step_path)}
+
+    report = {
+        "assembly": {"max_overlap_mm3": float(max_overlap_mm3)},
+        "artifacts": artifacts,
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "combined": combined_stats,
+        "events": list(_EVENTS),
+        "features": dict(_FEATURES),
+        "intent": intent,
+        "manufacturing": manufacturing,
+        "overlaps_mm3": overlaps,
+        "parameters": dict(_PARAMETERS),
+        "part": name,
+        "parts": {part_name: stats for part_name, (_, stats) in normalized.items()},
+        "schema": "evidence-cad-assembly-build/v1",
+        "source": _source_record(source_path),
+    }
+    report_path = output / f"{name}_report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return report
