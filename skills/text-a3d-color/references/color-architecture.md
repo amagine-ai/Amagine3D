@@ -55,5 +55,5 @@ Use `step_check.py` on `NAME-assemble.step` for OCCT-backed master validation.
 That check proves CAD readability and shape structure; it does not prove Bambu
 print placement, display color, or support behavior.
 
-The colored four-view render is still mandatory: archive correctness cannot
+The colored five-view render is still mandatory: archive correctness cannot
 detect a geometrically misplaced color boundary.

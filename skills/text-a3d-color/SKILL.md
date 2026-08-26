@@ -205,7 +205,7 @@ Then verify the STEP assembly master with OCCT:
 python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids <N> --out "<name>_assemble-audit.json"
 ```
 
-Render all regions with contract colors, producing four views and the matched
+Render all regions with contract colors, producing five views and the matched
 view:
 
 ```bash

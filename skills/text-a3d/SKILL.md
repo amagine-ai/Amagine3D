@@ -240,7 +240,7 @@ layout:
 python "<SKILL_DIR>/render_preview.py" "<name>-display.glb" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
 ```
 
-Use `read` on the new four-view PNG and matched-view PNG. Compare every
+Use `read` on the new five-view PNG and matched-view PNG. Compare every
 contract landmark, silhouette, ratio, negative space, and unintended depth.
 For a truly corresponding orthographic/flat reference, also run
 `compare_silhouette.py` and read its overlay.

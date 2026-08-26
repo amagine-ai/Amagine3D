@@ -177,12 +177,13 @@ def main() -> int:
                 if item.path is not None
             ],
             "performance": {
-                "four_view_seconds": round(contact.elapsed_seconds, 6),
+                "contact_sheet_seconds": round(contact.elapsed_seconds, 6),
                 "parallel_views": False,
                 "peak_memory_bytes": max(int(traced_peak), peak_buffer_bytes),
                 "processes": 1,
                 "supersample": args.supersample,
                 "triangle_count": count,
+                "view_count": len(CONTACT_VIEWS),
                 "views": {stat.view: stat.to_dict() for stat in contact.stats},
             },
             "preview": {

@@ -179,8 +179,9 @@ explicitly asks for a one-piece slip-on sleeve.
 
 ## Visual decision
 
-The four-view render detects unintended depth and topology; the matched view
-tests silhouette and landmark placement. `compare_silhouette.py` is valid only
+The five-view render detects unintended depth, hidden-side placement, bottom
+features, and topology; the matched view tests silhouette and landmark
+placement. `compare_silhouette.py` is valid only
 for a flat or genuinely corresponding orthographic reference. Its IoU cannot
 prove depth, semantic identity, or printability.
 

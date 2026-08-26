@@ -60,7 +60,10 @@ class CpuZBufferRegressionTests(unittest.TestCase):
 
         # Opposite orthographic cameras must agree on the box's outline area.
         self.assertLess(abs(coverages["top"] - coverages["bottom"]), 0.01)
-        self.assertEqual(CONTACT_VIEWS, ("isometric", "front", "side", "top"))
+        self.assertEqual(
+            CONTACT_VIEWS,
+            ("isometric", "front", "side", "top", "bottom"),
+        )
 
     def test_double_through_hole_plate_has_no_false_top_face_groove(self) -> None:
         # Five coplanar solids form a plate with two fully enclosed square holes.
