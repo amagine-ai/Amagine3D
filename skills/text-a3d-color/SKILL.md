@@ -38,7 +38,7 @@ session working directory.
 - Read `references/bambu-printability.md` before every printable color task
 
 Requires build123d, lib3mf, trimesh, Rtree, Pillow, and NumPy. Preview rendering uses
-the headless, single-process CPU Z-buffer in `../cpu_z_buffer.py`; it does not
+the headless, single-process CPU Z-buffer in `cpu_z_buffer.py`; it does not
 need a GPU, display server, OpenGL, or Matplotlib.
 The renderer defaults to a 640-pixel output, 1x supersampling, a 1280-pixel
 internal view limit, and 500,000 input triangles. `--supersample 2`,

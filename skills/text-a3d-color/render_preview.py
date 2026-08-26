@@ -8,15 +8,9 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
-import sys
 import tracemalloc
 
-
-SKILLS_ROOT = Path(__file__).resolve().parents[1]
-if str(SKILLS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILLS_ROOT))
-
-from cpu_z_buffer import (  # noqa: E402
+from cpu_z_buffer import (
     CONTACT_VIEWS,
     DEFAULT_MAX_RESOLUTION,
     DEFAULT_OUTPUT_SIZE,
@@ -221,4 +215,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

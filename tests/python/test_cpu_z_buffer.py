@@ -11,9 +11,9 @@ import trimesh
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILLS_ROOT = ROOT / "skills"
-if str(SKILLS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILLS_ROOT))
+SKILL = ROOT / "skills" / "text-a3d"
+if str(SKILL) not in sys.path:
+    sys.path.insert(0, str(SKILL))
 
 from cpu_z_buffer import (  # noqa: E402
     BACKGROUND,
@@ -165,7 +165,7 @@ class CpuZBufferRegressionTests(unittest.TestCase):
         self.assertLess(rendered.peak_buffer_bytes, 2 * 1024 * 1024)
 
     def test_renderer_imports_only_headless_cpu_image_dependencies(self) -> None:
-        source = (SKILLS_ROOT / "cpu_z_buffer.py").read_text(encoding="utf-8")
+        source = (SKILL / "cpu_z_buffer.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             alias.name.split(".")[0]

@@ -13,6 +13,7 @@ class SharedSkillFileTests(unittest.TestCase):
     def test_intentionally_shared_files_do_not_drift(self):
         shared = (
             "compare_silhouette.py",
+            "cpu_z_buffer.py",
             "freshness_check.py",
             "reference_analyze.py",
         )
