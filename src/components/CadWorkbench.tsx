@@ -12,7 +12,10 @@ import styles from './CadWorkbench.module.css';
 import { LeftPanel } from './cad-workbench/LeftPanel';
 import { ParametersPanel } from './cad-workbench/ParametersPanel';
 import { PreviewPanel } from './cad-workbench/PreviewPanel';
-import { StorageDrawer } from './cad-workbench/StorageDrawer';
+import {
+  StorageDrawer,
+  type StorageDeleteSelection,
+} from './cad-workbench/StorageDrawer';
 import {
   type Language,
   type LeftView,
@@ -35,9 +38,11 @@ import {
   fetchModelParameters,
   fetchSessionCatalog,
   fetchSessionDetail,
+  fetchWorkspaceStorage,
   rebuildModelParameters,
   streamAgent,
   trashArtifacts,
+  trashStorageSessions,
 } from '../lib/agent-api';
 import { preferredPreviewArtifact } from '../lib/artifact-selection';
 import {
@@ -60,6 +65,7 @@ import {
   type HealthResponse,
   type ParameterModel,
   type SessionSummary,
+  type StorageSessionGroup,
 } from '../types';
 
 interface CadWorkbenchProps {
@@ -103,6 +109,7 @@ export function CadWorkbench({
     const [sessionLoading, setSessionLoading] = useState(true);
     const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
+    const [storageGroups, setStorageGroups] = useState<StorageSessionGroup[]>([]);
     const [storageLoading, setStorageLoading] = useState(false);
     const [webSearchEnabled, setWebSearchEnabled] = useState(false);
     const abortRef = useRef<AbortController | undefined>(undefined);
@@ -216,7 +223,11 @@ export function CadWorkbench({
       anchor.click();
     }
 
-    async function downloadArtifacts(selectedArtifacts: ArtifactSummary[]) {
+    async function downloadArtifactsForSession(
+      targetSessionId: string,
+      archiveName: string,
+      selectedArtifacts: ArtifactSummary[],
+    ) {
       if (selectedArtifacts.length === 0) return;
       if (selectedArtifacts.length === 1) {
         const artifact = selectedArtifacts[0];
@@ -224,12 +235,20 @@ export function CadWorkbench({
         return;
       }
       const archive = await fetchArtifactArchive(
-        sessionId,
+        targetSessionId,
         selectedArtifacts.map(({ path }) => path),
       );
       const url = URL.createObjectURL(archive);
-      triggerDownload(url, `${artifactWorkspace.id}-files.zip`);
+      triggerDownload(url, `${archiveName}-files.zip`);
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    async function downloadArtifacts(selectedArtifacts: ArtifactSummary[]) {
+      await downloadArtifactsForSession(
+        sessionId,
+        artifactWorkspace.id,
+        selectedArtifacts,
+      );
     }
 
     async function deleteArtifacts(selectedArtifacts: ArtifactSummary[]) {
@@ -245,13 +264,66 @@ export function CadWorkbench({
       }
     }
 
+    async function refreshWorkspaceStorage() {
+      setStorageLoading(true);
+      try {
+        const storage = await fetchWorkspaceStorage();
+        setStorageGroups(storage.groups);
+      } catch (error) {
+        addRuntimeEntry(errorText(error, language), 'storage', 'error');
+      } finally {
+        setStorageLoading(false);
+      }
+    }
+
+    async function deleteStorageSelection(selection: StorageDeleteSelection) {
+      if (running || parameterBuilding) return;
+      const selectedSessionIds = new Set(selection.sessionIds);
+      const artifactGroups = selection.artifactGroups.filter(
+        ({ paths, sessionId: targetSessionId }) =>
+          paths.length > 0 && !selectedSessionIds.has(targetSessionId),
+      );
+      if (selectedSessionIds.size > 0) {
+        await trashStorageSessions([...selectedSessionIds]);
+      }
+      await Promise.all(
+        artifactGroups.map(({ paths, sessionId: targetSessionId }) =>
+          trashArtifacts(targetSessionId, paths),
+        ),
+      );
+
+      const [catalog, storage] = await Promise.all([
+        fetchSessionCatalog(),
+        fetchWorkspaceStorage(),
+      ]);
+      setSessions(catalog.sessions);
+      setStorageGroups(storage.groups);
+
+      const activeSessionDeleted =
+        selectedSessionIds.has(sessionId) ||
+        !catalog.sessions.some((session) => session.id === sessionId);
+      if (activeSessionDeleted) {
+        const fallbackSession =
+          catalog.sessions.find(({ id }) => id === catalog.initialSessionId) ??
+          catalog.sessions[0];
+        if (fallbackSession) await openSession(fallbackSession);
+        return;
+      }
+      if (artifactGroups.some((group) => group.sessionId === sessionId)) {
+        await refreshArtifacts();
+      }
+    }
+
     function selectInitialArtifact(nextArtifacts: ArtifactSummary[]) {
       setSelectedPath(
         preferredPreviewArtifact(nextArtifacts)?.path ?? nextArtifacts[0]?.path,
       );
     }
 
-    async function openSession(target: SessionSummary) {
+    async function openSession(
+      target: SessionSummary,
+      preferredArtifactPath?: string,
+    ) {
       if (running || parameterBuilding || sessionLoading || target.id === sessionId) {
         setSessionMenuOpen(false);
         return;
@@ -284,7 +356,13 @@ export function CadWorkbench({
         setArtifactWorkspace(detail.artifactWorkspace);
         setParameterModels(parameterCollection.models);
         setParameterIssue(undefined);
-        selectInitialArtifact(detail.artifacts);
+        setSelectedPath(
+          preferredArtifactPath &&
+            detail.artifacts.some(({ path }) => path === preferredArtifactPath)
+            ? preferredArtifactPath
+            : preferredPreviewArtifact(detail.artifacts)?.path ??
+                detail.artifacts[0]?.path,
+        );
       } catch (error) {
         addRuntimeEntry(errorText(error, language), 'session', 'error');
       } finally {
@@ -318,6 +396,25 @@ export function CadWorkbench({
         setStorageLoading(false);
       }
     }
+
+    async function selectStorageArtifact(
+      target: SessionSummary,
+      artifact: ArtifactSummary,
+    ) {
+      onStorageOpenChange?.(false);
+      if (target.id === sessionId) {
+        selectArtifact(artifact);
+        return;
+      }
+      await openSession(target, artifact.path);
+      if (artifact.kind === 'model' || artifact.kind === 'image') {
+        setLeftView('files');
+      }
+    }
+
+    useEffect(() => {
+      if (storageOpen) void refreshWorkspaceStorage();
+    }, [storageOpen]);
 
     useEffect(() => {
       setParameterIssue(undefined);
@@ -492,6 +589,7 @@ export function CadWorkbench({
         void fetchSessionCatalog()
           .then((catalog) => setSessions(catalog.sessions))
           .catch(() => undefined);
+        if (storageOpen) void refreshWorkspaceStorage();
         return;
       }
       updateDraftTurn(draftId, (turn) =>
@@ -828,19 +926,23 @@ export function CadWorkbench({
         />
         {storageOpen ? (
           <StorageDrawer
-            artifactWorkspace={artifactWorkspace}
-            artifacts={artifacts}
+            groups={storageGroups}
             language={language}
             loading={storageLoading}
             onClose={() => onStorageOpenChange?.(false)}
-            onDelete={deleteArtifacts}
-            onDownload={downloadArtifacts}
-            onRefresh={() => void refreshArtifacts()}
-            onSelect={(artifact) => {
-              selectArtifact(artifact);
-              onStorageOpenChange?.(false);
-            }}
-            workspaceName={artifactWorkspaceName}
+            onDelete={deleteStorageSelection}
+            onDownload={(targetSessionId, selectedArtifacts) =>
+              downloadArtifactsForSession(
+                targetSessionId,
+                targetSessionId,
+                selectedArtifacts,
+              )
+            }
+            onRefresh={() => void refreshWorkspaceStorage()}
+            onSelect={(targetSession, artifact) =>
+              void selectStorageArtifact(targetSession, artifact)
+            }
+            sessionTitle={sessionTitle}
           />
         ) : null}
       </div>

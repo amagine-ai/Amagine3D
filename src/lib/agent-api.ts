@@ -8,6 +8,7 @@ import type {
   ParameterModel,
   SessionCatalog,
   SessionDetail,
+  WorkspaceStorage,
 } from '../types';
 
 interface StreamAgentOptions {
@@ -35,6 +36,12 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
   const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
   if (!response.ok) throw new Error('无法读取这个会话。');
   return (await response.json()) as SessionDetail;
+}
+
+export async function fetchWorkspaceStorage(): Promise<WorkspaceStorage> {
+  const response = await fetch('/api/sessions/storage');
+  if (!response.ok) throw new Error('无法读取工作区存储。');
+  return (await response.json()) as WorkspaceStorage;
 }
 
 export async function fetchArtifacts(
@@ -113,6 +120,15 @@ export async function trashArtifacts(
     },
   );
   if (!response.ok) throw new Error('无法将所选文件移动到回收站。');
+}
+
+export async function trashStorageSessions(sessionIds: string[]): Promise<void> {
+  const response = await fetch('/api/sessions/storage/trash', {
+    body: JSON.stringify({ sessionIds }),
+    headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('无法将所选会话移动到回收站。');
 }
 
 export async function streamAgent({

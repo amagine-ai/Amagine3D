@@ -196,6 +196,11 @@
   cursor: pointer;
 }
 
+.folderSelectAll:disabled,
+.storageFileCheckbox:disabled {
+  cursor: not-allowed;
+}
+
 .storageFolderToggle {
   display: grid;
   grid-template-columns: 1.75rem minmax(0, 1fr);
@@ -267,6 +272,13 @@
   margin: 0.25rem 0 0.5rem 2.25rem;
   padding: 0 var(--space-2xs) 0 0;
   list-style: none;
+}
+
+.emptyFolder {
+  margin: 0.5rem 0 0.875rem 2.25rem;
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
 }
 
 .folderFileList li {
