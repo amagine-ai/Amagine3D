@@ -150,6 +150,14 @@ export interface SessionDetail extends ArtifactCollection {
   session: SessionSummary;
 }
 
+export interface StorageSessionGroup extends ArtifactCollection {
+  session: SessionSummary;
+}
+
+export interface WorkspaceStorage {
+  groups: StorageSessionGroup[];
+}
+
 export interface PythonHealth {
   executable: string | null;
   ready: boolean;

@@ -30,10 +30,15 @@ import {
   BUILTIN_POMODORO_SESSION,
   findUserSession,
   listSessionCatalog,
+  listWorkspaceStorage,
   readSessionMessages,
   sessionWorkspaceRoot,
   userSessionArtifacts,
 } from '../sessions.ts';
+import {
+  MAX_TRASH_SESSIONS,
+  moveSessionsToTrash,
+} from '../session-trash.ts';
 
 export interface SessionRoutePaths {
   bundledPomodoroRoot: string;
@@ -48,6 +53,42 @@ export function registerSessionRoutes(
 ): void {
   app.get('/api/sessions', async (_request, response) => {
     response.json(await listSessionCatalog(paths.sessionRoot));
+  });
+
+  app.get('/api/sessions/storage', async (_request, response) => {
+    response.json(
+      await listWorkspaceStorage(
+        paths.sessionRoot,
+        paths.workspaceRoot,
+        paths.bundledPomodoroRoot,
+      ),
+    );
+  });
+
+  app.post('/api/sessions/storage/trash', async (request, response) => {
+    const requestedSessionIds: unknown = request.body?.sessionIds;
+    if (
+      !Array.isArray(requestedSessionIds) ||
+      requestedSessionIds.length === 0 ||
+      requestedSessionIds.length > MAX_TRASH_SESSIONS ||
+      requestedSessionIds.some((sessionId) => typeof sessionId !== 'string')
+    ) {
+      response
+        .status(400)
+        .json({ message: 'At least one valid session id is required.' });
+      return;
+    }
+    const sessionIds = requestedSessionIds as string[];
+    const trashed = await moveSessionsToTrash(
+      paths.sessionRoot,
+      paths.workspaceRoot,
+      sessionIds,
+    );
+    if (trashed === undefined) {
+      response.status(404).json({ message: 'Session not found.' });
+      return;
+    }
+    response.json({ trashed });
   });
 
   app.get('/api/sessions/:sessionId', async (request, response) => {

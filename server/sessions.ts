@@ -13,6 +13,7 @@ import {
   type ChatMessage,
   type SessionCatalog,
   type SessionSummary,
+  type WorkspaceStorage,
 } from '../src/types.ts';
 import { scanArtifacts } from './artifacts.ts';
 import { bundledPomodoroArtifacts } from './bundled-workspace.ts';
@@ -82,6 +83,27 @@ export async function listSessionCatalog(
   return {
     initialSessionId: userSessions[0]?.id ?? BUNDLED_POMODORO_SESSION_ID,
     sessions: [...userSessions, BUILTIN_POMODORO_SESSION],
+  };
+}
+
+export async function listWorkspaceStorage(
+  sessionRoot: string,
+  workspaceRoot: string,
+  bundledPomodoroRoot: string,
+): Promise<WorkspaceStorage> {
+  const catalog = await listSessionCatalog(sessionRoot);
+  const groups = await Promise.all(
+    catalog.sessions.map(async (session) => {
+      const collection = await artifactsForSession(
+        workspaceRoot,
+        bundledPomodoroRoot,
+        session.id,
+      );
+      return collection ? { ...collection, session } : undefined;
+    }),
+  );
+  return {
+    groups: groups.filter((group) => group !== undefined),
   };
 }
 

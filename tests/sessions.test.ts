@@ -8,27 +8,31 @@ import { CURRENT_SESSION_VERSION } from '@amagine3d/a3d-runtime';
 
 import { CHAT_TURN_CUSTOM_TYPE } from '../src/lib/chat-turn.ts';
 import {
+  listWorkspaceStorage,
   listSessionCatalog,
   readSessionMessages,
   sessionWorkspaceRoot,
   userSessionArtifacts,
 } from '../server/sessions.ts';
+import { moveSessionsToTrash } from '../server/session-trash.ts';
 
 const SESSION_ID = '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93';
+const OTHER_SESSION_ID = '78a8b125-4c0f-49ac-a246-06bff8a4cc7e';
 
 async function writeSession(
   sessionRoot: string,
   workspace: string,
   firstUserText = '生成一个桌面支架',
+  sessionId = SESSION_ID,
 ): Promise<string> {
   const timestamp = '2026-08-23T08:00:00.000Z';
   const occurredAt = Date.parse(timestamp);
-  const path = join(sessionRoot, `2026-08-23T08-00-00-000Z_${SESSION_ID}.jsonl`);
+  const path = join(sessionRoot, `2026-08-23T08-00-00-000Z_${sessionId}.jsonl`);
   const entries = [
     {
       type: 'session',
       version: CURRENT_SESSION_VERSION,
-      id: SESSION_ID,
+      id: sessionId,
       timestamp,
       cwd: workspace,
     },
@@ -176,6 +180,78 @@ test('uses the virtual built-in session only when no user session exists', async
       ['user', 'builtin'],
     );
     assert.equal(catalog.sessions[0]?.title, '生成一个桌面支架');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('lists workspace storage grouped by every session', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-workspace-storage-'));
+  try {
+    const sessionRoot = join(root, 'sessions');
+    const workspace = join(root, 'workspace');
+    const bundled = join(root, 'bundled');
+    await mkdir(sessionRoot);
+    await mkdir(bundled);
+
+    const selectedRoot = sessionWorkspaceRoot(workspace, SESSION_ID)!;
+    const otherRoot = sessionWorkspaceRoot(workspace, OTHER_SESSION_ID)!;
+    await mkdir(selectedRoot, { recursive: true });
+    await mkdir(otherRoot, { recursive: true });
+    await writeFile(join(selectedRoot, 'selected.stl'), 'solid selected');
+    await writeFile(join(otherRoot, 'other.py'), 'print("other")');
+    await writeSession(sessionRoot, selectedRoot, '第一个模型', SESSION_ID);
+    await writeSession(sessionRoot, otherRoot, '第二个模型', OTHER_SESSION_ID);
+
+    const storage = await listWorkspaceStorage(sessionRoot, workspace, bundled);
+    const userGroups = storage.groups.filter(
+      ({ session }) => session.kind === 'user',
+    );
+    assert.deepEqual(
+      new Set(userGroups.map(({ session }) => session.id)),
+      new Set([SESSION_ID, OTHER_SESSION_ID]),
+    );
+    assert.deepEqual(
+      new Map(
+        userGroups.map(({ artifacts, session }) => [
+          session.id,
+          artifacts.map(({ name }) => name),
+        ]),
+      ),
+      new Map([
+        [SESSION_ID, ['selected.stl']],
+        [OTHER_SESSION_ID, ['other.py']],
+      ]),
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('moves session metadata and workspace folders to trash together', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-session-trash-'));
+  try {
+    const sessionRoot = join(root, 'sessions');
+    const workspace = join(root, 'workspace');
+    await mkdir(sessionRoot);
+    const selectedRoot = sessionWorkspaceRoot(workspace, SESSION_ID)!;
+    await mkdir(selectedRoot, { recursive: true });
+    await writeFile(join(selectedRoot, 'selected.stl'), 'solid selected');
+    const sessionPath = await writeSession(sessionRoot, selectedRoot);
+    let movedPaths: string[] = [];
+
+    const trashed = await moveSessionsToTrash(
+      sessionRoot,
+      workspace,
+      [SESSION_ID],
+      (paths) => {
+        movedPaths = paths;
+        return Promise.resolve();
+      },
+    );
+
+    assert.equal(trashed, 1);
+    assert.deepEqual(new Set(movedPaths), new Set([sessionPath, selectedRoot]));
   } finally {
     await rm(root, { force: true, recursive: true });
   }
