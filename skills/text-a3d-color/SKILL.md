@@ -2,10 +2,11 @@
 name: text-a3d-color
 description: >
   Evidence-driven multi-color CAD and manufacturing-region synthesis. Creates
-  per-region STLs, a colored 3MF, and STEP assembly from explicit color
-  semantics, deterministic palette reduction, strict overlap/coverage checks,
-  archive color readback, pinned Bambu printability evidence, provenance
-  hashes, and mandatory colored-view review.
+  per-region topology STLs, a colored print 3MF, clean manufacturing mesh, and
+  STEP assembly masters plus display GLB models from explicit color semantics,
+  deterministic palette reduction, strict overlap/coverage checks, archive
+  color readback, pinned Bambu printability evidence, provenance hashes, and
+  mandatory colored-view review.
   Takes priority when reference colors identify screens, controls, text/logos,
   materials, inlays, functional regions, or the object's recognizable palette,
   even if the user does not mention multi-color, 3MF, or AMS.
@@ -29,8 +30,9 @@ session working directory.
 - `examples/intent.example.json` is a copyable valid color contract
 - `cad_helpers.py` validates regions, optional parent coverage, and provenance
 - `export_3mf.py` writes a shared palette and reads object colors from 3MF XML
-- `qa_check.py` audits region topology and the combined manufacturing mesh
+- `qa_check.py` audits region topology and the clean manufacturing mesh
 - `assembly_check.py` cross-checks build regions against the stored 3MF colors
+- `step_check.py` audits STEP assembly masters with OCCT
 - `render_preview.py` creates orthographic, hash-bound color evidence
 - `freshness_check.py` and `compare_silhouette.py` close the run
 - Read `references/evidence-contract.md` for every generated color task
@@ -90,10 +92,11 @@ frequency: rare logo/control colors are not disposable. Validate:
 python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 ```
 
-The contract must bind the profile hash, build orientation, support policy,
-wall target, functional acceptance criteria, critical feature IDs, and each
-region's optical transmission. Critical IDs must later resolve to named build
-evidence; for routed cavities, observe a representative local cross-section.
+The contract must bind the profile hash, fixed object coordinate system, build
+orientation, support policy, wall target, functional acceptance criteria,
+critical feature IDs, and each region's optical transmission. Critical IDs
+must later resolve to named build evidence; for routed cavities, observe a
+representative local cross-section.
 
 ## 2. Design region architecture
 
@@ -101,8 +104,14 @@ Read `references/color-architecture.md` and
 `references/bambu-printability.md`. Choose parent split, inset, raised overlay,
 or separately assembled insert for every boundary. Build the complete parent
 form first when regions collectively represent one co-printed body; this
-enables coverage checking, a combined manufacturing STL, and support analysis
+enables coverage checking, a clean manufacturing STL, and support analysis
 without false positives at material interfaces.
+
+Use the fixed object frame from the intent: `+X` user right, `+Y` object back,
+and `+Z` object top. Front is `Y-min`; bottom is `Z-min`. Put ports, holes, and
+cutouts on named semantic faces. A bottom opening is valid when the contract
+says it belongs on the bottom; an accidental front/bottom edge cut is a design
+failure, not a Z0 rule failure.
 
 The color contract defines region name, hex, optical material, purpose,
 geometric boundary, and evidence. Use the profile's line-width and wall targets
@@ -144,10 +153,14 @@ if __name__ == "__main__":
 
 For separately assembled inserts whose union intentionally differs from one
 parent, omit `parent=` only after recording that architecture in the contract.
-`export_regions()` always emits `<name>-combined.stl`; when `parent=` is
-provided the combined file is the coverage-checked parent without internal
-material-interface faces. It also emits `<name>_material-plan.json` because 3MF
-RGB values cannot encode translucency or filament chemistry.
+`export_regions()` always emits `NAME.3mf` as the multi-color print package,
+`NAME-manufacturing.stl` as the clean printability mesh,
+`NAME-region-REGION.stl` as region topology evidence, `NAME-assemble.step` as
+the physical assembly master, and `NAME-display.glb` as the display master.
+When `parent=` is provided, the manufacturing STL is the coverage-checked
+parent without internal material-interface faces. It also emits
+`NAME_material-plan.json` because 3MF RGB values cannot encode translucency or
+filament chemistry.
 
 Expose every meaningful user-adjustable driving dimension with `parameter()`:
 overall dimensions plus local feature, interface, inset, clearance, and region
@@ -156,8 +169,8 @@ bounds, a positive step, unit, label, group, and the feature or region IDs it
 affects. Add concise `label_zh` and `group_zh` translations while keeping IDs and
 Python variable names stable in English. Localized fields are presentation
 metadata only. Derived coordinates and palette values are not independent
-slider parameters. Every override must rebuild the entire region set and
-combined 3MF; never publish a parameter that is unused by the full model
+slider parameters. Every override must rebuild the entire region set and print
+3MF; never publish a parameter that is unused by the full model
 construction.
 
 ## 4. Audit meshes, archive, and appearance
@@ -166,17 +179,18 @@ Audit every region STL for topology only. Do not run overhang checks on an
 isolated co-printed region because adjacent materials may provide support:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>-<region>.stl" --topology-only --region <region> --components <N> --out "<name>-<region>_mesh-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>-region-<region>.stl" --topology-only --region <region> --components <N> --out "<name>-region-<region>_mesh-audit.json"
 ```
 
-Run Bambu manufacturing checks exactly once on the combined STL:
+Run Bambu manufacturing checks exactly once on the clean manufacturing STL:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>-combined.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --require-z0 --out "<name>-combined_mesh-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>-manufacturing.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --require-z0 --out "<name>_manufacturing-audit.json"
 ```
 
 Read every `fail`, `warning`, and `not_evaluated` result. A region topology
-pass cannot replace the combined bed-fit, wall, feature, or overhang evidence.
+pass cannot replace the manufacturing bed-fit, wall, feature, or overhang
+evidence.
 
 Then verify that 3MF names and colors match the build report:
 
@@ -184,11 +198,17 @@ Then verify that 3MF names and colors match the build report:
 python "<SKILL_DIR>/assembly_check.py" "<name>_report.json" "<name>.3mf" --out "<name>_assembly-audit.json"
 ```
 
+Then verify the STEP assembly master with OCCT:
+
+```bash
+python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids <N> --out "<name>_assemble-audit.json"
+```
+
 Render all regions with contract colors, producing four views and the matched
 view:
 
 ```bash
-python "<SKILL_DIR>/render_preview.py" --part "<name>-<region-a>.stl=#RRGGBB" --part "<name>-<region-b>.stl=#RRGGBB" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
+python "<SKILL_DIR>/render_preview.py" --part "<name>-region-<region-a>.stl=#RRGGBB" --part "<name>-region-<region-b>.stl=#RRGGBB" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
 ```
 
 Use `read` on both. Judge geometry landmarks, silhouette/depth, region
@@ -201,18 +221,20 @@ Repair the failed evidence class: parent geometry, region boundary, palette
 mapping, mesh topology, bed fit, feature size, wall thickness, overhang,
 archive assignment, or visual placement. Never lower the profile limits or
 scale fixed user dimensions to clear QA. Every change requires rebuild, all
-affected region audits, combined audit, assembly audit, render, and read.
+affected region audits, manufacturing audit, 3MF assembly audit, STEP assembly
+audit, render, and read.
 Maximum three evidence-repair passes; disclose remaining failures at the cap.
 
 Freshness must cover the printer profile, intent, palette plan when used,
-source, every region STL, combined STL, STEP, 3MF, material plan, build report,
-region mesh audits, combined manufacturing audit, assembly audit, visual
-previews, and the render evidence report.
+source, every region STL, manufacturing STL, assembly STEP, display GLB, 3MF,
+material plan, build report, region mesh audits, manufacturing audit, 3MF
+assembly audit, STEP assembly audit, visual previews, and the render evidence
+report.
 
 Deliver the complete evidence bundle. Report geometry, region integrity, 3MF
-readback, material/transmission assignment, freshness, visual fidelity, palette
-fidelity, bed fit, feature resolution, walls, and overhangs as separate
-statuses. Summarize the combined result as `print preflight passed`, `print
+readback, STEP master validity, material/transmission assignment, freshness,
+visual fidelity, palette fidelity, bed fit, feature resolution, walls, and
+overhangs as separate statuses. Summarize the print result as `print preflight passed`, `print
 preflight passed with warnings`, or `print preflight failed`. Report `actual
 slicer validation: not evaluated` unless a real Bambu Studio or equivalent
 slicer run was completed. For Bambu Studio, prefer the colored 3MF; region STLs

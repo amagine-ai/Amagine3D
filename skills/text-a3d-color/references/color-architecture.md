@@ -42,12 +42,18 @@ without recording the compromise.
 ## Closed-loop verification
 
 `export_regions()` checks region validity, overlap, optional parent coverage,
-cross-checks the intent's region names/colors, exports the combined
-manufacturing STL and material plan, and writes artifact hashes.
+cross-checks the intent's region names/colors, exports
+`NAME-manufacturing.stl`, `NAME.3mf`, `NAME-assemble.step`,
+`NAME-display.glb`, region topology STLs, the material plan, and artifact
+hashes.
 `export_3mf.py` stores a shared palette and reads the archive XML back.
 `assembly_check.py` compares the expected region names/colors against what is
 actually stored in the 3MF. Optical transmission remains a material-plan and
 slicer-assignment requirement because RGB readback cannot prove it.
+
+Use `step_check.py` on `NAME-assemble.step` for OCCT-backed master validation.
+That check proves CAD readability and shape structure; it does not prove Bambu
+print placement, display color, or support behavior.
 
 The colored four-view render is still mandatory: archive correctness cannot
 detect a geometrically misplaced color boundary.

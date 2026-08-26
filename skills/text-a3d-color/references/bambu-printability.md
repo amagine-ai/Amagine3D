@@ -4,7 +4,7 @@ Resolve this skill's printer profile before geometry. The profile fixes the
 machine, selected tool, nozzle, standard process, printable polygon, line-width
 floor, wall target, and support threshold for the entire evidence run.
 
-## Audit the manufacturing union
+## Audit the manufacturing mesh
 
 Color-region meshes are semantic partitions, not independent evidence of how a
 co-printed object is supported. A downward face in one region may sit directly
@@ -12,14 +12,16 @@ on another material. For that reason:
 
 1. Audit each region with `--topology-only` to prove its mesh and components.
 2. Pass `parent=` for every co-printed body so `export_regions()` can prove
-   coverage and export a clean `<name>-combined.stl`.
-3. Run profile-backed bed, feature, wall, and overhang checks on that combined
-   STL only.
+   coverage and export a clean `NAME-manufacturing.stl`.
+3. Run profile-backed bed, feature, wall, and overhang checks on that
+   manufacturing STL only.
 
 If regions are separately manufactured parts, omit `parent=` only when the
-intent records that architecture. The combined STL may then have multiple
-components; pass the reported combined `solid_count` to `--components` and
-review each part's actual print orientation separately.
+intent records that architecture. The manufacturing STL may then have multiple
+components; pass the reported `manufacturing.solid_count` to `--components` and
+review each part's actual print orientation separately. `NAME.3mf` is the
+colored print package for the slicer. `NAME-region-REGION.stl` files prove
+region topology; they are not substitutes for manufacturing printability QA.
 
 ## Design targets
 
@@ -39,7 +41,7 @@ review each part's actual print orientation separately.
 ## Supports and orientation
 
 The profile's support angle is measured upward from horizontal. Prefer a
-support-free orientation for the combined assembly. Reorient, slope, chamfer,
+support-free orientation for the manufacturing assembly. Reorient, slope, chamfer,
 arch, or split the object before declaring supports required. Do not treat a
 bridge as automatically safe, and do not infer support need from an isolated
 co-printed region.

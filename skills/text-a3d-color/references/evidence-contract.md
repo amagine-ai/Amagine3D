@@ -9,6 +9,17 @@ skill's `intent_contract.py`.
   "part": "product-name",
   "task_mode": "reference-reproduction",
   "representation": "full-3d",
+  "coordinate_system": {
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+    "front": "y-min",
+    "back": "y-max",
+    "left": "x-min",
+    "right": "x-max",
+    "bottom": "z-min",
+    "top": "z-max"
+  },
   "reference_files": [
     {"path": "/absolute/reference.png", "sha256": "...", "role": "appearance"}
   ],
@@ -92,15 +103,26 @@ optical assignments.
 Declare functional and identity-bearing requirements independently in
 `features`. Every item needs evidence and a concrete acceptance condition.
 Every `printability.critical_features` ID must reference that list and must
-later appear as a named `observe()` record or checked operation in the v3
+later appear as a named `observe()` record or checked operation in the v4
 build report. For routed cavities, record a representative cross-section as a
 separate named feature; the overall bounding box of a bent or compound cutting
 tool does not prove local clearance.
 
+Use the fixed object semantic coordinate system in every design. `+X` is the
+user's right, `+Y` is the object's back, and `+Z` is the object's top. Front is
+`Y-min`; bottom is `Z-min`. Define every port, window, switch, and color
+boundary by semantic face and direction first. A bottom opening is valid when
+it is explicitly bottom-facing; an accidental cut spanning the front/bottom
+edge fails the design contract.
+
 The printability profile must come from this skill's `bambu_profile.py`. Its
 hash locks the machine, selected tool, nozzle, process, bed, feature floor,
-wall target, and support threshold. Use the combined manufacturing STL for
-printability evidence; isolated region meshes are topology evidence only.
+wall target, and support threshold. Use `NAME-manufacturing.stl` for
+printability evidence; isolated `NAME-region-REGION.stl` meshes are topology
+evidence only. Use `NAME.3mf` for slicer color packaging and archive readback.
+Use `NAME-assemble.step` for OCCT-backed CAD master checks; STEP checks do not
+replace print-bed mesh QA. Use `NAME-display.glb` as the user-visible colored
+display model; GLB does not replace CAD topology QA.
 
 Allowed task modes are `specification`, `reference-reproduction`,
 `reference-inspired`, `recognizable-form`, and `inspect`. Matched visual views

@@ -1,4 +1,4 @@
-"""Audit color-region topology or the combined Bambu-printable assembly."""
+"""Audit color-region topology or the manufacturing printability mesh."""
 
 from __future__ import annotations
 
@@ -336,7 +336,7 @@ def overhang_observation(mesh, *, threshold_deg: float, build_plane_tolerance: f
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stl")
-    parser.add_argument("--region", default="combined")
+    parser.add_argument("--region", default="manufacturing")
     parser.add_argument("--topology-only", action="store_true")
     parser.add_argument("--profile")
     parser.add_argument("--intent")
@@ -362,20 +362,26 @@ def main() -> int:
             expected_hash = intent.get("printability", {}).get("profile", {}).get("sha256")
             if expected_hash != profile_hash:
                 raise ValueError("printer profile does not match the intent contract hash")
-        if not args.topology_only and (profile is None or intent is None or report is None):
-            raise ValueError("combined manufacturing audit requires --profile, --intent, and --report")
+        if not args.topology_only and (
+            profile is None or intent is None or report is None
+        ):
+            raise ValueError(
+                "manufacturing audit requires --profile, --intent, and --report"
+            )
         if not args.topology_only:
             if intent.get("schema") != "evidence-color-intent/v3":
                 raise ValueError("unsupported color intent schema; expected v3")
-            if report.get("schema") != "evidence-color-build/v3":
-                raise ValueError("unsupported color build report schema; expected v3")
+            if report.get("schema") != "evidence-color-build/v5":
+                raise ValueError("unsupported color build report schema; expected v5")
             if report.get("part") != intent.get("part"):
                 raise ValueError("build report part does not match the intent contract")
             if report.get("intent", {}).get("sha256") != _digest(args.intent):
                 raise ValueError("build report is not bound to the supplied intent")
-            combined = report.get("artifacts", {}).get("stl:combined", {})
-            if combined.get("sha256") != _digest(args.stl):
-                raise ValueError("build report is not bound to the supplied combined STL")
+            manufacturing = report.get("artifacts", {}).get("stl:manufacturing", {})
+            if manufacturing.get("sha256") != _digest(args.stl):
+                raise ValueError(
+                    "build report is not bound to the supplied manufacturing STL"
+                )
             target = intent.get("printability", {}).get("minimum_wall_target_mm")
             if not isinstance(target, (int, float)) or isinstance(target, bool) or target <= 0:
                 raise ValueError("intent minimum wall target must be positive")
@@ -469,7 +475,7 @@ def main() -> int:
         )
         if not measurements:
             audit.skip("printability_feature_resolution",
-                       "the v3 build report contains no measurable non-envelope features",
+            "the v4 build report contains no measurable non-envelope features",
                        repair="Observe manufacturing-critical features and checked cut tools.")
         else:
             offenders = [item for item in measurements if item["minimum_size_mm"] < floor]
@@ -571,7 +577,7 @@ def main() -> int:
         } if profile is not None else None),
         "region": args.region,
         "report": str(Path(args.report).resolve()) if args.report else None,
-        "schema": "evidence-color-mesh-audit/v3",
+        "schema": "evidence-color-mesh-audit/v4",
         "scope": "topology" if args.topology_only else "manufacturing",
         "status": audit.status,
         "stl": str(Path(args.stl).resolve()),

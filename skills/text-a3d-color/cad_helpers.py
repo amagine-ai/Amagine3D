@@ -10,10 +10,21 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 
-from build123d import Color, Compound, Unit, chamfer, export_step, export_stl, fillet
+from build123d import (
+    Color,
+    Compound,
+    Pos,
+    Unit,
+    chamfer,
+    export_step,
+    export_stl,
+    fillet,
+)
 
 from export_3mf import write_color_archive
+from intent_contract import validate_coordinate_system
 
 
 class RegionInvariantError(RuntimeError):
@@ -123,6 +134,15 @@ def _shape_record(shape) -> dict:
     }
 
 
+def _translate(shape, x: float, y: float, z: float):
+    return Pos(x, y, z) * shape
+
+
+def _print_transform(shape) -> tuple[float, float, float]:
+    box = shape.bounding_box()
+    return (-box.min.X, -box.min.Y, -box.min.Z)
+
+
 def observe(shape, feature_id: str, role: str = "feature") -> None:
     if feature_id in _FEATURES:
         raise RegionInvariantError(f"duplicate feature id: {feature_id}")
@@ -189,6 +209,39 @@ def _rgb(value: str) -> tuple[float, float, float]:
     return channels  # type: ignore[return-value]
 
 
+def _rgb8(value: str) -> tuple[int, int, int]:
+    if not _HEX.fullmatch(value):
+        raise RegionInvariantError(f"invalid region color: {value}")
+    return tuple(
+        int(value[index:index + 2], 16) for index in (1, 3, 5)
+    )  # type: ignore[return-value]
+
+
+def _export_display_glb(
+    items: list[tuple[str, object, str]],
+    path: Path,
+) -> None:
+    import trimesh
+
+    scene = trimesh.Scene()
+    with tempfile.TemporaryDirectory() as directory:
+        for index, (label, shape, color) in enumerate(items):
+            mesh_path = Path(directory) / f"{index}-{label}.stl"
+            export_stl(
+                shape, str(mesh_path), tolerance=0.01, angular_tolerance=0.1
+            )
+            mesh = trimesh.load(mesh_path, force="mesh", process=False)
+            if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
+                raise RegionInvariantError(
+                    f"display GLB mesh for {label!r} is empty"
+                )
+            mesh.visual.face_colors = [*_rgb8(color), 255]
+            mesh.metadata["name"] = label
+            scene.add_geometry(mesh, geom_name=label, node_name=label)
+    data = scene.export(file_type="glb")
+    path.write_bytes(data if isinstance(data, bytes) else bytes(data))
+
+
 def export_regions(
     regions: dict,
     name: str,
@@ -199,7 +252,7 @@ def export_regions(
     source_path: str | None = None,
     max_coverage_error_mm3: float = 0.01,
 ) -> dict:
-    """Validate region topology and export STLs, colored 3MF, STEP, and report."""
+    """Validate color regions and export print, display, CAD, and report evidence."""
     if len(regions) < 2:
         raise RegionInvariantError("multi-color output requires at least two regions")
 
@@ -214,6 +267,13 @@ def export_regions(
         raise RegionInvariantError("intent contract must use evidence-color-intent/v3")
     if intent_data.get("part") != name:
         raise RegionInvariantError("intent part does not match the export name")
+    coordinate_errors = validate_coordinate_system(
+        intent_data.get("coordinate_system")
+    )
+    if coordinate_errors:
+        raise RegionInvariantError(
+            "invalid coordinate system: " + "; ".join(coordinate_errors)
+        )
     feature_items = intent_data.get("features", [])
     declared_feature_ids = {
         item.get("id") for item in feature_items if isinstance(item, dict)
@@ -235,13 +295,19 @@ def export_regions(
         )
     report = {
         "built_at": datetime.now(timezone.utc).isoformat(),
+        "coordinates": {
+            "assembly": ["step:assemble"],
+            "display": ["glb:display"],
+            "print": ["3mf", "stl:manufacturing"],
+            "region_topology": [],
+        },
         "events": list(_EVENTS),
         "features": dict(_FEATURES),
         "overlaps_mm3": {},
         "parameters": dict(_PARAMETERS),
         "part": name,
         "regions": {},
-        "schema": "evidence-color-build/v3",
+        "schema": "evidence-color-build/v5",
     }
 
     normalized: dict[str, tuple] = {}
@@ -338,39 +404,84 @@ def export_regions(
                 f"missing {missing:.6f} mm^3, outside {outside:.6f} mm^3"
             )
 
+    assembly_body = parent if parent is not None else region_union
+    assembly_record = _shape_record(assembly_body)
+    if not assembly_record["valid"]:
+        raise RegionInvariantError("assembly manufacturing geometry is invalid")
+
+    transform = _print_transform(assembly_body)
+    print_regions = {
+        region_name: (_translate(shape, *transform), color)
+        for region_name, (shape, color) in normalized.items()
+    }
+    print_body = _translate(assembly_body, *transform)
+    print_body_record = _shape_record(print_body)
+    if not print_body_record["valid"]:
+        raise RegionInvariantError("print manufacturing geometry is invalid")
+
     entries = []
     artifacts = {}
-    for region_name, (shape, color) in normalized.items():
-        path = output / f"{name}-{region_name}.stl"
+    for region_name, (shape, color) in print_regions.items():
+        path = output / f"{name}-region-{region_name}.stl"
         export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
         entries.append((str(path), color, region_name))
-        artifacts[f"stl:{region_name}"] = {
+        artifacts[f"stl:region:{region_name}"] = {
             "path": str(path.resolve()), "sha256": _digest(path),
         }
+        report["coordinates"]["region_topology"].append(f"stl:region:{region_name}")
 
-    combined = parent if parent is not None else region_union
-    combined_record = _shape_record(combined)
-    if not combined_record["valid"]:
-        raise RegionInvariantError("combined manufacturing geometry is invalid")
-    combined_path = output / f"{name}-combined.stl"
-    export_stl(combined, str(combined_path), tolerance=0.01, angular_tolerance=0.1)
-    artifacts["stl:combined"] = {
-        "path": str(combined_path.resolve()), "sha256": _digest(combined_path),
+    manufacturing_path = output / f"{name}-manufacturing.stl"
+    export_stl(
+        print_body,
+        str(manufacturing_path),
+        tolerance=0.01,
+        angular_tolerance=0.1,
+    )
+    artifacts["stl:manufacturing"] = {
+        "path": str(manufacturing_path.resolve()),
+        "sha256": _digest(manufacturing_path),
     }
-    report["combined"] = combined_record
+    report["assembly"] = {"shape": assembly_record}
+    report["manufacturing"] = {
+        **print_body_record,
+        "transform": {
+            "from": "assembly",
+            "to": "print",
+            "translate_mm": [round(float(value), 5) for value in transform],
+        },
+    }
 
     archive_path = output / f"{name}.3mf"
     report["three_mf"] = write_color_archive(entries, str(archive_path))
-    artifacts["3mf"] = {"path": str(archive_path.resolve()), "sha256": _digest(archive_path)}
+    artifacts["3mf"] = {
+        "path": str(archive_path.resolve()),
+        "sha256": _digest(archive_path),
+    }
 
     children = []
     for region_name, (shape, color) in normalized.items():
         shape.color = Color(*_rgb(color))
         shape.label = region_name
         children.append(shape)
-    step_path = output / f"{name}.step"
-    export_step(Compound(children=children), str(step_path), unit=Unit.MM)
-    artifacts["step"] = {"path": str(step_path.resolve()), "sha256": _digest(step_path)}
+    assembly_shape = Compound(children=children)
+    assemble_step_path = output / f"{name}-assemble.step"
+    display_glb_path = output / f"{name}-display.glb"
+    export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)
+    _export_display_glb(
+        [
+            (region_name, shape, color)
+            for region_name, (shape, color) in normalized.items()
+        ],
+        display_glb_path,
+    )
+    artifacts["step:assemble"] = {
+        "path": str(assemble_step_path.resolve()),
+        "sha256": _digest(assemble_step_path),
+    }
+    artifacts["glb:display"] = {
+        "path": str(display_glb_path.resolve()),
+        "sha256": _digest(display_glb_path),
+    }
 
     material_plan_path = output / f"{name}_material-plan.json"
     material_plan = {

@@ -31,8 +31,8 @@ def main() -> int:
     checks = [
         {
             "name": "build_report_schema",
-            "pass": report.get("schema") == "evidence-color-build/v3",
-            "expected": "evidence-color-build/v3",
+            "pass": report.get("schema") == "evidence-color-build/v5",
+            "expected": "evidence-color-build/v5",
             "observed": report.get("schema"),
         },
         {
@@ -115,7 +115,7 @@ def main() -> int:
         "requires_manual_slicer_assignment": bool(
             material and material.get("requires_manual_slicer_assignment")
         ),
-        "schema": "color-assembly-audit/v3",
+        "schema": "color-assembly-audit/v4",
     }
     payload = json.dumps(result, indent=2)
     if args.out:
