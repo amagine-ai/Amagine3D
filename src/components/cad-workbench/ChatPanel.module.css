@@ -29,6 +29,7 @@
 
 .messageList > li {
   display: grid;
+  min-width: 0;
   gap: var(--space-xs);
 }
 
@@ -40,6 +41,7 @@
 .messageBubble {
   display: grid;
   width: fit-content;
+  min-width: 0;
   max-width: 100%;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
@@ -157,6 +159,9 @@
 
 .reasoningText {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   gap: var(--space-xs);
   max-height: 15rem;
   overflow: auto;
@@ -167,6 +172,15 @@
 
 .reasoningText :is(h3, h4, p, ul, ol, pre) {
   margin: 0;
+}
+
+.reasoningText :is(p, li, blockquote, table, th, td) {
+  overflow-wrap: anywhere;
+}
+
+.reasoningText > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .reasoningText :is(h3, h4) {
@@ -188,6 +202,16 @@
   padding-inline-start: var(--space-lg);
 }
 
+.reasoningText table {
+  display: block;
+  overflow-x: auto;
+}
+
+.reasoningText img {
+  max-width: 100%;
+  height: auto;
+}
+
 .reasoningText pre {
   max-width: 100%;
   padding: var(--space-sm);
@@ -200,5 +224,13 @@
 .reasoningText code {
   font-family: var(--font-display);
   font-size: inherit;
+}
+
+.reasoningText :not(pre) > code {
+  overflow-wrap: anywhere;
+  white-space: break-spaces;
+}
+
+.reasoningText pre code {
   white-space: pre;
 }
