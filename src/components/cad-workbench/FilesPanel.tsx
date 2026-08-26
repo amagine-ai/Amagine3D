@@ -41,6 +41,13 @@ export function FilesPanel({
     () => fileSectionArtifacts(artifacts),
     [artifacts],
   );
+  const hasPrintableArtifacts = useMemo(
+    () =>
+      visibleArtifacts.some(
+        ({ format }) => format === '3mf' || format === 'stl',
+      ),
+    [visibleArtifacts],
+  );
   const selectedArtifacts = useMemo(
     () => visibleArtifacts.filter(({ path }) => selectedPaths.has(path)),
     [selectedPaths, visibleArtifacts],
@@ -102,6 +109,14 @@ export function FilesPanel({
             </button>
           </div>
         </div>
+        {hasPrintableArtifacts ? (
+          <p className={styles.fileHint}>
+            {text(
+              '3MF and STL files can be downloaded for printing.',
+              '3MF 和 STL 文件可下载用于打印。',
+            )}
+          </p>
+        ) : null}
         {visibleArtifacts.length === 0 ? (
           <p className={styles.fileEmpty}>
             {text(
