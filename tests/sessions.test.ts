@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 import { CURRENT_SESSION_VERSION } from '@amagine3d/a3d-runtime';
 
+import { CHAT_TURN_CUSTOM_TYPE } from '../src/lib/chat-turn.ts';
 import {
   listSessionCatalog,
   readSessionMessages,
@@ -21,6 +22,7 @@ async function writeSession(
   firstUserText = '生成一个桌面支架',
 ): Promise<string> {
   const timestamp = '2026-08-23T08:00:00.000Z';
+  const occurredAt = Date.parse(timestamp);
   const path = join(sessionRoot, `2026-08-23T08-00-00-000Z_${SESSION_ID}.jsonl`);
   const entries = [
     {
@@ -38,17 +40,70 @@ async function writeSession(
       message: {
         role: 'user',
         content: [{ type: 'text', text: firstUserText }],
-        timestamp: Date.parse(timestamp),
+        timestamp: occurredAt,
       },
     },
     {
       type: 'message',
-      id: 'assistant-message',
+      id: 'raw-assistant-analysis',
       parentId: 'user-message',
       timestamp,
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: '模型已经生成。' }],
+        content: [{ type: 'text', text: '我会先分析尺寸。' }],
+        api: 'openai-responses',
+        provider: 'openai',
+        model: 'test',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'toolUse',
+        timestamp: occurredAt + 500,
+      },
+    },
+    {
+      type: 'message',
+      id: 'raw-tool-result',
+      parentId: 'raw-assistant-analysis',
+      timestamp,
+      message: {
+        role: 'toolResult',
+        toolCallId: 'tool-call-1',
+        toolName: 'read',
+        content: [{ type: 'text', text: '读取完成' }],
+        isError: false,
+        timestamp: occurredAt + 1_000,
+      },
+    },
+    {
+      type: 'message',
+      id: 'internal-visual-repair',
+      parentId: 'raw-tool-result',
+      timestamp,
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '<visual_validation_repair>内部补救提示</visual_validation_repair>',
+          },
+        ],
+        timestamp: occurredAt + 1_500,
+      },
+    },
+    {
+      type: 'message',
+      id: 'raw-assistant-final',
+      parentId: 'internal-visual-repair',
+      timestamp,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '这段原始最终回复不应直接显示。' }],
         api: 'openai-responses',
         provider: 'openai',
         model: 'test',
@@ -61,25 +116,36 @@ async function writeSession(
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         stopReason: 'stop',
-        timestamp: Date.parse(timestamp),
+        timestamp: occurredAt + 2_000,
       },
     },
     {
       type: 'custom',
-      customType: 'amagine3d.run-stages.v1',
+      customType: CHAT_TURN_CUSTOM_TYPE,
       data: {
-        stages: [
+        finishedAt: occurredAt + 4_000,
+        replyText: '模型已经生成。',
+        steps: [
           {
-            id: 'stage-1',
-            label: '模型已经生成',
-            occurredAt: Date.parse(timestamp),
-            stage: 'files',
+            id: 'step-1',
+            label: '正在分析需求',
+            occurredAt,
+            progressText: '已识别桌面支架的主要尺寸。',
+            stage: 'analysis',
+            status: 'completed',
+          },
+          {
+            id: 'step-2',
+            label: '正在生成模型',
+            occurredAt: occurredAt + 2_000,
+            progressText: '主体已完成，正在补充连接结构。',
+            stage: 'build',
             status: 'completed',
           },
         ],
       },
-      id: 'run-stages',
-      parentId: 'assistant-message',
+      id: 'chat-turn',
+      parentId: 'raw-assistant-final',
       timestamp,
     },
   ];
@@ -115,7 +181,7 @@ test('uses the virtual built-in session only when no user session exists', async
   }
 });
 
-test('restores display messages from a persisted PI session', async () => {
+test('restores one v2 assistant turn instead of raw assistant and tool messages', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-session-messages-'));
   try {
     const sessionRoot = join(root, 'sessions');
@@ -130,22 +196,77 @@ Search before building.
 </web_reference_mode>`,
     );
     const messages = await readSessionMessages(path);
-    assert.deepEqual(
-      messages.map(({ role, text }) => ({ role, text })),
-      [
-        { role: 'user', text: '生成一个桌面支架' },
-        { role: 'assistant', text: '模型已经生成。' },
-      ],
-    );
-    assert.deepEqual(messages[1]?.stages?.map(({ label }) => label), [
-      '模型已经生成',
+    assert.deepEqual(messages, [
+      {
+        id: 'user-message',
+        role: 'user',
+        text: '生成一个桌面支架',
+      },
+      {
+        finishedAt: Date.parse('2026-08-23T08:00:04.000Z'),
+        id: 'chat-turn',
+        replyText: '模型已经生成。',
+        role: 'assistant',
+        steps: [
+          {
+            id: 'step-1',
+            label: '正在分析需求',
+            occurredAt: Date.parse('2026-08-23T08:00:00.000Z'),
+            progressText: '已识别桌面支架的主要尺寸。',
+            stage: 'analysis',
+            status: 'completed',
+          },
+          {
+            id: 'step-2',
+            label: '正在生成模型',
+            occurredAt: Date.parse('2026-08-23T08:00:02.000Z'),
+            progressText: '主体已完成，正在补充连接结构。',
+            stage: 'build',
+            status: 'completed',
+          },
+        ],
+      },
     ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
 
-test('restores the final provider error with a failed run trace', async () => {
+test('removes every internal prompt suffix from visible user history', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-internal-prompts-'));
+  try {
+    const sessionRoot = join(root, 'sessions');
+    await mkdir(sessionRoot);
+    const suffixes = [
+      '<uploaded_image_files>\n- /tmp/reference.png\n</uploaded_image_files>',
+      '<web_reference_mode required="true">内部联网提示</web_reference_mode>',
+      '<web_reference_repair>内部联网补救提示</web_reference_repair>',
+      '<visual_validation_required>内部视觉验证提示</visual_validation_required>',
+      '<visual_validation_repair>内部视觉补救提示</visual_validation_repair>',
+    ];
+
+    for (const suffix of suffixes) {
+      const path = await writeSession(
+        sessionRoot,
+        join(root, 'workspace'),
+        `保留这段用户输入\n\n${suffix}`,
+      );
+      const messages = await readSessionMessages(path);
+      assert.deepEqual(messages[0], {
+        id: 'user-message',
+        role: 'user',
+        text: '保留这段用户输入',
+      });
+    }
+
+    const catalog = await listSessionCatalog(sessionRoot);
+    assert.equal(catalog.sessions[0]?.title, '保留这段用户输入');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('restores a failed v2 turn and suppresses internal repair prompts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-failed-run-'));
   try {
     const sessionRoot = join(root, 'sessions');
@@ -156,18 +277,43 @@ test('restores the final provider error with a failed run trace', async () => {
       {
         type: 'message',
         id: 'failed-user-message',
-        parentId: 'run-stages',
+        parentId: 'chat-turn',
         timestamp,
         message: {
           role: 'user',
-          content: [{ type: 'text', text: '再试一次' }],
+          content: [
+            {
+              type: 'text',
+              text: `再试一次
+
+<visual_validation_required>
+内部视觉验证提示
+</visual_validation_required>`,
+            },
+          ],
           timestamp: Date.parse(timestamp),
         },
       },
       {
         type: 'message',
-        id: 'failed-assistant-message',
+        id: 'internal-web-repair',
         parentId: 'failed-user-message',
+        timestamp,
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '<web_reference_repair>内部联网补救提示</web_reference_repair>',
+            },
+          ],
+          timestamp: Date.parse(timestamp) + 500,
+        },
+      },
+      {
+        type: 'message',
+        id: 'failed-assistant-message',
+        parentId: 'internal-web-repair',
         timestamp,
         message: {
           role: 'assistant',
@@ -179,19 +325,22 @@ test('restores the final provider error with a failed run trace', async () => {
       },
       {
         type: 'custom',
-        customType: 'amagine3d.run-stages.v1',
+        customType: CHAT_TURN_CUSTOM_TYPE,
         data: {
-          stages: [
+          finishedAt: Date.parse(timestamp) + 2_000,
+          replyText: 'provider request failed',
+          steps: [
             {
-              id: 'failed-stage',
+              id: 'failed-step',
               label: '执行失败',
               occurredAt: Date.parse(timestamp),
+              progressText: '模型供应商请求失败。',
               stage: 'error',
               status: 'failed',
             },
           ],
         },
-        id: 'failed-run-stages',
+        id: 'failed-chat-turn',
         parentId: 'failed-assistant-message',
         timestamp,
       },
@@ -202,9 +351,29 @@ test('restores the final provider error with a failed run trace', async () => {
     );
 
     const messages = await readSessionMessages(path);
-    assert.equal(messages.at(-1)?.role, 'assistant');
-    assert.equal(messages.at(-1)?.text, 'provider request failed');
-    assert.equal(messages.at(-1)?.stages?.[0]?.status, 'failed');
+    assert.deepEqual(messages.slice(-2), [
+      {
+        id: 'failed-user-message',
+        role: 'user',
+        text: '再试一次',
+      },
+      {
+        finishedAt: Date.parse(timestamp) + 2_000,
+        id: 'failed-chat-turn',
+        replyText: 'provider request failed',
+        role: 'assistant',
+        steps: [
+          {
+            id: 'failed-step',
+            label: '执行失败',
+            occurredAt: Date.parse(timestamp),
+            progressText: '模型供应商请求失败。',
+            stage: 'error',
+            status: 'failed',
+          },
+        ],
+      },
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
