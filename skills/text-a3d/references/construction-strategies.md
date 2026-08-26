@@ -13,10 +13,12 @@ through the same primitive stack.
 
 ## Frame and feature graph
 
-Declare world axes and the reference-facing direction in the intent contract.
-Declare `manufacturing.mode` before modeling. Use `single-part` unless the user
-asked for or the object requires separate same-material pieces such as a lid,
-cover, insert, hinge leaf, latch, or sliding member. Model in dependency order:
+Declare the fixed object semantic frame in the intent contract: `+X` is user
+right, `+Y` is object back, `+Z` is object top, front is `Y-min`, and bottom is
+`Z-min`. Declare `manufacturing.mode` before modeling. Use `single-part`
+unless the user asked for or the object requires separate same-material pieces
+such as a lid, cover, insert, hinge leaf, latch, or sliding member. Model in
+dependency order:
 
 1. primary envelope
 2. identity-bearing additive volumes
@@ -30,14 +32,17 @@ do not continue with an unchanged body.
 
 For multipart work, give each printed part its own envelope, features, and
 mating-interface parameters. Keep the parts as separate valid solids and export
-with `export_assembly()`. Pass `part_name=` to every `observe()`, checked cut,
-and checked finish so per-part QA reads only its own evidence. Do not union
-separate requested parts only because the material is single color.
+with `export_assembly()`. It writes `NAME-PART.stl` for individual print
+placement, `NAME.stl` for print-bed layout, `NAME-assemble.step` for physical
+assembly QA, and `NAME-display.glb` for user preview. Pass `part_name=` to
+every `observe()`, checked cut, and checked finish so per-part QA reads only
+its own evidence. Do not union separate requested parts only because the
+material is single color.
 
 ## build123d guardrails
 
-- Primitive alignment is explicit. Put print-facing bottoms at Z=0 unless the
-  contract says otherwise.
+- Primitive alignment is explicit. Print artifacts are normalized to Z0 by the
+  exporter; assembly STEP and display GLB files preserve object/assembly intent.
 - Cutting tools extend beyond both target faces to avoid coplanar ambiguity.
 - Use transforms as a readable frame chain; do not scatter unexplained signed
   coordinates through the source.

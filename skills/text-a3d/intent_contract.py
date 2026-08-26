@@ -23,6 +23,17 @@ CONFIDENCE = {"high", "low", "medium"}
 MANUFACTURING_MODES = {"multipart", "single-part"}
 INTENT_SCHEMA = "evidence-cad-intent/v4"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
+COORDINATE_SYSTEM = {
+    "back": "y-max",
+    "bottom": "z-min",
+    "front": "y-min",
+    "left": "x-min",
+    "right": "x-max",
+    "top": "z-max",
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+}
 
 
 def _positive_number(value) -> bool:
@@ -169,6 +180,16 @@ def validate_manufacturing(manufacturing) -> list[str]:
     return errors
 
 
+def validate_coordinate_system(coordinate_system) -> list[str]:
+    if not isinstance(coordinate_system, dict):
+        return ["coordinate_system must declare the object semantic frame"]
+    errors = []
+    for key, expected in COORDINATE_SYSTEM.items():
+        if coordinate_system.get(key) != expected:
+            errors.append(f"coordinate_system.{key} must be {expected}")
+    return errors
+
+
 def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     if not isinstance(data, dict):
         return ["intent must contain a JSON object"]
@@ -181,6 +202,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         errors.append(f"task_mode must be one of {sorted(MODES)}")
     if data.get("representation") not in REPRESENTATIONS:
         errors.append(f"representation must be one of {sorted(REPRESENTATIONS)}")
+    errors.extend(validate_coordinate_system(data.get("coordinate_system")))
 
     dimensions = data.get("dimensions_mm")
     if not isinstance(dimensions, dict):

@@ -30,6 +30,7 @@ session working directory.
 - `cad_helpers.py` provides fail-closed operations and provenance-rich export
 - `qa_check.py` audits geometry, Bambu bed fit, walls, features, and overhangs
 - `assembly_check.py` audits same-material multipart report integrity
+- `step_check.py` audits STEP assembly masters with OCCT
 - `freshness_check.py` proves every deliverable belongs to this run
 - `render_preview.py` emits orthographic views plus a hash-bound render report
 - `compare_silhouette.py` scores comparable orthographic silhouettes
@@ -92,19 +93,21 @@ python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 ```
 
 The contract must expose inferred dimensions, hidden-side assumptions, the
-profile path and hash, build orientation, minimum wall target, critical feature
-IDs, support policy, and manufacturing mode. Use `single-part` by default; use
-`multipart` whenever separate covers, lids, inserts, hinges, latches, or
-replacement pieces are part of the requested object. Do not weaken it later to
-match the output.
+object coordinate system, profile path and hash, build orientation, minimum
+wall target, critical feature IDs, support policy, and manufacturing mode. Use
+`single-part` by default; use `multipart` whenever separate covers, lids,
+inserts, hinges, latches, or replacement pieces are part of the requested
+object. Do not weaken it later to match the output.
 
 ## 2. Choose construction from evidence
 
 Read `references/construction-strategies.md` and
 `references/bambu-printability.md`. Pick full 3D, orthographic solid, relief,
-or surface-led construction deliberately. Establish axes, the print
-orientation, wall parameters, and a feature dependency graph before code.
-Pixel/icon inputs use analyzer cells; never hand-copy their coordinates.
+or surface-led construction deliberately. Use the required object frame:
+`+X` is user right, `+Y` is object back, `+Z` is object top; front is `Y-min`
+and bottom is `Z-min`. Establish the print orientation, wall parameters, and a
+feature dependency graph before code. Pixel/icon inputs use analyzer cells;
+never hand-copy their coordinates.
 
 ## 3. Build with observable operations
 
@@ -144,6 +147,11 @@ if __name__ == "__main__":
     export_part(body, NAME, intent_path=INTENT)
 ```
 
+`export_part()` emits `NAME.stl` as the printable single-part mesh,
+`NAME-display.glb` as the user-visible display model, and
+`NAME-assemble.step` as the OCCT-readable physical assembly master. Only the
+STL is in print coordinates.
+
 For same-material multipart assemblies, build each manufacturing part as its
 own valid solid and export the assembly:
 
@@ -162,11 +170,13 @@ if __name__ == "__main__":
     }, NAME, intent_path=INTENT)
 ```
 
-Each exported assembly part must be one valid solid. The combined STL may have
-multiple connected components, and the STEP is an assembly. Do not join
-separate requested lids/covers into the body merely to satisfy single-color
-output. Pass `part_name=` to every observed feature and checked operation in a
-multipart build; export fails when evidence is unowned or a part is unobserved.
+Each exported assembly part must be one valid solid. `export_assembly()` emits
+`NAME-PART.stl` for each part's print placement, `NAME.stl` for the full
+print-bed layout, `NAME-assemble.step` for the physical assembly master, and
+`NAME-display.glb` for display. Do not join separate requested lids/covers
+into the body merely to satisfy single-color output. Pass `part_name=` to every
+observed feature and checked operation in a multipart build; export fails when
+evidence is unowned or a part is unobserved.
 
 Observe every manufacturing-critical additive feature before union. Checked
 cuts record tool bounds; checked finishes record actual size. These feature IDs
@@ -191,36 +201,39 @@ Execute the source and save the mesh audit:
 ```bash
 python "<name>.py"
 python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --require-z0 --out "<name>_mesh-audit.json"
+python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids 1 --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --out "<name>_assemble-audit.json"
 ```
 
-For multipart assemblies, audit each part STL separately. Preserve
-`--require-z0` only when its authored coordinates already describe bed
-placement; an assembly-space translation does not change print orientation.
-Audit the combined STL for topology only, then run the assembly checker:
+For multipart assemblies, audit each part STL as an individual print placement,
+audit `NAME.stl` as the print-bed layout, then run the assembly and STEP
+checkers:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>-lower-shell.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 1 --out "<name>-lower-shell_mesh-audit.json"
-python "<SKILL_DIR>/qa_check.py" "<name>-top-lid.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 1 --out "<name>-top-lid_mesh-audit.json"
-python "<SKILL_DIR>/qa_check.py" "<name>-combined.stl" --report "<name>_report.json" --components 2 --out "<name>-combined_mesh-audit.json"
-python "<SKILL_DIR>/assembly_check.py" "<name>_report.json" "<name>-combined.stl" --out "<name>_assembly-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>-lower-shell.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 1 --require-z0 --out "<name>-lower-shell_mesh-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>-top-lid.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 1 --require-z0 --out "<name>-top-lid_mesh-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 2 --require-z0 --out "<name>_mesh-audit.json"
+python "<SKILL_DIR>/assembly_check.py" "<name>_report.json" "<name>.stl" --out "<name>_assembly-audit.json"
+python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids 2 --out "<name>_assemble-audit.json"
 ```
 
 Cross-check contract features against the build report's observed features and
 operation ledger. Read every `fail`, `warning`, and `not_evaluated` check plus
-its structured `repair` object. Mesh success does not prove printability or
-semantic correctness.
+its structured `repair` object. Mesh success does not prove STEP assembly
+correctness, STEP success does not prove printability, and GLB display success
+does not prove CAD topology.
 
 Visual review is mandatory for reference reproduction, recognizable form, or
 any appearance requirement. Render after mesh success:
 
 ```bash
-python "<SKILL_DIR>/render_preview.py" "<name>.stl" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
+python "<SKILL_DIR>/render_preview.py" "<name>-display.glb" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
 ```
 
-For multipart assemblies, render the assembly parts together:
+For multipart assemblies, render the display GLB rather than the print-bed
+layout:
 
 ```bash
-python "<SKILL_DIR>/render_preview.py" --part "<name>-lower-shell.stl" --part "<name>-top-lid.stl" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
+python "<SKILL_DIR>/render_preview.py" "<name>-display.glb" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
 ```
 
 Use `read` on the new four-view PNG and matched-view PNG. Compare every
@@ -252,12 +265,11 @@ The freshness gate includes contract, source, model, reports, and required
 previews:
 
 ```bash
-python "<SKILL_DIR>/freshness_check.py" --after ".<name>.generation-start" "<name>_printer-profile.json" "<name>_intent.json" "<name>.py" "<name>.step" "<name>.stl" "<name>_report.json" "<name>_mesh-audit.json" "<name>_views.png" "<name>_reference-view.png" "<name>_render.json"
+python "<SKILL_DIR>/freshness_check.py" --after ".<name>.generation-start" "<name>_printer-profile.json" "<name>_intent.json" "<name>.py" "<name>-assemble.step" "<name>-display.glb" "<name>.stl" "<name>_report.json" "<name>_mesh-audit.json" "<name>_assemble-audit.json" "<name>_views.png" "<name>_reference-view.png" "<name>_render.json"
 ```
 
-For multipart assemblies, include every part STL, `<name>-combined.stl`, every
-part mesh audit, `<name>-combined_mesh-audit.json`, and
-`<name>_assembly-audit.json` instead of the one-piece STL/audit pair.
+For multipart assemblies, include every `NAME-PART.stl`, every part mesh audit,
+`NAME.stl`, `NAME_mesh-audit.json`, and `NAME_assembly-audit.json`.
 
 For jobs whose contract sets `visual.required` to false, omit the last three
 visual artifacts.
@@ -266,7 +278,7 @@ Deliver the resolved profile, STEP, STL(s), parametric source, intent contract,
 build report, mesh audit(s), assembly audit when present, and previews. Report
 specification, manufacturing structure, topology, freshness, visual fidelity,
 bed fit, feature resolution, wall thickness, and overhang/support need as
-separate statuses. Summarize the combined result as `print preflight passed`,
+separate statuses. Summarize the print result as `print preflight passed`,
 `print preflight passed with warnings`, or `print preflight failed`. Report
 `actual slicer validation: not evaluated` unless a real Bambu Studio or
 equivalent slicer run was completed; never call a profile-backed mesh audit

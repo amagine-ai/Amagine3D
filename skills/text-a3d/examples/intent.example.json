@@ -3,6 +3,17 @@
   "part": "example-bracket",
   "task_mode": "specification",
   "representation": "full-3d",
+  "coordinate_system": {
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+    "front": "y-min",
+    "back": "y-max",
+    "left": "x-min",
+    "right": "x-max",
+    "bottom": "z-min",
+    "top": "z-max"
+  },
   "dimensions_mm": {
     "x": {"value": 40, "source": "user", "confidence": "high"},
     "y": {"value": 24, "source": "user", "confidence": "high"},

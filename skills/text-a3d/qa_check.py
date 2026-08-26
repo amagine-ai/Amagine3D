@@ -193,13 +193,13 @@ def _report_part_for_stl(
     stl_path: Path,
     report_dir: Path | None = None,
 ) -> str | None:
-    if report is None or report.get("schema") != "evidence-cad-assembly-build/v1":
+    if report is None or report.get("schema") != "evidence-cad-assembly-build/v3":
         return None
     digest = sha256(stl_path.read_bytes()).hexdigest()
     matches = [
         key
         for key, reference in report.get("artifacts", {}).items()
-        if key.startswith("stl:")
+        if (key == "stl" or key.startswith("stl:"))
         and isinstance(reference, dict)
         and reference.get("sha256") == digest
     ]
@@ -219,7 +219,7 @@ def _report_part_for_stl(
     elif len(matches) != 1:
         raise ValueError("assembly build report does not bind the audited STL")
     key = matches[0]
-    if key == "stl:combined":
+    if key == "stl":
         return None
     part_name = key.removeprefix("stl:")
     if part_name not in report.get("parts", {}):

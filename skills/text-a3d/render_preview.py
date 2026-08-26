@@ -1,4 +1,4 @@
-"""Create orthographic visual evidence for single-material STL files."""
+"""Create orthographic visual evidence for single-material STL or GLB files."""
 
 from __future__ import annotations
 
@@ -48,11 +48,11 @@ def _save_png(image, destination: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stl", nargs="?")
+    parser.add_argument("model", nargs="?")
     parser.add_argument(
         "--part",
         action="append",
-        help="STL to include in a single-material multipart preview",
+        help="STL or GLB to include in a single-material multipart preview",
     )
     parser.add_argument("--out")
     parser.add_argument("--size", type=int, default=DEFAULT_OUTPUT_SIZE)
@@ -81,10 +81,10 @@ def main() -> int:
     args = parser.parse_args()
     if bool(args.reference_view) != bool(args.reference_out):
         parser.error("--reference-view and --reference-out must be used together")
-    if args.stl and args.part:
-        parser.error("use either the positional STL or repeated --part inputs")
-    if not args.stl and not args.part:
-        parser.error("provide a positional STL or at least one --part")
+    if args.model and args.part:
+        parser.error("use either the positional model or repeated --part inputs")
+    if not args.model and not args.part:
+        parser.error("provide a positional model or at least one --part")
     if args.part and len(args.part) < 2:
         parser.error("multipart preview requires at least two --part inputs")
     if args.size < 320:
@@ -104,7 +104,7 @@ def main() -> int:
                 "matched-view internal resolution exceeds the configured maximum "
                 f"of {limits.max_resolution} pixels"
             )
-        sources = [Path(item).resolve() for item in (args.part or [args.stl])]
+        sources = [Path(item).resolve() for item in (args.part or [args.model])]
         destination = Path(
             args.out or sources[0].with_name(f"{sources[0].stem}_views.png")
         ).resolve()

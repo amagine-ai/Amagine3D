@@ -15,6 +15,17 @@ targets merely to match a generated artifact.
   "reference_files": [
     {"path": "/absolute/reference.png", "sha256": "...", "role": "front appearance"}
   ],
+  "coordinate_system": {
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+    "front": "y-min",
+    "back": "y-max",
+    "left": "x-min",
+    "right": "x-max",
+    "bottom": "z-min",
+    "top": "z-max"
+  },
   "dimensions_mm": {
     "x": {"value": 120, "source": "user", "confidence": "high"},
     "y": {"value": 55, "source": "inferred", "confidence": "low"},
@@ -62,6 +73,12 @@ unless supports are explicitly accepted or unavoidable.
 
 Matched visual views may be `front`, `side`, `top`, `bottom`, or `isometric`;
 use `bottom` when the appearance-bearing face is intentionally printed at Z0.
+
+The coordinate system is fixed for generated geometry: `+X` means user right,
+`+Y` means object back, and `+Z` means object top. Describe ports, holes,
+buttons, seams, and logos by semantic face and insertion direction before
+using numeric offsets. A bottom opening is allowed, but an opening that crosses
+the front/bottom edge must be declared explicitly.
 
 ## Manufacturing structure
 
@@ -121,8 +138,12 @@ explicitly asks for a one-piece slip-on sleeve.
   `not_evaluated` rather than crashing or passing.
 - Overflow of the selected tool's printable polygon or height is a hard
   failure. Bed exclusions and a 90-degree XY placement are considered.
-- For multipart assemblies, every part is audited as an individual printable
-  body and the combined STL is audited with the expected component count.
+- For multipart assemblies, every `NAME-PART.stl` is audited as an individual
+  printable body and `NAME.stl` is audited as the print-bed layout.
+- `NAME-assemble.step` is audited with OCCT for CAD readability, solid count,
+  and dimensions. STEP checks do not replace mesh printability checks.
+- `NAME-display.glb` is the user-visible display model. GLB display checks can
+  prove loadability and appearance, but not B-rep topology or printability.
 - A sub-line-width named feature is a warning tied to its feature ID.
 - Local wall thickness below the process wall target is a warning with sampled
   risk bounds. It does not prove mechanical strength.

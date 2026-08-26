@@ -31,11 +31,11 @@ finish sizes enter the build report.
 
 For same-material multipart assemblies, keep every printed part as one valid
 solid, export them with `export_assembly()`, audit each part STL individually,
-then run a topology-only component audit on `<name>-combined.stl` and use
-`assembly_check.py` for report integrity. A part STL may retain an assembly-space
-translation, so evaluate its orientation and dimensions but require Z0 only when
-the authored coordinates already describe bed placement. The combined STL is
-assembly evidence, not a print-board or per-part printability result.
+then audit `<name>.stl` as the arranged print-bed layout and use
+`assembly_check.py` for report integrity. Every printed STL that leaves the
+helper is in print coordinates with `Z-min = 0`; `NAME-assemble.step` preserves
+physical mating positions and `NAME-display.glb` preserves the display model
+instead of acting as printability evidence.
 
 ## Support-free construction
 
