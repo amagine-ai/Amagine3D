@@ -9,13 +9,16 @@ import {
 import type { Express, Response } from 'express';
 
 import {
-  finishChatStages,
-  RUN_STAGES_CUSTOM_TYPE,
-  startChatStage,
-} from '../../src/lib/chat-stages.ts';
+  appendChatStepText,
+  CHAT_TURN_CUSTOM_TYPE,
+  completeChatTurn,
+  emptyChatTurn,
+  startChatStep,
+} from '../../src/lib/chat-turn.ts';
 import type {
   AgentEvent,
-  ChatStage,
+  ChatStep,
+  ChatTurn,
   PythonHealth,
 } from '../../src/types.ts';
 import { assistantMessageOutcome } from '../agent-events.ts';
@@ -64,24 +67,27 @@ function toolActivity(toolName: string): string {
   return labels[toolName] ?? `正在运行 ${toolName}`;
 }
 
+function assistantText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(
+      (block): block is { text: string; type: 'text' } =>
+        Boolean(
+          block &&
+            typeof block === 'object' &&
+            (block as { type?: unknown }).type === 'text' &&
+            typeof (block as { text?: unknown }).text === 'string',
+        ),
+    )
+    .map((block) => block.text)
+    .join('');
+}
+
 function finalAssistantText(session: AgentSession): string {
   for (const rawMessage of [...session.messages].reverse()) {
     const message = rawMessage as { content?: unknown; role?: unknown };
-    if (message.role !== 'assistant') continue;
-    if (typeof message.content === 'string') return message.content;
-    if (!Array.isArray(message.content)) return '';
-    return message.content
-      .filter(
-        (block): block is { text: string; type: 'text' } =>
-          Boolean(
-            block &&
-              typeof block === 'object' &&
-              (block as { type?: unknown }).type === 'text' &&
-              typeof (block as { text?: unknown }).text === 'string',
-          ),
-      )
-      .map((block) => block.text)
-      .join('');
+    if (message.role === 'assistant') return assistantText(message.content);
   }
   return '';
 }
@@ -148,32 +154,63 @@ export function registerChatRoute(
     let unsubscribe: (() => void) | undefined;
     let clientDisconnected = false;
     let terminalEventSent = false;
-    let streamedText = '';
     let providerError: string | undefined;
-    let runStages: ChatStage[] = [];
-    let runTracePersisted = false;
-    let composingResponse = false;
+    let runTurn = emptyChatTurn();
+    let activeResponseStepId: string | undefined;
+    let lastResponseStepId: string | undefined;
+    let streamedMessageText = '';
     let webSearchSucceeded = false;
 
-    const startStage = (label: string, stage = 'agent') => {
-      runStages = startChatStage(runStages, {
+    const startStep = (label: string, stage = 'agent'): ChatStep => {
+      const active = runTurn.steps.at(-1);
+      if (
+        active?.status === 'running' &&
+        active.label === label &&
+        active.stage === stage
+      ) {
+        return active;
+      }
+      const next: ChatStep = {
         id: randomUUID(),
         label,
         occurredAt: Date.now(),
         stage,
         status: 'running',
-      });
-      writeEvent(response, { label, tool: stage, type: 'activity' });
+      };
+      runTurn = startChatStep(runTurn, next);
+      writeEvent(response, { step: next, type: 'step' });
+      return next;
     };
-    const persistRunTrace = (
+    const finishRun = (
       status: 'cancelled' | 'completed' | 'failed',
-    ) => {
-      if (!session || runTracePersisted || runStages.length === 0) return;
-      runStages = finishChatStages(runStages, status);
-      session.sessionManager.appendCustomEntry(RUN_STAGES_CUSTOM_TYPE, {
-        stages: runStages,
+      replyText: string,
+      sourceStepId?: string,
+    ): ChatTurn => {
+      if (runTurn.finishedAt !== undefined) return runTurn;
+      runTurn = completeChatTurn(runTurn, {
+        finishedAt: Date.now(),
+        replyText,
+        sourceStepId,
+        status,
       });
-      runTracePersisted = true;
+      if (session && runTurn.steps.length > 0) {
+        session.sessionManager.appendCustomEntry(
+          CHAT_TURN_CUSTOM_TYPE,
+          runTurn,
+        );
+      }
+      return runTurn;
+    };
+    const sendFailure = (message: string, code: string) => {
+      if (terminalEventSent || clientDisconnected) return;
+      const turn = finishRun('failed', message);
+      terminalEventSent = true;
+      writeEvent(response, {
+        code,
+        finishedAt: turn.finishedAt!,
+        message,
+        type: 'error',
+      });
     };
 
     const abortForDisconnect = () => {
@@ -186,17 +223,12 @@ export function registerChatRoute(
 
     const timeout = setTimeout(() => {
       if (terminalEventSent || clientDisconnected) return;
-      terminalEventSent = true;
-      writeEvent(response, {
-        code: 'run_timeout',
-        message: '本轮执行超过时间限制，已停止。',
-        type: 'error',
-      });
+      sendFailure('本轮执行超过时间限制，已停止。', 'run_timeout');
       void session?.abort().catch(() => undefined);
     }, durationFromEnv(process.env.AGENT_RUN_TIMEOUT_MS, 1_800_000));
 
     try {
-      startStage('正在启动 Amagine3D Agent', 'start');
+      startStep('正在启动 Amagine3D Agent', 'start');
       session = await runtime.createSession(sessionId, { webSearchEnabled });
       if (clientDisconnected || terminalEventSent) {
         await session.abort();
@@ -215,23 +247,73 @@ export function registerChatRoute(
             assistantOutcome.status === 'error'
               ? assistantOutcome.message
               : undefined;
-          if (event.type === 'message_end') return;
+        }
+        if (
+          event.type === 'message_start' &&
+          event.message.role === 'assistant'
+        ) {
+          activeResponseStepId = undefined;
+          streamedMessageText = '';
+          return;
         }
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
           if (update.type === 'text_delta') {
-            if (!composingResponse) {
-              composingResponse = true;
-              startStage('正在组织回复', 'response');
+            if (!activeResponseStepId) {
+              activeResponseStepId = startStep(
+                '正在组织回复',
+                'response',
+              ).id;
             }
-            streamedText += update.delta;
-            writeEvent(response, { content: update.delta, type: 'token' });
+            streamedMessageText += update.delta;
+            runTurn = appendChatStepText(
+              runTurn,
+              activeResponseStepId,
+              update.delta,
+            );
+            writeEvent(response, {
+              content: update.delta,
+              stepId: activeResponseStepId,
+              type: 'step_delta',
+            });
           }
           return;
         }
+        if (
+          event.type === 'message_end' &&
+          event.message.role === 'assistant'
+        ) {
+          const content =
+            assistantText(event.message.content) || streamedMessageText;
+          if (
+            assistantOutcome?.status === 'success' &&
+            content.trim() &&
+            !activeResponseStepId
+          ) {
+            activeResponseStepId = startStep(
+              '正在组织回复',
+              'response',
+            ).id;
+            runTurn = appendChatStepText(
+              runTurn,
+              activeResponseStepId,
+              content,
+            );
+            writeEvent(response, {
+              content,
+              stepId: activeResponseStepId,
+              type: 'step_delta',
+            });
+          }
+          if (assistantOutcome?.status === 'success' && content.trim()) {
+            lastResponseStepId = activeResponseStepId;
+          }
+          activeResponseStepId = undefined;
+          streamedMessageText = '';
+          return;
+        }
         if (event.type === 'tool_execution_start') {
-          composingResponse = false;
-          startStage(toolActivity(event.toolName), event.toolName);
+          startStep(toolActivity(event.toolName), event.toolName);
           return;
         }
         if (
@@ -243,24 +325,19 @@ export function registerChatRoute(
           return;
         }
         if (event.type === 'compaction_start') {
-          startStage('正在压缩会话上下文', 'compaction');
+          startStep('正在压缩会话上下文', 'compaction');
           return;
         }
         if (event.type === 'auto_retry_start') {
-          startStage(
+          startStep(
             `模型请求重试 ${event.attempt}/${event.maxAttempts}`,
             'retry',
           );
         }
       });
 
-      writeEvent(response, {
-        model: runtime.modelName,
-        skills: runtime.skills.map((skill) => skill.name),
-        type: 'start',
-      });
-      startStage(`Amagine3D Agent 已启动 ${runtime.modelName}`, 'agent');
-      if (images.length > 0) startStage('正在保存参考图片', 'image');
+      startStep(`Amagine3D Agent 已启动 ${runtime.modelName}`, 'agent');
+      if (images.length > 0) startStep('正在保存参考图片', 'image');
       const savedImages = await saveImageAttachments(
         runtime.stateRoot,
         sessionId,
@@ -292,30 +369,20 @@ export function registerChatRoute(
       let webSearchRepairAttempts = 0;
       while (webSearchEnabled && !webSearchSucceeded) {
         if (providerError) {
-          terminalEventSent = true;
-          persistRunTrace('failed');
-          writeEvent(response, {
-            code: 'provider_error',
-            message: errorMessage(providerError),
-            type: 'error',
-          });
+          sendFailure(errorMessage(providerError), 'provider_error');
           return;
         }
         if (
           webSearchRepairAttempts >= MAX_WEB_SEARCH_REPAIR_ATTEMPTS
         ) {
-          terminalEventSent = true;
-          persistRunTrace('failed');
-          writeEvent(response, {
-            code: 'web_search_required',
-            message:
-              '已开启联网参考，但 Amagine3D Agent 未能完成必需的 Tavily 搜索。本轮结果已拦截，请检查密钥、额度或网络连接。',
-            type: 'error',
-          });
+          sendFailure(
+            '已开启联网参考，但 Amagine3D Agent 未能完成必需的 Tavily 搜索。本轮结果已拦截，请检查密钥、额度或网络连接。',
+            'web_search_required',
+          );
           return;
         }
         webSearchRepairAttempts += 1;
-        startStage(
+        startStep(
           `未完成联网参考，正在强制搜索 ${webSearchRepairAttempts}/${MAX_WEB_SEARCH_REPAIR_ATTEMPTS}`,
           'web-search-audit',
         );
@@ -332,13 +399,7 @@ export function registerChatRoute(
       while (true) {
         if (terminalEventSent || clientDisconnected) return;
         if (providerError) {
-          terminalEventSent = true;
-          persistRunTrace('failed');
-          writeEvent(response, {
-            code: 'provider_error',
-            message: errorMessage(providerError),
-            type: 'error',
-          });
+          sendFailure(errorMessage(providerError), 'provider_error');
           return;
         }
         if (!visualValidationRequired) break;
@@ -349,18 +410,15 @@ export function registerChatRoute(
         );
         if (audit.pass) break;
         if (visualRepairAttempts >= MAX_VISUAL_REPAIR_ATTEMPTS) {
-          terminalEventSent = true;
-          writeEvent(response, {
-            code: 'visual_validation_required',
-            message:
-              '本轮 CAD 任务未完成必需的参考分析、最新预览渲染与读图闭环。结果已拦截，不能仅凭尺寸或网格检查声称外观匹配。',
-            type: 'error',
-          });
+          sendFailure(
+            '本轮 CAD 任务未完成必需的参考分析、最新预览渲染与读图闭环。结果已拦截，不能仅凭尺寸或网格检查声称外观匹配。',
+            'visual_validation_required',
+          );
           return;
         }
 
         visualRepairAttempts += 1;
-        startStage(
+        startStep(
           `视觉审计未通过，正在自动补救 ${visualRepairAttempts}/${MAX_VISUAL_REPAIR_ATTEMPTS}`,
           'visual-audit',
         );
@@ -374,25 +432,21 @@ export function registerChatRoute(
         );
       }
 
-      const answer = finalAssistantText(session) || streamedText;
+      const answer = finalAssistantText(session);
       if (!answer.trim()) {
-        terminalEventSent = true;
-        persistRunTrace('failed');
-        writeEvent(response, {
-          code: 'empty_agent_response',
-          message: 'Amagine3D Agent 未返回最终回复，本轮不能标记为完成。',
-          type: 'error',
-        });
+        sendFailure(
+          'Amagine3D Agent 未返回最终回复，本轮不能标记为完成。',
+          'empty_agent_response',
+        );
         return;
       }
-      writeEvent(response, { content: answer, type: 'assistant' });
-      startStage('正在整理生成文件', 'files');
+      startStep('正在整理生成文件', 'files');
       const artifactCollection = await userSessionArtifacts(
         runtime.workspaceRoot,
         sessionId,
       );
       if (artifactCollection) {
-        startStage(
+        startStep(
           `已发现 ${String(artifactCollection.artifacts.length)} 个工作区文件`,
           'files',
         );
@@ -402,22 +456,29 @@ export function registerChatRoute(
           type: 'artifacts',
         });
       }
-      persistRunTrace('completed');
-      writeEvent(response, { sessionId, type: 'done' });
+      const completedTurn = finishRun(
+        'completed',
+        answer,
+        lastResponseStepId,
+      );
+      writeEvent(response, {
+        content: answer,
+        finishedAt: completedTurn.finishedAt!,
+        sessionId,
+        sourceStepId: lastResponseStepId,
+        type: 'complete',
+      });
       terminalEventSent = true;
     } catch (error) {
       if (!terminalEventSent && !clientDisconnected) {
-        terminalEventSent = true;
-        persistRunTrace('failed');
-        writeEvent(response, {
-          code: 'agent_error',
-          message: errorMessage(error),
-          type: 'error',
-        });
+        sendFailure(errorMessage(error), 'agent_error');
       }
     } finally {
-      if (!runTracePersisted) {
-        persistRunTrace(clientDisconnected ? 'cancelled' : 'failed');
+      if (runTurn.finishedAt === undefined) {
+        finishRun(
+          clientDisconnected ? 'cancelled' : 'failed',
+          providerError ? errorMessage(providerError) : '',
+        );
       }
       clearTimeout(timeout);
       request.off('aborted', abortForDisconnect);

@@ -16,17 +16,18 @@ import {
 } from '../src/types.ts';
 import { scanArtifacts } from './artifacts.ts';
 import { bundledPomodoroArtifacts } from './bundled-workspace.ts';
-import { errorMessage } from './http-utils.ts';
 import { discoverModelBuilds } from './model-builds.ts';
 import {
-  restoredChatStages,
-  RUN_STAGES_CUSTOM_TYPE,
-} from '../src/lib/chat-stages.ts';
+  CHAT_TURN_CUSTOM_TYPE,
+  restoreChatTurn,
+} from '../src/lib/chat-turn.ts';
 
 export const USER_SESSION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const BUILTIN_CREATED_AT = '2026-08-19T15:34:44.000Z';
+const INTERNAL_PROMPT_SUFFIX =
+  /\n*<(?:uploaded_image_files|web_reference_(?:mode|repair)|visual_validation_(?:required|repair))\b[\s\S]*$/u;
 
 export const BUILTIN_POMODORO_SESSION: SessionSummary = {
   createdAt: BUILTIN_CREATED_AT,
@@ -38,9 +39,12 @@ export const BUILTIN_POMODORO_SESSION: SessionSummary = {
   updatedAt: BUILTIN_CREATED_AT,
 };
 
+function visibleUserText(value: string): string {
+  return value.replace(INTERNAL_PROMPT_SUFFIX, '').trim();
+}
+
 function cleanTitle(value: string): string {
-  const firstLine = value
-    .replace(/<uploaded_image_files>[\s\S]*$/u, '')
+  const firstLine = visibleUserText(value)
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .find(Boolean);
@@ -111,49 +115,18 @@ function messageText(content: unknown): string {
 export async function readSessionMessages(path: string): Promise<ChatMessage[]> {
   const entries = parseSessionEntries(await readFile(path, 'utf8'));
   const messages: ChatMessage[] = [];
-  let lastTracedAssistantIndex = -1;
   for (const entry of entries) {
-    if (entry.type === 'custom' && entry.customType === RUN_STAGES_CUSTOM_TYPE) {
-      const stages = restoredChatStages(entry.data);
-      const assistantIndex = messages.findLastIndex(
-        (message, index) =>
-          index > lastTracedAssistantIndex && message.role === 'assistant',
-      );
-      if (stages.length === 0) continue;
-      if (assistantIndex >= 0) {
-        messages[assistantIndex] = { ...messages[assistantIndex]!, stages };
-        lastTracedAssistantIndex = assistantIndex;
-      } else {
-        messages.push({
-          id: entry.id,
-          role: 'assistant',
-          stages,
-          state: 'complete',
-          text: '',
-        });
-        lastTracedAssistantIndex = messages.length - 1;
-      }
+    if (entry.type === 'custom' && entry.customType === CHAT_TURN_CUSTOM_TYPE) {
+      const turn = restoreChatTurn(entry.data);
+      if (turn) messages.push({ id: entry.id, role: 'assistant', ...turn });
       continue;
     }
-    if (entry.type !== 'message') continue;
-    const role = entry.message.role;
-    if (role !== 'assistant' && role !== 'user') continue;
-    const rawText =
-      messageText(entry.message.content).trim() ||
-      (role === 'assistant' && entry.message.errorMessage
-        ? errorMessage(entry.message.errorMessage).trim()
-        : '');
-    const text = role === 'user'
-      ? rawText
-          .replace(/\n*<uploaded_image_files>[\s\S]*$/u, '')
-          .replace(/\n*<web_reference_(?:mode|repair)\b[\s\S]*$/u, '')
-          .trim()
-      : rawText;
+    if (entry.type !== 'message' || entry.message.role !== 'user') continue;
+    const text = visibleUserText(messageText(entry.message.content));
     if (!text) continue;
     messages.push({
       id: entry.id,
-      role,
-      state: 'complete',
+      role: 'user',
       text,
     });
   }

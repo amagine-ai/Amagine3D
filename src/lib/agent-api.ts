@@ -149,17 +149,15 @@ export async function streamAgent({
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffered = '';
-  let assistantContent = '';
-  let doneReceived = false;
+  let terminalReceived = false;
 
   const dispatch = (line: string) => {
     const event = JSON.parse(line) as AgentEvent;
-    if (event.type === 'token') assistantContent += event.content;
-    if (event.type === 'assistant') assistantContent = event.content;
-    if (event.type === 'done' && !assistantContent.trim()) {
+    if (event.type === 'complete' && !event.content.trim()) {
       throw new Error('Amagine3D Agent 未返回最终回复，本轮不能标记为完成。');
     }
-    if (event.type === 'done') doneReceived = true;
+    if (event.type === 'complete') terminalReceived = true;
+    if (event.type === 'error') terminalReceived = true;
     onEvent(event);
   };
 
@@ -177,7 +175,7 @@ export async function streamAgent({
   }
 
   if (buffered.trim()) dispatch(buffered);
-  if (!doneReceived) {
+  if (!terminalReceived) {
     throw new Error('Amagine3D Agent 响应意外中断，本轮未完成。');
   }
 }

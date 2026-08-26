@@ -1,8 +1,10 @@
-import type {
-  ChangeEvent,
-  FormEvent,
-  KeyboardEvent,
-  RefObject,
+import {
+  useEffect,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type RefObject,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -10,13 +12,171 @@ import remarkGfm from 'remark-gfm';
 import styles from './ChatPanel.module.css';
 import composerStyles from './Composer.module.css';
 import { EmptyState } from '../ui/EmptyState';
-import { ACCEPTED_IMAGE_TYPES, type ChatMessage } from '../../types';
+import {
+  ACCEPTED_IMAGE_TYPES,
+  type AssistantChatMessage,
+  type ChatMessage,
+  type ChatStepStatus,
+  type ChatTurnTerminalStatus,
+} from '../../types';
 import type { Language, PendingImage } from './types';
 import { translator } from './types';
 import { LoadingSpinner, ToolbarIcon } from './WorkbenchPrimitives';
 
+function formatElapsed(totalSeconds: number, language: Language) {
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (language === 'zh') {
+    return `${hours ? `${hours}小时` : ''}${minutes ? `${minutes}分` : ''}${seconds || (!hours && !minutes) ? `${seconds}秒` : ''}`;
+  }
+
+  return [
+    hours ? `${hours}h` : '',
+    minutes ? `${minutes}m` : '',
+    seconds || (!hours && !minutes) ? `${seconds}s` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function getStatusLabel(status: ChatStepStatus, language: Language) {
+  const text = translator(language);
+
+  switch (status) {
+    case 'cancelled':
+      return text('Cancelled', '已取消');
+    case 'completed':
+      return text('Completed', '已完成');
+    case 'failed':
+      return text('Failed', '失败');
+    case 'running':
+      return text('Running', '进行中');
+  }
+}
+
+function getTerminalStatus(
+  message: AssistantChatMessage,
+): ChatTurnTerminalStatus {
+  const status = message.steps.at(-1)?.status;
+  return status === 'failed' || status === 'cancelled' ? status : 'completed';
+}
+
+function getStatusMarker(status: ChatTurnTerminalStatus) {
+  return status === 'completed' ? '✓' : status === 'cancelled' ? '−' : '×';
+}
+
+function ChatStepMarker({ status }: { status: ChatStepStatus }) {
+  if (status === 'running') {
+    return <LoadingSpinner />;
+  }
+
+  return (
+    <span aria-hidden="true" className={styles.chatStepMarker}>
+      {getStatusMarker(status)}
+    </span>
+  );
+}
+
+function AssistantTurn({
+  language,
+  message,
+}: {
+  language: Language;
+  message: AssistantChatMessage;
+}) {
+  const text = translator(language);
+  const finishedAt = message.finishedAt;
+  const finished = finishedAt !== undefined;
+  const [traceOpen, setTraceOpen] = useState(!finished);
+  const terminalStatus = getTerminalStatus(message);
+  const statusLabel = getStatusLabel(terminalStatus, language);
+  const startedAt = message.steps[0]?.occurredAt;
+  const elapsedSeconds =
+    finishedAt !== undefined && startedAt !== undefined
+      ? Math.max(0, Math.round((finishedAt - startedAt) / 1_000))
+      : undefined;
+
+  useEffect(() => {
+    if (finishedAt !== undefined) setTraceOpen(false);
+  }, [finishedAt]);
+
+  return (
+    <>
+      {message.steps.length > 0 ? (
+        <details
+          aria-busy={!finished}
+          className={styles.chatTrace}
+          data-status={finished ? terminalStatus : 'running'}
+          onToggle={(event) => setTraceOpen(event.currentTarget.open)}
+          open={traceOpen}
+        >
+          <summary className={styles.chatTraceSummary}>
+            {finished ? (
+              <span aria-hidden="true" className={styles.chatTraceMarker}>
+                {getStatusMarker(terminalStatus)}
+              </span>
+            ) : (
+              <LoadingSpinner />
+            )}
+            <span>{finished ? statusLabel : text('In progress', '进行中')}</span>
+            {elapsedSeconds !== undefined ? (
+              <>
+                <span aria-hidden="true" className={styles.chatTraceSeparator}>
+                  ·
+                </span>
+                <time dateTime={`PT${elapsedSeconds}S`}>
+                  {text('Elapsed ', '用时 ')}
+                  {formatElapsed(elapsedSeconds, language)}
+                </time>
+              </>
+            ) : null}
+          </summary>
+
+          <ol className={styles.chatSteps}>
+            {message.steps.map((step) => (
+              <li data-status={step.status} key={step.id}>
+                <div className={styles.chatStepRow}>
+                  <ChatStepMarker status={step.status} />
+                  <span>
+                    <span className={styles.srOnly}>
+                      {getStatusLabel(step.status, language)}
+                      {text(': ', '：')}
+                    </span>
+                    {step.label}
+                  </span>
+                </div>
+                {step.progressText ? (
+                  <div className={`${styles.markdownText} ${styles.progressText}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {step.progressText}
+                    </ReactMarkdown>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : !finished && !message.replyText ? (
+        <div className={styles.conversationActivity} role="status">
+          <LoadingSpinner />
+          <span>{text('Starting Amagine3D Agent…', '正在启动 Amagine3D Agent…')}</span>
+        </div>
+      ) : null}
+
+      {message.replyText ? (
+        <div className={styles.markdownText}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {message.replyText}
+          </ReactMarkdown>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export interface ChatPanelProps {
-  activity: string;
   busy: boolean;
   conversationRef: RefObject<HTMLElement | null>;
   language: Language;
@@ -39,7 +199,6 @@ export interface ChatPanelProps {
 }
 
 export function ChatPanel({
-  activity,
   busy,
   conversationRef,
   language,
@@ -80,40 +239,31 @@ export function ChatPanel({
                   {message.role === 'user' ? text('You', '你') : 'Amagine'}
                 </span>
                 <div className={styles.messageBubble}>
-                  {message.images?.map((image) => (
-                    <figure className={styles.messageAttachment} key={image.url}>
-                      <img alt={image.name} src={image.url} />
-                      <figcaption>{image.name}</figcaption>
-                    </figure>
-                  ))}
-                  {message.stages && message.stages.length > 0 ? (
-                    <ol className={styles.chatStages}>
-                      {message.stages.map((stage) => (
-                        <li data-status={stage.status} key={stage.id}>
-                          {stage.status === 'running' ? (
-                            <LoadingSpinner />
-                          ) : (
-                            <span aria-hidden="true" className={styles.chatStageMarker}>
-                              {stage.status === 'completed' ? '✓' : '×'}
-                            </span>
-                          )}
-                          <span>{stage.label}</span>
-                        </li>
+                  {message.role === 'user' ? (
+                    <>
+                      {message.images?.map((image) => (
+                        <figure
+                          className={styles.messageAttachment}
+                          key={image.url}
+                        >
+                          <img alt={image.name} src={image.url} />
+                          <figcaption>{image.name}</figcaption>
+                        </figure>
                       ))}
-                    </ol>
-                  ) : null}
-                  {message.text ? (
-                    <div className={styles.reasoningText}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {message.text}
-                      </ReactMarkdown>
-                    </div>
-                  ) : !message.stages?.length ? (
-                    <div className={styles.conversationActivity}>
-                      <LoadingSpinner />
-                      <span>{activity || text('Thinking…', '正在思考…')}</span>
-                    </div>
-                  ) : null}
+                      {message.text ? (
+                        <div className={styles.markdownText}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {message.text}
+                          </ReactMarkdown>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <AssistantTurn
+                      language={language}
+                      message={message}
+                    />
+                  )}
                 </div>
               </li>
             ))}

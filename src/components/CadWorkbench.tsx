@@ -40,7 +40,11 @@ import {
   trashArtifacts,
 } from '../lib/agent-api';
 import { preferredPreviewArtifact } from '../lib/artifact-selection';
-import { finishChatStages, startChatStage } from '../lib/chat-stages';
+import {
+  appendChatStepText,
+  completeChatTurn,
+  startChatStep,
+} from '../lib/chat-turn';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import {
   ACCEPTED_IMAGE_TYPES,
@@ -52,6 +56,7 @@ import {
   type ArtifactSummary,
   type ArtifactWorkspace,
   type ChatMessage,
+  type ChatTurn,
   type HealthResponse,
   type ParameterModel,
   type SessionSummary,
@@ -70,7 +75,6 @@ export function CadWorkbench({
   storageOpen,
 }: CadWorkbenchProps) {
     const text = translator(language);
-    const [activity, setActivity] = useState('');
     const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
     const [artifactWorkspace, setArtifactWorkspace] = useState<ArtifactWorkspace>({
       id: 'amagine3d-pomodoro',
@@ -130,6 +134,17 @@ export function CadWorkbench({
       () => sessions.find((session) => session.id === sessionId),
       [sessionId, sessions],
     );
+    const activity = useMemo(() => {
+      const activeTurn = messages.findLast(
+        (message) =>
+          message.role === 'assistant' && message.finishedAt === undefined,
+      );
+      if (!activeTurn || activeTurn.role !== 'assistant') return '';
+      return (
+        activeTurn.steps.at(-1)?.label ??
+        text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent')
+      );
+    }, [language, messages]);
     const sessionTitle = (session: SessionSummary | undefined) =>
       session?.kind === 'builtin'
         ? text('Amagine3D Pomodoro Timer', 'Amagine3D 番茄钟')
@@ -171,36 +186,16 @@ export function CadWorkbench({
       ]);
     }
 
-    function startDraftStage(draftId: string, label: string, stage: string) {
-      const nextStage = {
-        id: crypto.randomUUID(),
-        label,
-        occurredAt: Date.now(),
-        stage,
-        status: 'running' as const,
-      };
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === draftId
-            ? {
-                ...message,
-                stages: startChatStage(message.stages ?? [], nextStage),
-              }
-            : message,
-        ),
-      );
-    }
-
-    function finishDraftStages(
+    function updateDraftTurn(
       draftId: string,
-      status: 'cancelled' | 'completed' | 'failed',
+      update: (turn: ChatTurn) => ChatTurn,
     ) {
       setMessages((current) =>
         current.map((message) =>
-          message.id === draftId
+          message.id === draftId && message.role === 'assistant'
             ? {
                 ...message,
-                stages: finishChatStages(message.stages ?? [], status),
+                ...update(message),
               }
             : message,
         ),
@@ -417,7 +412,7 @@ export function CadWorkbench({
         if (conversation) conversation.scrollTop = conversation.scrollHeight;
       });
       return () => cancelAnimationFrame(frame);
-    }, [messages, activity]);
+    }, [messages]);
 
     const connectionStatus = useMemo(() => {
       if (healthError) return text('Service unavailable', '服务未连接');
@@ -438,48 +433,14 @@ export function CadWorkbench({
       draftId: string,
       runSessionId: string,
     ) {
-      if (event.type === 'start') {
-        startDraftStage(
-          draftId,
-          text(
-            `Amagine3D Agent started ${event.model}`,
-            `Amagine3D Agent 已启动 ${event.model}`,
-          ),
-          'agent',
-        );
-        addRuntimeEntry(
-          text(
-            `Amagine3D Agent started ${event.model}`,
-            `Amagine3D Agent 已启动 ${event.model}`,
-          ),
-          'agent',
-        );
+      if (event.type === 'step') {
+        updateDraftTurn(draftId, (turn) => startChatStep(turn, event.step));
+        addRuntimeEntry(event.step.label, event.step.stage);
         return;
       }
-      if (event.type === 'activity') {
-        setActivity(event.label);
-        startDraftStage(draftId, event.label, event.tool ?? 'agent');
-        addRuntimeEntry(event.label, event.tool ?? 'agent');
-        return;
-      }
-      if (event.type === 'token') {
-        setActivity(text('Composing response', '正在组织回复'));
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === draftId
-              ? { ...message, text: message.text + event.content }
-              : message,
-          ),
-        );
-        return;
-      }
-      if (event.type === 'assistant') {
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === draftId
-              ? { ...message, state: 'complete', text: event.content }
-              : message,
-          ),
+      if (event.type === 'step_delta') {
+        updateDraftTurn(draftId, (turn) =>
+          appendChatStepText(turn, event.stepId, event.content),
         );
         return;
       }
@@ -518,15 +479,29 @@ export function CadWorkbench({
         );
         return;
       }
-      if (event.type === 'done') {
-        finishDraftStages(draftId, 'completed');
+      if (event.type === 'complete') {
+        updateDraftTurn(draftId, (turn) =>
+          completeChatTurn(turn, {
+            finishedAt: event.finishedAt,
+            replyText: event.content,
+            sourceStepId: event.sourceStepId,
+            status: 'completed',
+          }),
+        );
         addRuntimeEntry(text('Run completed', '执行完成'), 'done');
         void fetchSessionCatalog()
           .then((catalog) => setSessions(catalog.sessions))
           .catch(() => undefined);
         return;
       }
-      if (event.type === 'error') throw new Error(event.message);
+      updateDraftTurn(draftId, (turn) =>
+        completeChatTurn(turn, {
+          finishedAt: event.finishedAt,
+          replyText: event.message,
+          status: 'failed',
+        }),
+      );
+      addRuntimeEntry(event.message, 'error', 'error');
     }
 
     async function commitParameter(parameterId: string) {
@@ -605,7 +580,6 @@ export function CadWorkbench({
         id: crypto.randomUUID(),
         images: pendingImages.map(({ name, url }) => ({ name, url })),
         role: 'user',
-        state: 'complete',
         text: messageText,
       };
       const draftId = crypto.randomUUID();
@@ -622,29 +596,14 @@ export function CadWorkbench({
         userMessage,
         {
           id: draftId,
+          replyText: '',
           role: 'assistant',
-          stages: [
-            {
-              id: crypto.randomUUID(),
-              label: text(
-                'Starting Amagine3D Agent',
-                '正在启动 Amagine3D Agent',
-              ),
-              occurredAt: Date.now(),
-              stage: 'start',
-              status: 'running',
-            },
-          ],
-          state: 'streaming',
-          text: '',
+          steps: [],
         },
       ]);
       setPendingImages([]);
       setPrompt('');
       setRunning(true);
-      setActivity(
-        text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent'),
-      );
       addRuntimeEntry(
         text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent'),
         'start',
@@ -660,36 +619,22 @@ export function CadWorkbench({
           signal: controller.signal,
           webSearchEnabled,
         });
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === draftId
-              ? {
-                  ...message,
-                  state: 'complete',
-                  text: message.text,
-                }
-              : message,
-          ),
-        );
       } catch (error) {
         const message = errorText(error, language);
-        finishDraftStages(
-          draftId,
+        const status =
           error instanceof DOMException && error.name === 'AbortError'
             ? 'cancelled'
-            : 'failed',
+            : 'failed';
+        updateDraftTurn(draftId, (turn) =>
+          completeChatTurn(turn, {
+            finishedAt: Date.now(),
+            replyText: message,
+            status,
+          }),
         );
         addRuntimeEntry(message, 'error', 'error');
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === draftId
-              ? { ...item, state: 'complete', text: message }
-              : item,
-          ),
-        );
       } finally {
         abortRef.current = undefined;
-        setActivity('');
         setRunning(false);
         requestAnimationFrame(() => textareaRef.current?.focus());
       }
@@ -774,7 +719,6 @@ export function CadWorkbench({
       <div className={styles.workspace} style={workspaceStyle}>
         <LeftPanel
           chat={{
-            activity,
             busy: parameterBuilding,
             conversationRef,
             language,

@@ -1,6 +1,4 @@
-export type ChatRole = 'assistant' | 'user';
-
-export const API_VERSION = 6;
+export const API_VERSION = 7;
 export const BUNDLED_POMODORO_SESSION_ID = 'builtin:amagine3d-pomodoro';
 export const ACCEPTED_IMAGE_TYPES = [
   'image/png',
@@ -27,22 +25,42 @@ export interface ChatImagePreview {
   url: string;
 }
 
-export interface ChatStage {
+export type ChatStepStatus =
+  | 'cancelled'
+  | 'completed'
+  | 'failed'
+  | 'running';
+
+export type ChatTurnTerminalStatus = Exclude<ChatStepStatus, 'running'>;
+
+export interface ChatStep {
   id: string;
   label: string;
   occurredAt: number;
+  progressText?: string;
   stage: string;
-  status: 'cancelled' | 'completed' | 'failed' | 'running';
+  status: ChatStepStatus;
 }
 
-export interface ChatMessage {
+export interface ChatTurn {
+  finishedAt?: number;
+  replyText: string;
+  steps: ChatStep[];
+}
+
+export interface UserChatMessage {
   id: string;
   images?: ChatImagePreview[];
-  role: ChatRole;
-  stages?: ChatStage[];
+  role: 'user';
   text: string;
-  state?: 'complete' | 'streaming';
 }
+
+export interface AssistantChatMessage extends ChatTurn {
+  id: string;
+  role: 'assistant';
+}
+
+export type ChatMessage = AssistantChatMessage | UserChatMessage;
 
 export interface SkillSummary {
   description: string;
@@ -151,15 +169,19 @@ export interface HealthResponse {
 }
 
 export type AgentEvent =
-  | { type: 'start'; model: string; skills: string[] }
-  | { type: 'token'; content: string }
-  | { type: 'activity'; label: string; tool?: string }
+  | { type: 'step'; step: ChatStep }
+  | { type: 'step_delta'; content: string; stepId: string }
   | {
       type: 'artifacts';
       artifacts: ArtifactSummary[];
       artifactWorkspace?: ArtifactWorkspace;
       sessionId: string;
     }
-  | { type: 'assistant'; content: string }
-  | { type: 'done'; cost?: number; sessionId: string }
-  | { type: 'error'; message: string; code?: string };
+  | {
+      type: 'complete';
+      content: string;
+      finishedAt: number;
+      sessionId: string;
+      sourceStepId?: string;
+    }
+  | { type: 'error'; message: string; code?: string; finishedAt: number };

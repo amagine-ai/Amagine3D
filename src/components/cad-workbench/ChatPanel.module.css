@@ -62,14 +62,6 @@
   background: var(--color-fill);
 }
 
-.messageBubble > p {
-  margin: 0;
-  color: var(--color-ink);
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
 .messageAttachment {
   display: grid;
   width: min(18rem, 100%);
@@ -109,22 +101,84 @@
 
 .conversationActivity {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--space-xs);
   padding: var(--space-xs) 0;
   color: var(--color-ink-soft);
 }
 
-.chatStages {
-  display: grid;
-  gap: var(--space-2xs);
-  margin: 0;
-  padding: var(--space-xs) 0;
+.chatTrace {
+  min-width: 0;
+}
+
+.chatTraceSummary {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-muted);
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  line-height: 1.4;
   list-style: none;
 }
 
-.chatStages li {
+.chatTraceSummary::-webkit-details-marker {
+  display: none;
+}
+
+.chatTraceSummary::after {
+  margin-inline-start: var(--space-2xs);
+  color: var(--color-muted);
+  content: '›';
+  font-size: var(--text-base);
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.chatTrace[open] > .chatTraceSummary::after {
+  transform: rotate(90deg);
+}
+
+.chatTraceSummary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid currentColor;
+  outline-offset: 0.25rem;
+}
+
+.chatTrace[data-status='failed'] .chatTraceSummary,
+.chatTrace[data-status='cancelled'] .chatTraceSummary {
+  color: var(--color-error);
+}
+
+.chatTraceMarker {
+  display: inline-grid;
+  width: 0.875rem;
+  height: 0.875rem;
+  place-items: center;
+  color: var(--color-success);
+}
+
+.chatTraceSeparator {
+  color: var(--color-muted);
+}
+
+.chatSteps {
+  display: grid;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chatSteps > li {
+  display: grid;
+  gap: var(--space-2xs);
+}
+
+.chatStepRow {
   display: grid;
   grid-template-columns: 1rem minmax(0, 1fr);
   align-items: center;
@@ -134,16 +188,16 @@
   line-height: 1.4;
 }
 
-.chatStages li[data-status='running'] {
+.chatSteps > li[data-status='running'] .chatStepRow {
   color: var(--color-ink);
 }
 
-.chatStages li[data-status='failed'],
-.chatStages li[data-status='cancelled'] {
+.chatSteps > li[data-status='failed'] .chatStepRow,
+.chatSteps > li[data-status='cancelled'] .chatStepRow {
   color: var(--color-error);
 }
 
-.chatStageMarker {
+.chatStepMarker {
   display: inline-grid;
   width: 0.875rem;
   height: 0.875rem;
@@ -152,67 +206,70 @@
   font-size: var(--text-xs);
 }
 
-.chatStages li[data-status='failed'] .chatStageMarker,
-.chatStages li[data-status='cancelled'] .chatStageMarker {
+.chatSteps > li[data-status='failed'] .chatStepMarker,
+.chatSteps > li[data-status='cancelled'] .chatStepMarker {
   color: var(--color-error);
 }
 
-.reasoningText {
+.markdownText {
   display: grid;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   gap: var(--space-xs);
-  max-height: 15rem;
-  overflow: auto;
-  color: #000;
+  color: var(--color-ink);
   font-size: var(--text-sm);
   line-height: 1.55;
 }
 
-.reasoningText :is(h3, h4, p, ul, ol, pre) {
+.progressText {
+  padding-inline-start: calc(1rem + var(--space-xs));
+  color: var(--color-ink-soft);
+}
+
+.markdownText :is(h3, h4, p, ul, ol, pre) {
   margin: 0;
 }
 
-.reasoningText :is(p, li, blockquote, table, th, td) {
+.markdownText :is(p, li, blockquote, table, th, td) {
   overflow-wrap: anywhere;
 }
 
-.reasoningText > * {
+.markdownText > * {
   min-width: 0;
   max-width: 100%;
 }
 
-.reasoningText :is(h3, h4) {
-  color: #000;
+.markdownText :is(h3, h4) {
+  color: var(--color-ink);
   font-family: var(--font-display);
 }
 
-.reasoningText h3 {
+.markdownText h3 {
   font-size: var(--text-base);
 }
 
-.reasoningText h4 {
+.markdownText h4 {
   font-size: var(--text-sm);
 }
 
-.reasoningText :is(ul, ol) {
+.markdownText :is(ul, ol) {
   display: grid;
   gap: var(--space-2xs);
   padding-inline-start: var(--space-lg);
 }
 
-.reasoningText table {
+.markdownText table {
   display: block;
   overflow-x: auto;
 }
 
-.reasoningText img {
+.markdownText img {
   max-width: 100%;
   height: auto;
 }
 
-.reasoningText pre {
+.markdownText pre {
   max-width: 100%;
   padding: var(--space-sm);
   overflow: auto;
@@ -221,16 +278,27 @@
   background: var(--color-paper-sunken);
 }
 
-.reasoningText code {
+.markdownText code {
   font-family: var(--font-display);
   font-size: inherit;
 }
 
-.reasoningText :not(pre) > code {
+.markdownText :not(pre) > code {
   overflow-wrap: anywhere;
   white-space: break-spaces;
 }
 
-.reasoningText pre code {
+.markdownText pre code {
   white-space: pre;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
