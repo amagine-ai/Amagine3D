@@ -6,6 +6,11 @@ import type { ArtifactSummary } from '../src/types.ts';
 const BUILD_REPORT_SCHEMAS = new Set([
   'evidence-cad-build/v2',
   'evidence-color-build/v2',
+  'evidence-color-build/v3',
+]);
+const COLOR_BUILD_REPORT_SCHEMAS = new Set([
+  'evidence-color-build/v2',
+  'evidence-color-build/v3',
 ]);
 const MAX_BUILD_REPORT_BYTES = 2 * 1024 * 1024;
 
@@ -95,15 +100,15 @@ export async function discoverModelBuilds(
     } catch {
       continue;
     }
-    if (!BUILD_REPORT_SCHEMAS.has(String(report.schema))) continue;
+    const schema = String(report.schema);
+    if (!BUILD_REPORT_SCHEMAS.has(schema)) continue;
     const sourcePath = artifactPathForReference(
       workspaceRoot,
       artifacts,
       report.source?.path,
       'source',
     );
-    const primaryKey =
-      report.schema === 'evidence-color-build/v2' ? '3mf' : 'stl';
+    const primaryKey = COLOR_BUILD_REPORT_SCHEMAS.has(schema) ? '3mf' : 'stl';
     const primaryPreviewPath = artifactPathForReference(
       workspaceRoot,
       artifacts,

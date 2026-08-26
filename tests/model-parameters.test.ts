@@ -265,12 +265,45 @@ test(
     const root = await mkdtemp(join(tmpdir(), 'amagine-color-parameter-'));
     try {
       const skillRoot = join(PROJECT_ROOT, 'skills', 'text-a3d-color');
+      await writeFile(
+        join(root, 'color_bar_intent.json'),
+        `${JSON.stringify({
+          color_regions: [
+            {
+              hex: '#F05A35',
+              material: { transmission: 'opaque' },
+              name: 'left',
+            },
+            {
+              hex: '#171717',
+              material: { transmission: 'opaque' },
+              name: 'right',
+            },
+          ],
+          features: [
+            { id: 'complete-parent' },
+            { id: 'left-region' },
+            { id: 'right-region' },
+          ],
+          part: 'color_bar',
+          printability: {
+            critical_features: [
+              'complete-parent',
+              'left-region',
+              'right-region',
+            ],
+          },
+          schema: 'evidence-color-intent/v3',
+        })}\n`,
+        'utf8',
+      );
       const source = `import sys
 sys.path.insert(0, ${JSON.stringify(skillRoot)})
 from build123d import Box, Pos
 from cad_helpers import export_regions, observe, parameter
 
 NAME = "color_bar"
+INTENT = "color_bar_intent.json"
 WIDTH = parameter(
     "overall-width", 20.0,
     min_value=10.0, max_value=30.0, step=0.5,
@@ -289,7 +322,7 @@ regions = {
 }
 
 if __name__ == "__main__":
-    export_regions(regions, NAME, parent=parent, source_path=__file__)
+    export_regions(regions, NAME, parent=parent, intent_path=INTENT, source_path=__file__)
 `;
       await writeFile(join(root, 'color_bar.py'), source);
       await execFileAsync(VENV_PYTHON, ['color_bar.py'], { cwd: root });
@@ -301,6 +334,7 @@ if __name__ == "__main__":
         [
           'color_bar-left.stl',
           'color_bar-right.stl',
+          'color_bar-combined.stl',
           'color_bar.3mf',
           'color_bar.step',
         ].sort(),
@@ -317,9 +351,9 @@ if __name__ == "__main__":
       });
       const report = JSON.parse(
         await readFile(join(root, 'color_bar_report.json'), 'utf8'),
-      ) as { features: { 'complete-parent': { bounds_mm: { size: number[] } } } };
+      ) as { features: { 'complete-parent': { bbox_mm: { size: number[] } } } };
       assert.deepEqual(
-        report.features['complete-parent'].bounds_mm.size,
+        report.features['complete-parent'].bbox_mm.size,
         [24, 10, 5],
       );
       assert.ok((await readFile(join(root, 'color_bar.3mf'))).byteLength > 0);
