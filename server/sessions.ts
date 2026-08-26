@@ -16,6 +16,7 @@ import {
 } from '../src/types.ts';
 import { scanArtifacts } from './artifacts.ts';
 import { bundledPomodoroArtifacts } from './bundled-workspace.ts';
+import { errorMessage } from './http-utils.ts';
 import { discoverModelBuilds } from './model-builds.ts';
 import {
   restoredChatStages,
@@ -137,16 +138,23 @@ export async function readSessionMessages(path: string): Promise<ChatMessage[]> 
     if (entry.type !== 'message') continue;
     const role = entry.message.role;
     if (role !== 'assistant' && role !== 'user') continue;
-    const text = messageText(entry.message.content).trim();
+    const rawText =
+      messageText(entry.message.content).trim() ||
+      (role === 'assistant' && entry.message.errorMessage
+        ? errorMessage(entry.message.errorMessage).trim()
+        : '');
+    const text = role === 'user'
+      ? rawText
+          .replace(/\n*<uploaded_image_files>[\s\S]*$/u, '')
+          .replace(/\n*<web_reference_(?:mode|repair)\b[\s\S]*$/u, '')
+          .trim()
+      : rawText;
     if (!text) continue;
     messages.push({
       id: entry.id,
       role,
       state: 'complete',
-      text:
-        role === 'user'
-          ? text.replace(/\n*<uploaded_image_files>[\s\S]*$/u, '').trim()
-          : text,
+      text,
     });
   }
   return messages;

@@ -15,7 +15,11 @@ import {
 
 const SESSION_ID = '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93';
 
-async function writeSession(sessionRoot: string, workspace: string): Promise<string> {
+async function writeSession(
+  sessionRoot: string,
+  workspace: string,
+  firstUserText = '生成一个桌面支架',
+): Promise<string> {
   const timestamp = '2026-08-23T08:00:00.000Z';
   const path = join(sessionRoot, `2026-08-23T08-00-00-000Z_${SESSION_ID}.jsonl`);
   const entries = [
@@ -33,7 +37,7 @@ async function writeSession(sessionRoot: string, workspace: string): Promise<str
       timestamp,
       message: {
         role: 'user',
-        content: [{ type: 'text', text: '生成一个桌面支架' }],
+        content: [{ type: 'text', text: firstUserText }],
         timestamp: Date.parse(timestamp),
       },
     },
@@ -116,7 +120,15 @@ test('restores display messages from a persisted PI session', async () => {
   try {
     const sessionRoot = join(root, 'sessions');
     await mkdir(sessionRoot);
-    const path = await writeSession(sessionRoot, join(root, 'workspace'));
+    const path = await writeSession(
+      sessionRoot,
+      join(root, 'workspace'),
+      `生成一个桌面支架
+
+<web_reference_mode required="true">
+Search before building.
+</web_reference_mode>`,
+    );
     const messages = await readSessionMessages(path);
     assert.deepEqual(
       messages.map(({ role, text }) => ({ role, text })),
@@ -133,7 +145,7 @@ test('restores display messages from a persisted PI session', async () => {
   }
 });
 
-test('restores a failed run trace even when PI produced no assistant text', async () => {
+test('restores the final provider error with a failed run trace', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-failed-run-'));
   try {
     const sessionRoot = join(root, 'sessions');
@@ -153,6 +165,19 @@ test('restores a failed run trace even when PI produced no assistant text', asyn
         },
       },
       {
+        type: 'message',
+        id: 'failed-assistant-message',
+        parentId: 'failed-user-message',
+        timestamp,
+        message: {
+          role: 'assistant',
+          content: [],
+          errorMessage: 'provider request failed',
+          stopReason: 'error',
+          timestamp: Date.parse(timestamp),
+        },
+      },
+      {
         type: 'custom',
         customType: 'amagine3d.run-stages.v1',
         data: {
@@ -167,7 +192,7 @@ test('restores a failed run trace even when PI produced no assistant text', asyn
           ],
         },
         id: 'failed-run-stages',
-        parentId: 'failed-user-message',
+        parentId: 'failed-assistant-message',
         timestamp,
       },
     ];
@@ -178,7 +203,7 @@ test('restores a failed run trace even when PI produced no assistant text', asyn
 
     const messages = await readSessionMessages(path);
     assert.equal(messages.at(-1)?.role, 'assistant');
-    assert.equal(messages.at(-1)?.text, '');
+    assert.equal(messages.at(-1)?.text, 'provider request failed');
     assert.equal(messages.at(-1)?.stages?.[0]?.status, 'failed');
   } finally {
     await rm(root, { force: true, recursive: true });
