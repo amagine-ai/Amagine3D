@@ -35,6 +35,19 @@ qa_check = load_module("qa_check", SKILL / "qa_check.py")
 cad_helpers = load_module("single_cad_helpers", SKILL / "cad_helpers.py")
 assembly_check = load_module("single_assembly_check", SKILL / "assembly_check.py")
 intent_contract = load_module("single_intent_contract", SKILL / "intent_contract.py")
+step_check = load_module("single_step_check", SKILL / "step_check.py")
+
+COORDINATE_SYSTEM = {
+    "back": "y-max",
+    "bottom": "z-min",
+    "front": "y-min",
+    "left": "x-min",
+    "right": "x-max",
+    "top": "z-max",
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+}
 
 
 class BambuProfileTests(unittest.TestCase):
@@ -288,7 +301,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
         cad_helpers._EVENTS.clear()
         cad_helpers._PARAMETERS.clear()
 
-    def test_export_assembly_writes_part_stls_combined_stl_and_auditable_report(self):
+    def test_export_assembly_writes_print_stls_step_masters_and_auditable_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             intent_path = root / "case_intent.json"
@@ -296,6 +309,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 json.dumps({
                     "schema": "evidence-cad-intent/v4",
                     "part": "case",
+                    "coordinate_system": COORDINATE_SYSTEM,
                     "manufacturing": {
                         "mode": "multipart",
                         "parts": [
@@ -347,8 +361,9 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                     source_path=__file__,
                 )
 
-            self.assertEqual(report["schema"], "evidence-cad-assembly-build/v1")
-            self.assertEqual(report["combined"]["solid_count"], 2)
+            self.assertEqual(report["schema"], "evidence-cad-assembly-build/v3")
+            self.assertEqual(report["assembly"]["shape"]["solid_count"], 2)
+            self.assertEqual(report["print_plate"]["solid_count"], 2)
             self.assertEqual(
                 sorted(report["overlaps_mm3"]),
                 ["lower-shell&top-lid"],
@@ -359,15 +374,24 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             )
             self.assertTrue((root / "case-lower-shell.stl").is_file())
             self.assertTrue((root / "case-top-lid.stl").is_file())
-            self.assertTrue((root / "case-combined.stl").is_file())
-            self.assertTrue((root / "case.step").is_file())
+            self.assertTrue((root / "case.stl").is_file())
+            self.assertTrue((root / "case-assemble.step").is_file())
+            self.assertTrue((root / "case-display.glb").is_file())
 
             audit = assembly_check.audit_report(
                 root / "case_report.json",
-                combined_stl=root / "case-combined.stl",
+                print_stl=root / "case.stl",
                 max_overlap_mm3=0.01,
             )
             self.assertTrue(audit["pass"], audit)
+            assemble_audit = step_check.audit_step(
+                root / "case-assemble.step",
+                expect_solids=2,
+                expect_x=20,
+                expect_y=10,
+                expect_z=8,
+            )
+            self.assertTrue(assemble_audit["pass"], assemble_audit)
             self.assertEqual(
                 [
                     item["feature_id"]
@@ -393,38 +417,39 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertEqual(top_lid.returncode, 0, top_lid.stdout + top_lid.stderr)
             self.assertEqual(json.loads(top_lid.stdout)["report_part"], "top-lid")
 
-            combined = subprocess.run(
+            print_plate = subprocess.run(
                 [
                     sys.executable,
                     str(SKILL / "qa_check.py"),
-                    str(root / "case-combined.stl"),
+                    str(root / "case.stl"),
                     "--report",
                     str(root / "case_report.json"),
                     "--components",
                     "2",
                     "--expect-x",
-                    "20",
+                    "45",
                     "--expect-y",
                     "10",
                     "--expect-z",
-                    "8",
+                    "4",
                     "--require-z0",
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(combined.returncode, 0, combined.stdout + combined.stderr)
+            self.assertEqual(
+                print_plate.returncode,
+                0,
+                print_plate.stdout + print_plate.stderr,
+            )
 
             preview_report = root / "case_views.json"
             preview = subprocess.run(
                 [
                     sys.executable,
                     str(SKILL / "render_preview.py"),
-                    "--part",
-                    str(root / "case-lower-shell.stl"),
-                    "--part",
-                    str(root / "case-top-lid.stl"),
+                    str(root / "case-display.glb"),
                     "--out",
                     str(root / "case_views.png"),
                     "--report",
@@ -439,7 +464,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertEqual(preview.returncode, 0, preview.stdout + preview.stderr)
             self.assertTrue((root / "case_views.png").is_file())
             preview_payload = json.loads(preview_report.read_text(encoding="utf-8"))
-            self.assertEqual(len(preview_payload["meshes"]), 2)
+            self.assertEqual(len(preview_payload["meshes"]), 1)
             self.assertEqual(preview_payload["dimensions_mm"], [20.0, 10.0, 8.0])
             self.assertTrue(
                 all("preview_color_rgb" in item for item in preview_payload["meshes"])
@@ -451,7 +476,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             report_path.write_text(json.dumps(incomplete), encoding="utf-8")
             incomplete_audit = assembly_check.audit_report(
                 report_path,
-                combined_stl=root / "case-combined.stl",
+                print_stl=root / "case.stl",
             )
             self.assertFalse(incomplete_audit["pass"])
             self.assertIn("part_overlaps", incomplete_audit["errors"])
@@ -464,6 +489,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 json.dumps({
                     "schema": "evidence-cad-intent/v4",
                     "part": "case",
+                    "coordinate_system": COORDINATE_SYSTEM,
                     "manufacturing": {
                         "mode": "multipart",
                         "parts": [
@@ -505,7 +531,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                     source_path=__file__,
                 )
 
-    def test_touching_parts_produce_a_structured_component_failure(self):
+    def test_print_plate_separates_touching_assembly_parts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             intent_path = root / "touching_intent.json"
@@ -513,6 +539,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 json.dumps({
                     "schema": "evidence-cad-intent/v4",
                     "part": "touching",
+                    "coordinate_system": COORDINATE_SYSTEM,
                     "manufacturing": {
                         "mode": "multipart",
                         "parts": [
@@ -548,19 +575,20 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(SKILL / "qa_check.py"),
-                    str(root / "touching-combined.stl"),
+                    str(root / "touching.stl"),
                     "--report",
                     str(root / "touching_report.json"),
                     "--components",
                     "2",
+                    "--require-z0",
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads(result.stdout)
-            self.assertIn("connected_components", payload["errors"])
+            self.assertNotIn("connected_components", payload["errors"])
 
 
 class ContractTests(unittest.TestCase):

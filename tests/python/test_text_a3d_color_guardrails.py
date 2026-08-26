@@ -13,6 +13,7 @@ import unittest
 
 from build123d import Align, Box, Pos
 from PIL import Image
+import trimesh
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,7 +32,32 @@ def load_module(name: str, path: Path):
 
 color_profile = load_module("color_bambu_profile", COLOR / "bambu_profile.py")
 color_intent = load_module("color_intent_contract", COLOR / "intent_contract.py")
+color_step_check = load_module("color_step_check", COLOR / "step_check.py")
 single_intent = load_module("single_intent_contract", SINGLE / "intent_contract.py")
+
+COORDINATE_SYSTEM = {
+    "back": "y-max",
+    "bottom": "z-min",
+    "front": "y-min",
+    "left": "x-min",
+    "right": "x-max",
+    "top": "z-max",
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+}
+
+
+def _glb_vertex_colors(path: Path) -> set[tuple[int, int, int]]:
+    if path.read_bytes()[:4] != b"glTF":
+        raise AssertionError(f"{path} is not a binary glTF file")
+    scene = trimesh.load(path, force="scene", process=False)
+    colors: set[tuple[int, int, int]] = set()
+    for mesh in scene.geometry.values():
+        face_colors = getattr(mesh.visual, "face_colors", None)
+        if face_colors is not None and len(face_colors):
+            colors.add(tuple(int(value) for value in face_colors[0][:3]))
+    return colors
 
 
 class IndependentColorProfileTests(unittest.TestCase):
@@ -109,6 +135,7 @@ class ColorPipelineTests(unittest.TestCase):
             "part": "tile",
             "task_mode": "specification",
             "representation": "full-3d",
+            "coordinate_system": COORDINATE_SYSTEM,
             "reference_files": [],
             "dimensions_mm": {
                 "x": {"value": 20, "source": "user", "confidence": "high"},
@@ -186,18 +213,34 @@ class ColorPipelineTests(unittest.TestCase):
             )
         return report, profile_path, intent_path
 
-    def test_v3_report_combined_mesh_and_material_plan(self):
+    def test_v5_report_print_package_display_glb_step_master_and_material_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             report, _, _ = self._build_fixture(root)
-            self.assertEqual(report["schema"], "evidence-color-build/v3")
+            self.assertEqual(report["schema"], "evidence-color-build/v5")
             self.assertIn("events", report)
             self.assertIn("bbox_mm", report["features"]["thin-color-detail"])
             self.assertIn("bbox_mm", report["events"][0]["tool"])
-            self.assertTrue((root / "tile-combined.stl").is_file())
+            self.assertTrue((root / "tile-manufacturing.stl").is_file())
+            self.assertTrue((root / "tile-region-red.stl").is_file())
+            self.assertTrue((root / "tile-region-blue.stl").is_file())
+            self.assertTrue((root / "tile-assemble.step").is_file())
+            self.assertTrue((root / "tile-display.glb").is_file())
+            self.assertEqual(
+                _glb_vertex_colors(root / "tile-display.glb"),
+                {(204, 34, 51), (34, 85, 204)},
+            )
             plan = json.loads((root / "tile_material-plan.json").read_text())
             self.assertTrue(plan["requires_manual_slicer_assignment"])
             self.assertEqual(plan["archive_omits"], ["filament", "transmission"])
+            assemble_audit = color_step_check.audit_step(
+                root / "tile-assemble.step",
+                expect_solids=2,
+                expect_x=20,
+                expect_y=10,
+                expect_z=2,
+            )
+            self.assertTrue(assemble_audit["pass"], assemble_audit)
 
             assembly = subprocess.run(
                 [
@@ -212,7 +255,7 @@ class ColorPipelineTests(unittest.TestCase):
             )
             assembly_payload = json.loads(assembly.stdout)
             self.assertEqual(assembly.returncode, 0, assembly.stdout + assembly.stderr)
-            self.assertEqual(assembly_payload["schema"], "color-assembly-audit/v3")
+            self.assertEqual(assembly_payload["schema"], "color-assembly-audit/v4")
             self.assertTrue(assembly_payload["requires_manual_slicer_assignment"])
 
     def test_manufacturing_qa_rejects_unbound_report(self):
@@ -223,7 +266,7 @@ class ColorPipelineTests(unittest.TestCase):
             base_command = [
                 sys.executable,
                 str(COLOR / "qa_check.py"),
-                str(root / "tile-combined.stl"),
+                str(root / "tile-manufacturing.stl"),
                 "--profile",
                 str(profile_path),
                 "--intent",
@@ -232,13 +275,13 @@ class ColorPipelineTests(unittest.TestCase):
                 str(report_path),
             ]
 
-            report["artifacts"]["stl:combined"]["sha256"] = "0" * 64
+            report["artifacts"]["stl:manufacturing"]["sha256"] = "0" * 64
             report_path.write_text(json.dumps(report), encoding="utf-8")
             unbound = subprocess.run(
                 base_command, check=False, capture_output=True, text=True
             )
             self.assertEqual(unbound.returncode, 2)
-            self.assertIn("combined STL", json.loads(unbound.stdout)["error"])
+            self.assertIn("manufacturing STL", json.loads(unbound.stdout)["error"])
 
     def test_every_declared_critical_feature_requires_build_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -262,7 +305,7 @@ class ColorPipelineTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(COLOR / "qa_check.py"),
-                    str(root / "tile-combined.stl"),
+                    str(root / "tile-manufacturing.stl"),
                     "--profile",
                     str(profile_path),
                     "--intent",
@@ -286,7 +329,7 @@ class ColorPipelineTests(unittest.TestCase):
                 ["unobserved-interface-wall"],
             )
 
-    def test_region_topology_and_combined_manufacturing_are_separate(self):
+    def test_region_topology_and_manufacturing_printability_are_separate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             report, profile_path, intent_path = self._build_fixture(root)
@@ -296,7 +339,7 @@ class ColorPipelineTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(COLOR / "qa_check.py"),
-                    str(root / "tile-red.stl"),
+                    str(root / "tile-region-red.stl"),
                     "--topology-only",
                     "--region",
                     "red",
@@ -315,11 +358,11 @@ class ColorPipelineTests(unittest.TestCase):
                 for item in region_payload["checks"]
             ))
 
-            combined = subprocess.run(
+            manufacturing = subprocess.run(
                 [
                     sys.executable,
                     str(COLOR / "qa_check.py"),
-                    str(root / "tile-combined.stl"),
+                    str(root / "tile-manufacturing.stl"),
                     "--profile",
                     str(profile_path),
                     "--intent",
@@ -327,7 +370,7 @@ class ColorPipelineTests(unittest.TestCase):
                     "--report",
                     str(report_path),
                     "--components",
-                    str(report["combined"]["solid_count"]),
+                    str(report["manufacturing"]["solid_count"]),
                     "--expect-x",
                     "20",
                     "--expect-y",
@@ -340,11 +383,15 @@ class ColorPipelineTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            combined_payload = json.loads(combined.stdout)
-            self.assertEqual(combined.returncode, 0, combined.stdout + combined.stderr)
-            self.assertEqual(combined_payload["scope"], "manufacturing")
+            manufacturing_payload = json.loads(manufacturing.stdout)
+            self.assertEqual(
+                manufacturing.returncode,
+                0,
+                manufacturing.stdout + manufacturing.stderr,
+            )
+            self.assertEqual(manufacturing_payload["scope"], "manufacturing")
             feature = next(
-                item for item in combined_payload["checks"]
+                item for item in manufacturing_payload["checks"]
                 if item["name"] == "printability_feature_resolution"
             )
             self.assertEqual(feature["status"], "warning")
@@ -353,7 +400,7 @@ class ColorPipelineTests(unittest.TestCase):
                 "thin-color-detail",
             )
             coverage = next(
-                item for item in combined_payload["checks"]
+                item for item in manufacturing_payload["checks"]
                 if item["name"] == "printability_critical_feature_coverage"
             )
             self.assertEqual(coverage["status"], "pass")
@@ -374,9 +421,9 @@ class ColorPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(COLOR / "render_preview.py"),
                     "--part",
-                    f"{root / 'tile-red.stl'}=#CC2233",
+                    f"{root / 'tile-region-red.stl'}=#CC2233",
                     "--part",
-                    f"{root / 'tile-blue.stl'}=#2255CC",
+                    f"{root / 'tile-region-blue.stl'}=#2255CC",
                     "--out",
                     str(root / "views.png"),
                     "--reference-view",
