@@ -1,8 +1,26 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { preferredPreviewArtifact } from '../src/lib/artifact-selection.ts';
+import {
+  fileSectionArtifacts,
+  preferredPreviewArtifact,
+} from '../src/lib/artifact-selection.ts';
 import type { ArtifactSummary, PreviewFormat } from '../src/types.ts';
+
+function artifact(
+  path: string,
+  kind: ArtifactSummary['kind'],
+  modifiedAt = '2026-08-23T08:00:00.000Z',
+): ArtifactSummary {
+  return {
+    kind,
+    modifiedAt,
+    name: path.split('/').at(-1) ?? path,
+    path,
+    size: 1,
+    url: `/api/artifacts/file?path=${encodeURIComponent(path)}`,
+  };
+}
 
 function model(
   path: string,
@@ -10,13 +28,8 @@ function model(
   modifiedAt: string,
 ): ArtifactSummary {
   return {
+    ...artifact(path, 'model', modifiedAt),
     ...(format ? { format } : {}),
-    kind: 'model',
-    modifiedAt,
-    name: path.split('/').at(-1) ?? path,
-    path,
-    size: 1,
-    url: `/api/artifacts/file?path=${encodeURIComponent(path)}`,
   };
 }
 
@@ -66,5 +79,41 @@ test('honors the explicit preview of a bundled project', () => {
   assert.equal(
     preferredPreviewArtifact(artifacts)?.path,
     'focus-bar-logical-assembly.3mf',
+  );
+});
+
+test('shows only model files and PNG images in the file section', () => {
+  const artifacts = [
+    artifact('part.py', 'source'),
+    model('part.step', undefined, '2026-08-23T08:00:05.000Z'),
+    artifact('preview.PNG', 'image'),
+    artifact('reference.webp', 'image'),
+    artifact('part_report.json', 'report'),
+  ];
+  assert.deepEqual(
+    fileSectionArtifacts(artifacts).map(({ path }) => path),
+    ['part.step', 'preview.PNG'],
+  );
+});
+
+test('pins the preferred combined model at the top of the file section', () => {
+  const preferred = {
+    ...model('shell_case-combined.stl', 'stl', '2026-08-23T08:00:01.000Z'),
+    featured: true,
+  };
+  const artifacts = [
+    model('shell_case.step', undefined, '2026-08-23T08:00:05.000Z'),
+    artifact('preview.png', 'image', '2026-08-23T08:00:04.000Z'),
+    model('shell_case-top-lid.stl', 'stl', '2026-08-23T08:00:03.000Z'),
+    preferred,
+  ];
+  assert.deepEqual(
+    fileSectionArtifacts(artifacts).map(({ path }) => path),
+    [
+      'shell_case-combined.stl',
+      'shell_case.step',
+      'preview.png',
+      'shell_case-top-lid.stl',
+    ],
   );
 });

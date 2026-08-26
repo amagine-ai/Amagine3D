@@ -44,7 +44,10 @@ import {
   trashArtifacts,
   trashStorageSessions,
 } from '../lib/agent-api';
-import { preferredPreviewArtifact } from '../lib/artifact-selection';
+import {
+  fileSectionArtifacts,
+  preferredPreviewArtifact,
+} from '../lib/artifact-selection';
 import {
   appendChatStepText,
   completeChatTurn,
@@ -316,7 +319,9 @@ export function CadWorkbench({
 
     function selectInitialArtifact(nextArtifacts: ArtifactSummary[]) {
       setSelectedPath(
-        preferredPreviewArtifact(nextArtifacts)?.path ?? nextArtifacts[0]?.path,
+        preferredPreviewArtifact(nextArtifacts)?.path ??
+          fileSectionArtifacts(nextArtifacts)[0]?.path ??
+          nextArtifacts[0]?.path,
       );
     }
 
@@ -361,6 +366,7 @@ export function CadWorkbench({
             detail.artifacts.some(({ path }) => path === preferredArtifactPath)
             ? preferredArtifactPath
             : preferredPreviewArtifact(detail.artifacts)?.path ??
+                fileSectionArtifacts(detail.artifacts)[0]?.path ??
                 detail.artifacts[0]?.path,
         );
       } catch (error) {
@@ -389,6 +395,7 @@ export function CadWorkbench({
           }
           return (
             preferredPreviewArtifact(next.artifacts)?.path ??
+            fileSectionArtifacts(next.artifacts)[0]?.path ??
             next.artifacts[0]?.path
           );
         });

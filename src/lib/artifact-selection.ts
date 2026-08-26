@@ -34,3 +34,27 @@ export function preferredPreviewArtifact(
         left.path.localeCompare(right.path),
     )[0];
 }
+
+function isPngImage(artifact: ArtifactSummary): boolean {
+  return (
+    artifact.kind === 'image' && artifact.path.toLowerCase().endsWith('.png')
+  );
+}
+
+export function fileSectionArtifacts(
+  artifacts: readonly ArtifactSummary[],
+): ArtifactSummary[] {
+  const preferredPath = preferredPreviewArtifact(artifacts)?.path;
+  return artifacts
+    .map((artifact, index) => ({ artifact, index }))
+    .filter(
+      ({ artifact }) => artifact.kind === 'model' || isPngImage(artifact),
+    )
+    .sort(
+      (left, right) =>
+        Number(right.artifact.path === preferredPath) -
+          Number(left.artifact.path === preferredPath) ||
+        left.index - right.index,
+    )
+    .map(({ artifact }) => artifact);
+}

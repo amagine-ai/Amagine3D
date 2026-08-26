@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import styles from './FilesPanel.module.css';
+import { fileSectionArtifacts } from '../../lib/artifact-selection';
 import type { ArtifactSummary } from '../../types';
 import { ArtifactIcon } from './ArtifactIcon';
 import type { Language } from './types';
@@ -36,20 +37,24 @@ export function FilesPanel({
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(
     () => new Set(),
   );
+  const visibleArtifacts = useMemo(
+    () => fileSectionArtifacts(artifacts),
+    [artifacts],
+  );
   const selectedArtifacts = useMemo(
-    () => artifacts.filter(({ path }) => selectedPaths.has(path)),
-    [artifacts, selectedPaths],
+    () => visibleArtifacts.filter(({ path }) => selectedPaths.has(path)),
+    [selectedPaths, visibleArtifacts],
   );
 
   useEffect(() => {
-    const availablePaths = new Set(artifacts.map(({ path }) => path));
+    const availablePaths = new Set(visibleArtifacts.map(({ path }) => path));
     setSelectedPaths((current) => {
       const next = new Set(
         [...current].filter((path) => availablePaths.has(path)),
       );
       return next.size === current.size ? current : next;
     });
-  }, [artifacts]);
+  }, [visibleArtifacts]);
 
   useEffect(() => {
     setSelectedPaths(new Set());
@@ -85,7 +90,7 @@ export function FilesPanel({
         <div className={styles.sectionHeading}>
           <h2>{workspaceName}</h2>
           <div className={styles.fileHeadingActions}>
-            <span>{artifacts.length}</span>
+            <span>{visibleArtifacts.length}</span>
             <button
               aria-label={text('Refresh files', '刷新文件')}
               className={styles.fileRefreshButton}
@@ -97,16 +102,16 @@ export function FilesPanel({
             </button>
           </div>
         </div>
-        {artifacts.length === 0 ? (
+        {visibleArtifacts.length === 0 ? (
           <p className={styles.fileEmpty}>
             {text(
-              'Files appear after the Agent saves them.',
-              'Agent 保存文件后会显示在这里。',
+              'Models and PNG previews appear after the Agent saves them.',
+              'Agent 保存模型或 PNG 预览后会显示在这里。',
             )}
           </p>
         ) : (
           <ul className={styles.fileTree}>
-            {artifacts.map((artifact) => (
+            {visibleArtifacts.map((artifact) => (
               <li key={artifact.path}>
                 <input
                   aria-label={text(
