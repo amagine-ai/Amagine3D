@@ -1,0 +1,2 @@
+# Hash-bound JSON evidence must have stable bytes on every checkout platform.
+*.json text eol=lf

@@ -21,13 +21,12 @@ export function activateProjectPython(projectRoot: string): PythonHealth {
     : join(projectRoot, '.venv', 'bin');
   process.env.VIRTUAL_ENV = join(projectRoot, '.venv');
   process.env.PATH = `${environmentBin}${delimiter}${process.env.PATH ?? ''}`;
-  process.env.MPLBACKEND = 'Agg';
 
   const result = spawnSync(
     executable,
     [
       '-c',
-      'import platform, build123d, lib3mf, matplotlib, numpy, PIL, rtree, trimesh; print(platform.python_version())',
+      'import platform, build123d, lib3mf, numpy, PIL, rtree, trimesh; print(platform.python_version())',
     ],
     { encoding: 'utf8' },
   );

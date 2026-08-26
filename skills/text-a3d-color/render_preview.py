@@ -9,49 +9,51 @@ import json
 from pathlib import Path
 import re
 import sys
+import tracemalloc
 
-import matplotlib
 
-matplotlib.use("Agg")
+SKILLS_ROOT = Path(__file__).resolve().parents[1]
+if str(SKILLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILLS_ROOT))
 
-import matplotlib.pyplot as plt
-import numpy as np
-import trimesh
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from cpu_z_buffer import (  # noqa: E402
+    CONTACT_VIEWS,
+    DEFAULT_MAX_RESOLUTION,
+    DEFAULT_OUTPUT_SIZE,
+    DEFAULT_MAX_TRIANGLES,
+    HARD_MAX_RESOLUTION,
+    HARD_MAX_TRIANGLES,
+    MAX_SUPERSAMPLE,
+    SUPPORTED_VIEWS,
+    MeshInput,
+    RenderLimits,
+    load_mesh,
+    mesh_bounds,
+    render_contact_sheet,
+    render_view,
+    triangle_count,
+)
 
 
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
-CAMERAS = {
-    "isometric": (28, 42),
-    "front": (0, -90),
-    "side": (0, 0),
-    "top": (89.9, -90),
-}
-REFERENCE_CAMERAS = {**CAMERAS, "bottom": (-89.9, -90)}
-LIGHT = np.array([0.35, -0.55, 0.76], dtype=float)
-LIGHT /= np.linalg.norm(LIGHT)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Region:
     name: str
     path: Path
     color: str
-    mesh: trimesh.Trimesh
-    facecolors: np.ndarray
+    render_input: MeshInput
 
 
 def _digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
 
-def _rgb(value: str) -> np.ndarray:
+def _rgb(value: str) -> tuple[int, int, int]:
     if not HEX.fullmatch(value):
         raise ValueError(f"invalid region color {value!r}; expected #RRGGBB")
-    return np.array(
-        [int(value[index:index + 2], 16) / 255 for index in (1, 3, 5)],
-        dtype=float,
-    )
+    return tuple(int(value[index : index + 2], 16) for index in (1, 3, 5))
 
 
 def _region(specification: str) -> Region:
@@ -59,85 +61,42 @@ def _region(specification: str) -> Region:
     if not separator or not filename:
         raise ValueError(f"bad --part value {specification!r}; expected path.stl=#RRGGBB")
     path = Path(filename).resolve()
-    mesh = trimesh.load(path, force="mesh", process=True)
-    if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
-        raise ValueError(f"no renderable mesh in {path}")
-    if not np.isfinite(mesh.vertices).all():
-        raise ValueError(f"non-finite vertices in {path}")
-    color = color.upper()
-    base = _rgb(color)
-    facing = np.einsum("ij,j->i", mesh.face_normals, LIGHT)
-    intensity = 0.42 + 0.58 * np.clip(facing, 0.0, 1.0)
-    facecolors = np.column_stack((np.outer(intensity, base), np.ones(len(intensity))))
-    return Region(path.stem, path, color, mesh, facecolors)
+    mesh = load_mesh(path)
+    normalized_color = color.upper()
+    render_input = MeshInput(path.stem, mesh, _rgb(normalized_color), path)
+    return Region(path.stem, path, normalized_color, render_input)
 
 
-def _bounds(regions: list[Region]) -> tuple[np.ndarray, np.ndarray]:
-    stack = np.array([region.mesh.bounds for region in regions])
-    return stack[:, 0].min(axis=0), stack[:, 1].max(axis=0)
-
-
-def _frame(axis, regions: list[Region], camera: tuple[float, float]) -> None:
-    low, high = _bounds(regions)
-    spans = high - low
-    center = (low + high) / 2
-    margin = max(float(spans.max()) * 0.06, 0.05)
-    half = np.maximum(spans / 2 + margin, 0.05)
-    triangles = np.concatenate([region.mesh.triangles for region in regions])
-    colors = np.concatenate([region.facecolors for region in regions])
-    axis.add_collection3d(Poly3DCollection(
-        triangles,
-        facecolors=colors,
-        edgecolors=(0.08, 0.09, 0.10, 0.12),
-        linewidths=0.10,
-        antialiased=True,
-    ))
-    axis.set_xlim(center[0] - half[0], center[0] + half[0])
-    axis.set_ylim(center[1] - half[1], center[1] + half[1])
-    axis.set_zlim(center[2] - half[2], center[2] + half[2])
-    axis.set_box_aspect(np.maximum(spans, 1e-6))
-    axis.set_proj_type("ortho")
-    axis.view_init(elev=camera[0], azim=camera[1])
-    axis.set_axis_off()
-
-
-def _contact(regions: list[Region], destination: Path, pixels: int) -> None:
+def _save_png(image, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    figure = plt.figure(figsize=(pixels / 100, pixels / 100), dpi=100)
-    for index, (name, camera) in enumerate(CAMERAS.items(), start=1):
-        axis = figure.add_subplot(2, 2, index, projection="3d")
-        _frame(axis, regions, camera)
-        axis.set_title(name, fontsize=9, color="#24313d")
-    low, high = _bounds(regions)
-    dimensions = high - low
-    palette = "  ".join(region.color for region in regions)
-    figure.suptitle(
-        f"{len(regions)} regions  ·  {dimensions[0]:.2f} × "
-        f"{dimensions[1]:.2f} × {dimensions[2]:.2f} mm  ·  {palette}",
-        fontsize=9,
-        color="#24313d",
-    )
-    figure.tight_layout()
-    figure.savefig(destination, bbox_inches="tight", facecolor="white")
-    plt.close(figure)
-
-
-def _matched(regions, camera, destination: Path, pixels: int) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    figure = plt.figure(figsize=(pixels / 100, pixels / 100), dpi=100)
-    axis = figure.add_subplot(1, 1, 1, projection="3d")
-    _frame(axis, regions, camera)
-    figure.subplots_adjust(left=0, right=1, bottom=0, top=1)
-    figure.savefig(destination, bbox_inches="tight", pad_inches=0, facecolor="white")
-    plt.close(figure)
+    image.save(destination, format="PNG")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--part", action="append", required=True)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--size", type=int, default=900)
-    parser.add_argument("--reference-view", choices=REFERENCE_CAMERAS)
+    parser.add_argument("--size", type=int, default=DEFAULT_OUTPUT_SIZE)
+    parser.add_argument(
+        "--supersample",
+        type=int,
+        choices=range(1, MAX_SUPERSAMPLE + 1),
+        default=1,
+        help="Render at 1x (default) or 2x, then downsample with Pillow",
+    )
+    parser.add_argument(
+        "--max-resolution",
+        type=int,
+        default=DEFAULT_MAX_RESOLUTION,
+        help=f"Internal per-view pixel limit (hard maximum {HARD_MAX_RESOLUTION})",
+    )
+    parser.add_argument(
+        "--max-triangles",
+        type=int,
+        default=DEFAULT_MAX_TRIANGLES,
+        help=f"Input triangle limit (hard maximum {HARD_MAX_TRIANGLES})",
+    )
+    parser.add_argument("--reference-view", choices=SUPPORTED_VIEWS)
     parser.add_argument("--reference-out")
     parser.add_argument("--report", help="Optional JSON evidence report")
     args = parser.parse_args()
@@ -146,46 +105,119 @@ def main() -> int:
     if args.size < 320:
         parser.error("--size must be at least 320")
 
+    tracing_was_active = tracemalloc.is_tracing()
+    if not tracing_was_active:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
     try:
+        limits = RenderLimits(
+            max_resolution=args.max_resolution,
+            max_triangles=args.max_triangles,
+        )
+        if args.reference_view and args.size * args.supersample > limits.max_resolution:
+            raise ValueError(
+                "matched-view internal resolution exceeds the configured maximum "
+                f"of {limits.max_resolution} pixels"
+            )
         regions = [_region(item) for item in args.part]
+        inputs = [region.render_input for region in regions]
+        count = triangle_count(inputs)
+        if count > limits.max_triangles:
+            raise ValueError(
+                f"meshes have {count} triangles; configured maximum is "
+                f"{limits.max_triangles}"
+            )
+        destination = Path(args.out).resolve()
+        low, high = mesh_bounds(inputs)
+        dimensions = high - low
+        palette = "  ".join(region.color for region in regions)
+        contact = render_contact_sheet(
+            inputs,
+            args.size,
+            title=(
+                f"{len(regions)} regions  |  {dimensions[0]:.2f} x "
+                f"{dimensions[1]:.2f} x {dimensions[2]:.2f} mm  |  {palette}"
+            ),
+            supersample=args.supersample,
+            limits=limits,
+        )
+        _save_png(contact.image, destination)
+
+        matched_stats = None
+        matched_path = None
+        if args.reference_view:
+            matched_path = Path(args.reference_out).resolve()
+            matched = render_view(
+                inputs,
+                args.reference_view,
+                args.size,
+                supersample=args.supersample,
+                limits=limits,
+            )
+            _save_png(matched.image, matched_path)
+            matched_stats = matched.stats
+
+        _, traced_peak = tracemalloc.get_traced_memory()
+        peak_buffer_bytes = max(
+            contact.peak_buffer_bytes,
+            matched_stats.buffer_bytes if matched_stats is not None else 0,
+        )
+        result = {
+            "dimensions_mm": [round(float(value), 4) for value in dimensions],
+            "performance": {
+                "four_view_seconds": round(contact.elapsed_seconds, 6),
+                "parallel_views": False,
+                "peak_memory_bytes": max(int(traced_peak), peak_buffer_bytes),
+                "processes": 1,
+                "supersample": args.supersample,
+                "triangle_count": count,
+                "views": {stat.view: stat.to_dict() for stat in contact.stats},
+            },
+            "preview": {
+                "path": str(destination),
+                "sha256": _digest(destination),
+            },
+            "projection": "orthographic",
+            "regions": [
+                {
+                    "color": region.color,
+                    "dimensions_mm": [
+                        round(float(value), 4)
+                        for value in region.render_input.mesh.extents
+                    ],
+                    "name": region.name,
+                    "path": str(region.path),
+                    "sha256": _digest(region.path),
+                    "watertight": bool(region.render_input.mesh.is_watertight),
+                }
+                for region in regions
+            ],
+            "renderer": "cpu-z-buffer/v1",
+            "schema": "evidence-color-render/v2",
+            "supported_views": list(SUPPORTED_VIEWS),
+            "views": list(CONTACT_VIEWS),
+        }
+        if matched_path is not None and matched_stats is not None:
+            result["matched_view"] = {
+                "name": args.reference_view,
+                "path": str(matched_path),
+                "sha256": _digest(matched_path),
+            }
+            result["performance"]["single_view_seconds"] = round(
+                matched_stats.elapsed_seconds, 6
+            )
+        payload = json.dumps(result, indent=2)
+        if args.report:
+            report = Path(args.report).resolve()
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(payload + "\n", encoding="utf-8")
+        print(payload)
+        return 0
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    destination = Path(args.out)
-    _contact(regions, destination, args.size)
-    low, high = _bounds(regions)
-    result = {
-        "dimensions_mm": [round(float(value), 4) for value in high - low],
-        "preview": {"path": str(destination.resolve()), "sha256": _digest(destination)},
-        "projection": "orthographic",
-        "regions": [
-            {
-                "color": region.color,
-                "dimensions_mm": [round(float(value), 4) for value in region.mesh.extents],
-                "name": region.name,
-                "path": str(region.path),
-                "sha256": _digest(region.path),
-                "watertight": bool(region.mesh.is_watertight),
-            }
-            for region in regions
-        ],
-        "schema": "evidence-color-render/v2",
-        "views": list(CAMERAS),
-    }
-    if args.reference_view:
-        matched = Path(args.reference_out)
-        _matched(regions, REFERENCE_CAMERAS[args.reference_view], matched, args.size)
-        result["matched_view"] = {
-            "name": args.reference_view,
-            "path": str(matched.resolve()),
-            "sha256": _digest(matched),
-        }
-    payload = json.dumps(result, indent=2)
-    if args.report:
-        report = Path(args.report)
-        report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(payload + "\n", encoding="utf-8")
-    print(payload)
-    return 0
+    finally:
+        if not tracing_was_active:
+            tracemalloc.stop()
 
 
 if __name__ == "__main__":

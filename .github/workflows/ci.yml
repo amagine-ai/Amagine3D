@@ -26,3 +26,31 @@ jobs:
       - run: npm run test:python
       - run: npm run build
       - run: npm audit --audit-level=high
+
+  cpu-renderer:
+    name: CPU renderer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      MKL_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      VECLIB_MAXIMUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install --disable-pip-version-check --requirement requirements.txt
+      - run: python -m unittest discover -s tests/python -p "test_*.py"
+      - run: python scripts/benchmark_cpu_z_buffer.py --resolution 320 --large-subdivisions 4 --out cpu-z-buffer-benchmark.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpu-z-buffer-benchmark-${{ matrix.os }}
+          path: cpu-z-buffer-benchmark.json

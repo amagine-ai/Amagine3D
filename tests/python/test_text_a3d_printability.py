@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 import importlib.util
 import json
 from pathlib import Path
@@ -274,6 +275,20 @@ class PrintabilityGeometryTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_hash_bound_example_profiles_use_stable_lf_bytes(self):
+        attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+        self.assertIn("*.json text eol=lf", attributes.splitlines())
+
+        for skill_name in ("text-a3d", "text-a3d-color"):
+            examples = ROOT / "skills" / skill_name / "examples"
+            intent = json.loads(
+                (examples / "intent.example.json").read_text(encoding="utf-8")
+            )
+            reference = intent["printability"]["profile"]
+            payload = (examples / reference["path"]).read_bytes()
+            self.assertNotIn(b"\r\n", payload, skill_name)
+            self.assertEqual(sha256(payload).hexdigest(), reference["sha256"])
+
     def test_checked_in_example_contract_is_valid(self):
         result = subprocess.run(
             [
