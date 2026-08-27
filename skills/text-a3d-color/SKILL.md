@@ -77,6 +77,10 @@ actual slicer materials.
 Color regions are co-printed partitions, not printable assembly parts. If the
 object needs real separately printed parts, design printable interfaces first;
 do not turn `NAME-region-REGION.stl` into a user deliverable.
+The default `printability.print_package_mode` is `co_print_body`: all color
+regions belong to one printable body and must be packaged as one top-level 3MF
+mesh build item with per-triangle color properties. Use `separate_parts` only
+for intentional multipart prints with real assembly interfaces.
 
 ## 1. Open the evidence run
 
@@ -148,6 +152,12 @@ The color contract defines region name, hex, purpose, geometric boundary,
 evidence, and optional optical material. Use the profile's line-width and wall
 targets for every boundary. Do not collapse distinct semantic regions merely to
 fit an arbitrary palette limit; record every compromise.
+For handles, shells, posts, housings, and other continuity-bearing cores, do not
+let a color region slice the load path into multiple independent solids. Model
+contrasting bands, logos, stripes, runes, and trim as outer shells, shallow
+insets, raised overlays, or shallow filled grooves so the structural core stays
+continuous. Mark such regions with `continuity: "continuous-core"` when QA
+should enforce single-solid continuity.
 
 ## 3. Build and export strict regions
 
@@ -182,27 +192,34 @@ if __name__ == "__main__":
     export_regions(regions, NAME, parent=parent, intent_path=INTENT)
 ```
 
-`export_regions()` chooses one lightweight rigid print orientation from the
-semantic parent shape before final export. It evaluates the six bed-facing
-orientations: identity, front/back side lays, left/right side lays, and a
-top-down 180-degree flip. Profile fit is a hard gate; among fitting candidates,
-support burden and bed contact quality outrank low print height, so a taller
+`export_regions()` chooses one print orientation from the semantic parent shape
+before final export. It evaluates the six bed-facing orientations: identity,
+front/back side lays, left/right side lays, and a top-down 180-degree flip. Each
+candidate records the uniform scale needed to fit the selected profile and is
+scored after that scale is applied, so a lower-support pose is not rejected just
+because it is too large before scaling. Support burden is estimated with a
+support-volume proxy, not only downward face area. Support burden and bed
+contact quality outrank low print height and scale penalty, so a taller
 top-down pose may beat a lower side-lay when it materially reduces supports.
-Every candidate records the uniform scale needed to fit the selected profile.
-Do not silently scale during export; when dimensions are inferred rather than
-fixed by the user, use that scale as repair evidence, update the contract and
-driving parameters together, then rebuild before rejecting a lower-support pose.
 It then emits `NAME.3mf` as the preferred multi-color print package and
 `NAME.stl` as the clean whole-body manufacturing mesh in selected print
 coordinates. `NAME-assemble.step` and `NAME-display.glb` preserve the semantic
 object orientation for CAD review and visual fidelity. The report keeps the
-original semantic bounds plus `semantic_to_print` rotation/translation evidence
-under `print_orientation` and `manufacturing.transform`.
+original semantic bounds plus rotation/scale/translation evidence under
+`print_orientation` and `manufacturing.transform`.
+In `co_print_body` mode, the 3MF stores one top-level mesh build item with
+per-triangle colors and region metadata. In `separate_parts` mode, each region
+may remain a top-level build item, but only when the intent says those are real
+separately printed parts.
 It requires `parent=` and writes hidden internal print-pose region meshes for
 3MF packing plus hidden semantic-pose region meshes for colored visual review;
 neither set is a user deliverable. The STL is the coverage-checked parent
 without internal material-interface faces. It also emits `NAME_material-plan.json`
 as region metadata because 3MF RGB values do not prove optical behavior.
+For the STL fallback, preserve any required single-material-visible engraving,
+recess, relief, or raised texture in the parent geometry; do not rely on a
+filled color insert to carry a feature that must remain visible after region
+colors are discarded.
 
 Expose every meaningful user-adjustable driving dimension with `parameter()`:
 overall dimensions plus local feature, interface, inset, clearance, and region
@@ -227,7 +244,8 @@ python "<SKILL_DIR>/qa_check.py" ".amagine3d-internal/<name>/<name>-region-<regi
 ```
 
 Run a lightweight static print-package QA on the 3MF. This checks package
-provenance, names, colors, units, build items, dimensions, Z0, and bed fit:
+provenance, package mode, region names/colors, units, top-level build item,
+dimensions, Z0, and bed fit:
 
 ```bash
 python "<SKILL_DIR>/qa_check.py" "<name>.3mf" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --tol <T> --require-z0 --out "<name>_package-audit.json"
@@ -247,6 +265,10 @@ Treat printability advisory checks as coarse process-risk guardrails, not as a
 goal to make every warning disappear. Package validity, parent coverage,
 region/color integrity, contract dimensions, and visual/semantic fidelity are
 higher-priority success criteria than warning-free support or overhang reports.
+If a region is marked `continuity: "continuous-core"`, QA must fail when the
+build report shows that region split across multiple solids; repair by keeping
+the core region continuous and moving color detail into a shell, shallow inset,
+raised overlay, or shallow filled groove.
 Only repair a printability advisory by changing source geometry when it points
 to a broad process blocker, such as impossible bed fit, impossible height,
 globally undersized walls, critical features below the line-width floor, or
@@ -300,11 +322,11 @@ Repair the failed evidence class: parent geometry, region boundary, palette
 mapping, mesh topology, bed fit, feature size, broad wall-thickness failure,
 excessive support burden, archive assignment, or visual placement. Bed-fit and
 excessive-height failures should first be repaired by a different whole-package
-rigid orientation when a candidate exists. If a lower-support candidate only
-misses the profile because inferred dimensions are too large, uniformly scale
-the semantic design and intent before falling back to a worse-support fitting
-pose; do not scale user-fixed dimensions. Overlap, coverage, or visual failures
-repair the semantic source model. Feature and wall repairs are for
+orientation when a candidate exists. If a lower-support candidate only misses
+the profile before scaling, prefer the recorded uniform print scale over a
+worse-support pose unless the user's task requires fixed final dimensions.
+Overlap, coverage, or visual failures repair the semantic source model. Feature
+and wall repairs are for
 critical or broad process failures, not isolated cosmetic advisory risk.
 Overhang repairs are required only when support-free output was explicitly
 promised or the support burden is likely to make the print process fail;

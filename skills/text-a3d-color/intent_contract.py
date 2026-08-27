@@ -20,6 +20,13 @@ MODES = {
 SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
 TRANSMISSION = {"opaque", "translucent", "transparent"}
+PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
+REGION_CONTINUITY = {
+    "continuous-core",
+    "not-applicable",
+    "separate-part",
+    "surface-detail",
+}
 VIEWS = {"bottom", "front", "isometric", "side", "top"}
 FEATURE_KINDS = {
     "additive",
@@ -247,6 +254,9 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             for key in ("purpose", "boundary", "evidence"):
                 if not isinstance(region.get(key), str) or not region[key].strip():
                     errors.append(f"color_regions[{index}].{key} is required")
+            continuity = region.get("continuity")
+            if continuity is not None and continuity not in REGION_CONTINUITY:
+                errors.append(f"color_regions[{index}].continuity is invalid")
             material = region.get("material")
             if material is not None and not isinstance(material, dict):
                 errors.append(f"color_regions[{index}].material must be an object")
@@ -290,6 +300,9 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             errors.append("printability.build_axis must be +Z")
         if printability.get("bed_contact") != "z-min":
             errors.append("printability.bed_contact must be z-min")
+        package_mode = printability.get("print_package_mode", "co_print_body")
+        if package_mode not in PRINT_PACKAGE_MODES:
+            errors.append("printability.print_package_mode is invalid")
         if printability.get("support_policy") not in {
             "support-free",
             "supports-allowed",
