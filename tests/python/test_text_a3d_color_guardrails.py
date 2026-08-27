@@ -105,7 +105,13 @@ class ColorPipelineTests(unittest.TestCase):
             "color_cad_helpers_test", COLOR / "cad_helpers.py"
         )
 
-    def _build_fixture(self, root: Path) -> tuple[dict, Path, Path]:
+    def _build_fixture(
+        self,
+        root: Path,
+        *,
+        print_package_mode: str | None = None,
+        red_continuity: str | None = None,
+    ) -> tuple[dict, Path, Path]:
         self.cad_helpers._FEATURES.clear()
         self.cad_helpers._EVENTS.clear()
 
@@ -197,6 +203,10 @@ class ColorPipelineTests(unittest.TestCase):
             },
             "assumptions": [],
         }
+        if print_package_mode is not None:
+            intent["printability"]["print_package_mode"] = print_package_mode
+        if red_continuity is not None:
+            intent["color_regions"][0]["continuity"] = red_continuity
         intent_path = root / "tile_intent.json"
         intent_path.write_text(json.dumps(intent), encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -215,6 +225,24 @@ class ColorPipelineTests(unittest.TestCase):
             root = Path(directory)
             report, _, intent_path = self._build_fixture(root)
             self.assertEqual(report["schema"], "evidence-color-build/v5")
+            self.assertEqual(report["print_package_mode"], "co_print_body")
+            archive = report["three_mf"]["inspection"]
+            self.assertEqual(archive["package_mode"], "co_print_body")
+            self.assertEqual(archive["build_item_count"], 1)
+            self.assertEqual(archive["component_object_count"], 0)
+            self.assertEqual(archive["object_count"], 1)
+            self.assertEqual(
+                [item["object_kind"] for item in archive["build_items"]],
+                ["mesh"],
+            )
+            self.assertEqual(
+                {item["name"] for item in archive["regions"]},
+                {"red", "blue"},
+            )
+            self.assertTrue(all(
+                item["kind"] == "mesh-region" and item["triangle_range"]["count"] > 0
+                for item in archive["regions"]
+            ))
             self.assertIn("events", report)
             self.assertIn("bbox_mm", report["features"]["thin-color-detail"])
             self.assertIn("bbox_mm", report["events"][0]["tool"])
@@ -306,6 +334,62 @@ class ColorPipelineTests(unittest.TestCase):
                     str(root),
                     intent_path=str(intent_path),
                 )
+
+    def test_separate_parts_mode_keeps_multiple_top_level_build_items(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report, _, _ = self._build_fixture(
+                root, print_package_mode="separate_parts"
+            )
+            archive = report["three_mf"]["inspection"]
+            self.assertEqual(report["print_package_mode"], "separate_parts")
+            self.assertEqual(archive["package_mode"], "separate_parts")
+            self.assertEqual(archive["build_item_count"], 2)
+            self.assertEqual(
+                [item["object_kind"] for item in archive["build_items"]],
+                ["mesh", "mesh"],
+            )
+            self.assertEqual(
+                {item["name"] for item in archive["regions"]},
+                {"red", "blue"},
+            )
+
+    def test_continuous_core_region_cannot_be_split_across_solids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report, profile_path, intent_path = self._build_fixture(
+                root, red_continuity="continuous-core"
+            )
+            self.assertEqual(report["regions"]["red"]["continuity"], "continuous-core")
+            report["regions"]["red"]["solid_count"] = 2
+            report_path = root / "tile_report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "qa_check.py"),
+                    str(root / "tile.3mf"),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(report_path),
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            checks = {item["name"]: item for item in payload["checks"]}
+            self.assertEqual(checks["region_continuity"]["status"], "fail")
+            self.assertEqual(
+                checks["region_continuity"]["observed"]["offenders"][0]["region"],
+                "red",
+            )
 
     def test_manufacturing_qa_rejects_unbound_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -484,6 +568,11 @@ class ColorPipelineTests(unittest.TestCase):
                 "evidence-color-print-package-audit/v1",
             )
             checks = {item["name"]: item for item in package_payload["checks"]}
+            self.assertEqual(checks["print_package_mode"]["status"], "pass")
+            self.assertEqual(
+                checks["print_package_co_print_build_item"]["status"],
+                "pass",
+            )
             self.assertEqual(checks["region_names"]["status"], "pass")
             self.assertEqual(checks["region_colors"]["status"], "pass")
             self.assertEqual(checks["build_plane_z0"]["status"], "pass")
@@ -683,10 +772,17 @@ class ColorPipelineTests(unittest.TestCase):
         top_down = by_name["rotate-x-180"]
         self.assertEqual(top_down["bed_contact_semantic_face"], "top")
         self.assertFalse(top_down["uniform_scale_to_fit_profile"]["fits_without_scaling"])
+        self.assertTrue(top_down["fits_profile"])
+        self.assertTrue(top_down["requires_uniform_scale"])
         self.assertAlmostEqual(
             top_down["uniform_scale_to_fit_profile"]["scale"],
             180 / 220,
             places=6,
+        )
+        self.assertAlmostEqual(top_down["scale_to_apply"], 180 / 220, places=12)
+        self.assertEqual(
+            top_down["print_dimensions_mm"],
+            [round(40 * 180 / 220, 5), round(20 * 180 / 220, 5), 180.0],
         )
 
     def test_bottom_matched_view_is_available(self):
