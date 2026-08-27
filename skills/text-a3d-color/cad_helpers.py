@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from hashlib import sha256
+import importlib.util
 import json
 import math
 import os
@@ -12,10 +13,14 @@ import re
 import sys
 import tempfile
 
+import numpy as np
+import trimesh
+
 from build123d import (
     Color,
     Compound,
     Pos,
+    Rot,
     Unit,
     chamfer,
     export_step,
@@ -23,8 +28,28 @@ from build123d import (
     fillet,
 )
 
-from export_3mf import write_color_archive
-from intent_contract import validate_coordinate_system
+
+def _load_local_module(module_name: str, filename: str):
+    path = Path(__file__).resolve().with_name(filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_export_3mf = _load_local_module(
+    "_text_a3d_color_export_3mf_for_cad_helpers",
+    "export_3mf.py",
+)
+_intent_contract = _load_local_module(
+    "_text_a3d_color_intent_contract_for_cad_helpers",
+    "intent_contract.py",
+)
+write_color_archive = _export_3mf.write_color_archive
+validate_coordinate_system = _intent_contract.validate_coordinate_system
 
 
 class RegionInvariantError(RuntimeError):
@@ -138,9 +163,308 @@ def _translate(shape, x: float, y: float, z: float):
     return Pos(x, y, z) * shape
 
 
+def _rotate(shape, rx: float, ry: float, rz: float):
+    return Rot(rx, ry, rz) * shape
+
+
 def _print_transform(shape) -> tuple[float, float, float]:
     box = shape.bounding_box()
     return (-box.min.X, -box.min.Y, -box.min.Z)
+
+
+def _profile_from_intent(intent_data: dict, intent_path: Path) -> dict | None:
+    reference = intent_data.get("printability", {}).get("profile", {})
+    raw_path = reference.get("path") if isinstance(reference, dict) else None
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = intent_path.parent / path
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _rectangle_bounds(polygon) -> tuple[float, float, float, float] | None:
+    try:
+        points = [(float(x), float(y)) for x, y in polygon]
+    except Exception:
+        return None
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _footprint_fits(
+    width: float,
+    depth: float,
+    profile: dict | None,
+) -> tuple[bool, dict]:
+    if profile is None:
+        return True, {"reason": "no profile available during export"}
+    tool = profile.get("machine", {}).get("selected_tool", {})
+    bounds = _rectangle_bounds(tool.get("polygon_mm", []))
+    height_limit = tool.get("height_mm")
+    if (
+        bounds is None
+        or not isinstance(height_limit, (int, float))
+        or isinstance(height_limit, bool)
+    ):
+        return True, {"reason": "profile bed limits unavailable during export"}
+    bed_width = bounds[2] - bounds[0]
+    bed_depth = bounds[3] - bounds[1]
+    fits = width <= bed_width + 1e-9 and depth <= bed_depth + 1e-9
+    return bool(fits), {
+        "bed_depth_mm": round(bed_depth, 5),
+        "bed_width_mm": round(bed_width, 5),
+        "footprint_mm": [round(width, 5), round(depth, 5)],
+    }
+
+
+def _uniform_scale_to_fit_profile(dimensions: list[float], profile: dict | None) -> dict:
+    if profile is None:
+        return {"available": False, "reason": "no profile available during export"}
+    tool = profile.get("machine", {}).get("selected_tool", {})
+    bounds = _rectangle_bounds(tool.get("polygon_mm", []))
+    height_limit = tool.get("height_mm")
+    if (
+        bounds is None
+        or not isinstance(height_limit, (int, float))
+        or isinstance(height_limit, bool)
+    ):
+        return {"available": False, "reason": "profile bed limits unavailable during export"}
+    bed_width = bounds[2] - bounds[0]
+    bed_depth = bounds[3] - bounds[1]
+    limits = [bed_width, bed_depth, float(height_limit)]
+    if any(value <= 0 for value in dimensions):
+        return {"available": False, "reason": "candidate dimensions are invalid"}
+    scale = min(limit / dimension for limit, dimension in zip(limits, dimensions))
+    scale = min(1.0, float(scale))
+    return {
+        "available": True,
+        "dimensions_after_scale_mm": [
+            round(value * scale, 5) for value in dimensions
+        ],
+        "fits_without_scaling": scale >= 1.0 - 1e-9,
+        "scale": round(scale, 8),
+    }
+
+
+def _protected_faces(intent_data: dict | None) -> set[str]:
+    protected = set()
+    if not isinstance(intent_data, dict):
+        return protected
+    visual = intent_data.get("visual", {})
+    if isinstance(visual, dict):
+        view = visual.get("reference_view")
+        if view in {"front", "back", "left", "right", "top", "bottom"}:
+            protected.add(view)
+    for feature in intent_data.get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        face = feature.get("face")
+        kind = feature.get("kind")
+        if face in {"front", "back", "left", "right", "top", "bottom"} and kind in {
+            "detail",
+            "logo",
+            "region",
+            "surface",
+            "window",
+        }:
+            protected.add(face)
+    return protected
+
+
+def _bed_face_for_rotation(name: str) -> str | None:
+    return {
+        "identity": "bottom",
+        "rotate-x-90": "front",
+        "rotate-x--90": "back",
+        "rotate-x-180": "top",
+        "rotate-y-90": "right",
+        "rotate-y--90": "left",
+    }.get(name)
+
+
+def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
+    with tempfile.TemporaryDirectory() as directory:
+        mesh_path = Path(directory) / "orientation.stl"
+        export_stl(shape, str(mesh_path), tolerance=0.05, angular_tolerance=0.2)
+        mesh = trimesh.load(mesh_path, force="mesh", process=False)
+    if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
+        return {
+            "center_inside_contact_bounds": False,
+            "contact_area_mm2": 0.0,
+            "contact_area_ratio": 0.0,
+            "contact_bounds_mm": None,
+            "overhang_area_mm2": float("inf"),
+            "stability_offset_ratio": float("inf"),
+        }
+    normals = np.asarray(mesh.face_normals, dtype=float)
+    triangles = np.asarray(mesh.triangles, dtype=float)
+    areas = np.asarray(mesh.area_faces, dtype=float)
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    minimum_z = float(bounds[0, 2])
+    contact_mask = (
+        (triangles[:, :, 2].max(axis=1) <= minimum_z + 0.08)
+        & (normals[:, 2] < -0.5)
+    )
+    contact_area = float(areas[contact_mask].sum())
+    footprint_area = max(float((bounds[1, 0] - bounds[0, 0]) * (bounds[1, 1] - bounds[0, 1])), 1e-9)
+    contact_bounds = None
+    center_inside = False
+    stability_offset = float("inf")
+    if contact_mask.any():
+        contact_points = triangles[contact_mask][:, :, :2].reshape((-1, 2))
+        lower = contact_points.min(axis=0)
+        upper = contact_points.max(axis=0)
+        contact_bounds = np.asarray([lower, upper], dtype=float)
+        try:
+            center = np.asarray(mesh.center_mass[:2], dtype=float)
+            if not np.isfinite(center).all():
+                raise ValueError
+        except Exception:
+            center = bounds[:, :2].mean(axis=0)
+        center_inside = bool(
+            lower[0] - 1e-9 <= center[0] <= upper[0] + 1e-9
+            and lower[1] - 1e-9 <= center[1] <= upper[1] + 1e-9
+        )
+        contact_center = (lower + upper) / 2
+        half_diagonal = max(float(np.linalg.norm((upper - lower) / 2)), 1e-9)
+        stability_offset = float(np.linalg.norm(center - contact_center) / half_diagonal)
+    slopes = np.degrees(np.arccos(np.clip(np.abs(normals[:, 2]), 0.0, 1.0)))
+    above_build_plane = triangles[:, :, 2].max(axis=1) > minimum_z + 0.08
+    risky = (normals[:, 2] < -1e-8) & above_build_plane & (slopes < threshold_deg)
+    overhang_area = float(areas[risky].sum())
+    return {
+        "center_inside_contact_bounds": center_inside,
+        "contact_area_mm2": round(contact_area, 5),
+        "contact_area_ratio": round(contact_area / footprint_area, 8),
+        "contact_bounds_mm": (
+            contact_bounds.round(5).tolist()
+            if contact_bounds is not None
+            else None
+        ),
+        "overhang_area_mm2": round(overhang_area, 5),
+        "stability_offset_ratio": round(stability_offset, 8),
+    }
+
+
+def _orientation_candidates(
+    shape,
+    profile: dict | None,
+    *,
+    intent_data: dict | None = None,
+) -> list[dict]:
+    raw_candidates = (
+        ("identity", (0.0, 0.0, 0.0)),
+        ("rotate-x-90", (90.0, 0.0, 0.0)),
+        ("rotate-x--90", (-90.0, 0.0, 0.0)),
+        ("rotate-x-180", (180.0, 0.0, 0.0)),
+        ("rotate-y-90", (0.0, 90.0, 0.0)),
+        ("rotate-y--90", (0.0, -90.0, 0.0)),
+    )
+    results = []
+    height_limit = (
+        profile.get("machine", {}).get("selected_tool", {}).get("height_mm")
+        if isinstance(profile, dict)
+        else None
+    )
+    threshold_deg = (
+        profile.get("process", {}).get("support_threshold_angle_from_horizontal_deg")
+        if isinstance(profile, dict)
+        else None
+    )
+    if not isinstance(threshold_deg, (int, float)) or isinstance(threshold_deg, bool):
+        threshold_deg = 30.0
+    protected = _protected_faces(intent_data)
+    for preference, (name, rotation) in enumerate(raw_candidates):
+        rotated = _rotate(shape, *rotation)
+        box = rotated.bounding_box()
+        dimensions = [
+            float(box.max.X - box.min.X),
+            float(box.max.Y - box.min.Y),
+            float(box.max.Z - box.min.Z),
+        ]
+        bed_fits, bed = _footprint_fits(dimensions[0], dimensions[1], profile)
+        height_fits = (
+            True
+            if not isinstance(height_limit, (int, float)) or isinstance(height_limit, bool)
+            else dimensions[2] <= float(height_limit) + 1e-9
+        )
+        fits = bed_fits and height_fits
+        translate = [
+            round(float(-box.min.X), 5),
+            round(float(-box.min.Y), 5),
+            round(float(-box.min.Z), 5),
+        ]
+        placed = _translate(rotated, *translate)
+        metrics = _mesh_orientation_metrics(
+            placed,
+            threshold_deg=float(threshold_deg),
+        )
+        bed_face = _bed_face_for_rotation(name)
+        protected_penalty = 1 if bed_face in protected else 0
+        no_contact_penalty = 1 if metrics["contact_area_mm2"] <= 1e-9 else 0
+        center_penalty = 0 if metrics["center_inside_contact_bounds"] else 1
+        results.append({
+            "bed_contact_semantic_face": bed_face,
+            "bed_fit": bed,
+            "dimensions_mm": [round(value, 5) for value in dimensions],
+            "fits_profile": bool(fits),
+            "height_fits": bool(height_fits),
+            "orientation_metrics": metrics,
+            "name": name,
+            "preference": preference,
+            "protected_contact_face_penalty": protected_penalty,
+            "rotate_degrees_xyz": [round(value, 5) for value in rotation],
+            "score": [
+                0 if fits else 1,
+                round(float(metrics["overhang_area_mm2"]), 5),
+                no_contact_penalty,
+                center_penalty,
+                round(float(metrics["stability_offset_ratio"]), 8),
+                round(-float(metrics["contact_area_mm2"]), 5),
+                protected_penalty,
+                round(dimensions[2], 5),
+                preference,
+            ],
+            "translate_mm": translate,
+            "uniform_scale_to_fit_profile": _uniform_scale_to_fit_profile(
+                dimensions,
+                profile,
+            ),
+        })
+    return results
+
+
+def _select_print_orientation(
+    shape,
+    profile: dict | None,
+    *,
+    intent_data: dict | None = None,
+) -> dict:
+    candidates = _orientation_candidates(shape, profile, intent_data=intent_data)
+    selected = min(candidates, key=lambda item: item["score"])
+    return {
+        "candidates": candidates,
+        "selected": {
+            key: value
+            for key, value in selected.items()
+            if key != "preference"
+        },
+        "strategy": "lightweight-stability-support-appearance-score",
+    }
+
+
+def _apply_print_orientation(shape, orientation: dict):
+    selected = orientation["selected"]
+    rotated = _rotate(shape, *selected["rotate_degrees_xyz"])
+    return _translate(rotated, *selected["translate_mm"])
 
 
 def observe(shape, feature_id: str, role: str = "feature") -> None:
@@ -255,6 +579,11 @@ def export_regions(
     """Validate color regions and export print, display, CAD, and report evidence."""
     if len(regions) < 2:
         raise RegionInvariantError("multi-color output requires at least two regions")
+    if parent is None:
+        raise RegionInvariantError(
+            "export_regions requires parent= for a co-printed manufacturing body; "
+            "color regions are not printable assembly parts"
+        )
 
     output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
     output.mkdir(parents=True, exist_ok=True)
@@ -298,8 +627,7 @@ def export_regions(
         "coordinates": {
             "assembly": ["step:assemble"],
             "display": ["glb:display"],
-            "print": ["3mf", "stl:manufacturing"],
-            "region_topology": [],
+            "print": ["3mf", "stl"],
         },
         "events": list(_EVENTS),
         "features": dict(_FEATURES),
@@ -380,79 +708,98 @@ def export_regions(
     region_union = region_shapes[0]
     for shape in region_shapes[1:]:
         region_union = region_union + shape
-    if parent is not None:
-        if not _valid(parent):
-            raise RegionInvariantError("coverage parent is invalid")
-        try:
-            missing = float((parent - region_union).volume)
-            outside = float((region_union - parent).volume)
-        except Exception as error:
-            raise RegionInvariantError(
-                f"could not compare region union with parent: {error}"
-            ) from error
-        coverage_error = missing + outside
-        report["parent_coverage"] = {
-            "error_mm3": round(coverage_error, 6),
-            "missing_mm3": round(missing, 6),
-            "outside_mm3": round(outside, 6),
-            "parent_volume_mm3": round(float(parent.volume), 6),
-            "region_volume_mm3": round(region_volume, 6),
-            "volume_balance_error_mm3": round(
-                abs(float(parent.volume) - region_volume), 6
-            ),
-        }
-        if coverage_error > max_coverage_error_mm3:
-            raise RegionInvariantError(
-                "region union does not match parent; "
-                f"missing {missing:.6f} mm^3, outside {outside:.6f} mm^3"
-            )
+    if not _valid(parent):
+        raise RegionInvariantError("coverage parent is invalid")
+    try:
+        missing = float((parent - region_union).volume)
+        outside = float((region_union - parent).volume)
+    except Exception as error:
+        raise RegionInvariantError(
+            f"could not compare region union with parent: {error}"
+        ) from error
+    coverage_error = missing + outside
+    report["parent_coverage"] = {
+        "error_mm3": round(coverage_error, 6),
+        "missing_mm3": round(missing, 6),
+        "outside_mm3": round(outside, 6),
+        "parent_volume_mm3": round(float(parent.volume), 6),
+        "region_volume_mm3": round(region_volume, 6),
+        "volume_balance_error_mm3": round(
+            abs(float(parent.volume) - region_volume), 6
+        ),
+    }
+    if coverage_error > max_coverage_error_mm3:
+        raise RegionInvariantError(
+            "region union does not match parent; "
+            f"missing {missing:.6f} mm^3, outside {outside:.6f} mm^3"
+        )
 
-    assembly_body = parent if parent is not None else region_union
+    assembly_body = parent
     assembly_record = _shape_record(assembly_body)
     if not assembly_record["valid"]:
         raise RegionInvariantError("assembly manufacturing geometry is invalid")
 
-    transform = _print_transform(assembly_body)
+    profile = _profile_from_intent(intent_data, intent)
+    print_orientation = _select_print_orientation(
+        assembly_body,
+        profile,
+        intent_data=intent_data,
+    )
     print_regions = {
-        region_name: (_translate(shape, *transform), color)
+        region_name: (_apply_print_orientation(shape, print_orientation), color)
         for region_name, (shape, color) in normalized.items()
     }
-    print_body = _translate(assembly_body, *transform)
+    print_body = _apply_print_orientation(assembly_body, print_orientation)
     print_body_record = _shape_record(print_body)
     if not print_body_record["valid"]:
         raise RegionInvariantError("print manufacturing geometry is invalid")
 
     entries = []
     artifacts = {}
+    internal_region_dir = output / ".amagine3d-internal" / name
+    semantic_region_dir = internal_region_dir / "semantic"
+    internal_region_dir.mkdir(parents=True, exist_ok=True)
+    semantic_region_dir.mkdir(parents=True, exist_ok=True)
+    internal_region_meshes = {"print": {}, "semantic": {}}
     for region_name, (shape, color) in print_regions.items():
-        path = output / f"{name}-region-{region_name}.stl"
+        path = internal_region_dir / f"{name}-region-{region_name}.stl"
         export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
-        entries.append((str(path), color, region_name))
-        artifacts[f"stl:region:{region_name}"] = {
-            "path": str(path.resolve()), "sha256": _digest(path),
+        internal_region_meshes["print"][region_name] = {
+            "path": str(path.resolve()),
+            "sha256": _digest(path),
         }
-        report["coordinates"]["region_topology"].append(f"stl:region:{region_name}")
+        entries.append((str(path), color, region_name))
+    for region_name, (shape, _) in normalized.items():
+        path = semantic_region_dir / f"{name}-region-{region_name}.stl"
+        export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        internal_region_meshes["semantic"][region_name] = {
+            "path": str(path.resolve()),
+            "sha256": _digest(path),
+        }
 
-    manufacturing_path = output / f"{name}-manufacturing.stl"
+    manufacturing_path = output / f"{name}.stl"
     export_stl(
         print_body,
         str(manufacturing_path),
         tolerance=0.01,
         angular_tolerance=0.1,
     )
-    artifacts["stl:manufacturing"] = {
+    artifacts["stl"] = {
         "path": str(manufacturing_path.resolve()),
         "sha256": _digest(manufacturing_path),
     }
-    report["assembly"] = {"shape": assembly_record}
+    report["semantic"] = {"shape": assembly_record}
     report["manufacturing"] = {
         **print_body_record,
         "transform": {
-            "from": "assembly",
+            "from": "semantic",
+            "rotate_degrees_xyz": print_orientation["selected"]["rotate_degrees_xyz"],
             "to": "print",
-            "translate_mm": [round(float(value), 5) for value in transform],
+            "translate_mm": print_orientation["selected"]["translate_mm"],
         },
     }
+    report["print_orientation"] = print_orientation
+    report["internal_region_meshes"] = internal_region_meshes
 
     archive_path = output / f"{name}.3mf"
     report["three_mf"] = write_color_archive(entries, str(archive_path))
@@ -467,6 +814,7 @@ def export_regions(
         shape.label = region_name
         children.append(shape)
     assembly_shape = Compound(children=children)
+    report["assembly"] = {"shape": _shape_record(assembly_shape)}
     assemble_step_path = output / f"{name}-assemble.step"
     display_glb_path = output / f"{name}-display.glb"
     export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)

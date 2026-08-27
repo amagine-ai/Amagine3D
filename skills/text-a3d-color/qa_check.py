@@ -1,4 +1,4 @@
-"""Audit color-region topology or the manufacturing printability mesh."""
+"""Audit color-region topology, the 3MF print package, or the manufacturing mesh."""
 
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ import sys
 
 import numpy as np
 import trimesh
+
+SKILL_DIR = Path(__file__).resolve().parent
+if str(SKILL_DIR) not in sys.path:
+    sys.path.insert(0, str(SKILL_DIR))
+
+from export_3mf import inspect_color_archive, load_color_archive_mesh
 
 
 FACE_AXES = {
@@ -112,6 +118,19 @@ def _intent_dimensions(intent: dict | None) -> tuple[float, float, float] | None
             return None
         values.append(float(value))
     return tuple(values)
+
+
+def _report_print_dimensions(report: dict | None) -> tuple[float, float, float] | None:
+    if not isinstance(report, dict):
+        return None
+    value = report.get("manufacturing", {}).get("bbox_mm", {}).get("size")
+    if not isinstance(value, list) or len(value) != 3:
+        return None
+    try:
+        dimensions = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    return dimensions if all(np.isfinite(item) and item > 0 for item in dimensions) else None
 
 
 def _digest(path: str) -> str:
@@ -289,6 +308,11 @@ def evidence_feature_ids(report: dict | None) -> set[str]:
 def _body_bounds(report: dict | None) -> np.ndarray | None:
     if report is None:
         return None
+    semantic = report.get("semantic", {})
+    if isinstance(semantic, dict):
+        bounds = _bbox_bounds(semantic.get("shape", {}))
+        if bounds is not None:
+            return bounds
     assembly = report.get("assembly", {})
     if isinstance(assembly, dict):
         bounds = _bbox_bounds(assembly.get("shape", {}))
@@ -528,7 +552,7 @@ def overhang_observation(mesh, *, threshold_deg: float, build_plane_tolerance: f
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stl")
+    parser.add_argument("model")
     parser.add_argument("--region", default="manufacturing")
     parser.add_argument("--topology-only", action="store_true")
     parser.add_argument("--profile")
@@ -544,12 +568,14 @@ def main() -> int:
     parser.add_argument("--thickness-samples", type=int, default=2048)
     parser.add_argument("--out")
     args = parser.parse_args()
+    model_path = Path(args.model)
+    is_print_package = model_path.suffix.lower() == ".3mf"
 
     try:
         profile, profile_hash = _load_profile(args.profile) if args.profile else (None, None)
         intent = _load_json(args.intent) if args.intent else None
         report = _load_json(args.report) if args.report else None
-        expected_dimensions = _intent_dimensions(intent)
+        expected_dimensions = _report_print_dimensions(report) or _intent_dimensions(intent)
         if intent is not None:
             if profile is None:
                 raise ValueError("--intent requires --profile")
@@ -571,11 +597,19 @@ def main() -> int:
                 raise ValueError("build report part does not match the intent contract")
             if report.get("intent", {}).get("sha256") != _digest(args.intent):
                 raise ValueError("build report is not bound to the supplied intent")
-            manufacturing = report.get("artifacts", {}).get("stl:manufacturing", {})
-            if manufacturing.get("sha256") != _digest(args.stl):
-                raise ValueError(
-                    "build report is not bound to the supplied manufacturing STL"
-                )
+            artifacts = report.get("artifacts", {})
+            if is_print_package:
+                archive = artifacts.get("3mf", {})
+                if archive.get("sha256") != _digest(args.model):
+                    raise ValueError(
+                        "build report is not bound to the supplied 3MF print package"
+                    )
+            else:
+                manufacturing = artifacts.get("stl", artifacts.get("stl:manufacturing", {}))
+                if manufacturing.get("sha256") != _digest(args.model):
+                    raise ValueError(
+                        "build report is not bound to the supplied manufacturing STL"
+                    )
             target = intent.get("printability", {}).get("minimum_wall_target_mm")
             if not isinstance(target, (int, float)) or isinstance(target, bool) or target <= 0:
                 raise ValueError("intent minimum wall target must be positive")
@@ -589,12 +623,16 @@ def main() -> int:
         return 2
 
     try:
-        mesh = trimesh.load(args.stl, force="mesh", process=True)
+        if is_print_package:
+            mesh, package = load_color_archive_mesh(args.model)
+        else:
+            mesh = trimesh.load(args.model, force="mesh", process=True)
+            package = None
     except Exception as error:
         print(json.dumps({"error": str(error), "pass": False}, indent=2))
         return 2
     if not isinstance(mesh, trimesh.Trimesh):
-        print(json.dumps({"error": "STL did not load as one mesh", "pass": False}, indent=2))
+        print(json.dumps({"error": "model did not load as one mesh", "pass": False}, indent=2))
         return 2
 
     audit = Audit()
@@ -603,6 +641,137 @@ def main() -> int:
     finite = bool(len(vertices) and np.isfinite(vertices).all())
     audit.add("finite_vertices", finite, len(vertices))
     audit.add("has_triangles", len(faces) >= 4, len(faces), ">= 4")
+    bounds = np.asarray(mesh.bounds, dtype=float) if finite else None
+    dims = bounds[1] - bounds[0] if bounds is not None and bounds.shape == (2, 3) else None
+
+    if is_print_package:
+        archive = package or inspect_color_archive(args.model)
+        expected_regions = {
+            name: item["color"].upper()
+            for name, item in (report or {}).get("regions", {}).items()
+            if isinstance(item, dict) and isinstance(item.get("color"), str)
+        }
+        observed_regions = {
+            item["name"]: (item["color"] or "").upper()
+            for item in archive.get("objects", [])
+        }
+        audit.add(
+            "print_package_unit",
+            str(archive.get("unit", "")).lower() == "millimeter",
+            archive.get("unit"),
+            "millimeter",
+            category="print-package",
+        )
+        audit.add(
+            "print_package_build_items",
+            int(archive.get("build_item_count", 0)) > 0,
+            archive.get("build_item_count", 0),
+            "> 0",
+            category="print-package",
+        )
+        audit.add(
+            "region_names",
+            set(expected_regions) == set(observed_regions),
+            sorted(observed_regions),
+            sorted(expected_regions),
+            category="print-package",
+        )
+        audit.add(
+            "region_colors",
+            expected_regions == observed_regions,
+            observed_regions,
+            expected_regions,
+            category="print-package",
+        )
+        if dims is not None:
+            for index, axis in enumerate("xyz"):
+                expected = getattr(args, f"expect_{axis}")
+                if expected is None and expected_dimensions is not None:
+                    expected = expected_dimensions[index]
+                if expected is not None:
+                    audit.add(
+                        f"dimension_{axis}",
+                        abs(float(dims[index]) - expected) <= args.tol,
+                        round(float(dims[index]), 5),
+                        {"value": expected, "tolerance": args.tol},
+                        category="dimensions",
+                    )
+            if args.require_z0:
+                audit.add(
+                    "build_plane_z0",
+                    abs(float(bounds[0, 2])) <= args.tol,
+                    round(float(bounds[0, 2]), 5),
+                    {"value": 0.0, "tolerance": args.tol},
+                    category="dimensions",
+                )
+            if profile is not None:
+                bed_passed, bed_observed = check_bed_fit(dims, profile)
+                tool = profile["machine"]["selected_tool"]
+                audit.add(
+                    "printability_bed_fit",
+                    bed_passed,
+                    bed_observed,
+                    {
+                        "excluded_polygons_mm": profile["machine"].get("excluded_polygons_mm", []),
+                        "printable_height_mm": tool["height_mm"],
+                        "printable_polygon_mm": tool["polygon_mm"],
+                    },
+                    category="printability",
+                    repair={
+                        "preferred_actions": [
+                            "Select a different whole-package rigid print orientation.",
+                            "Use a supported larger printer only when dimensions are fixed.",
+                        ],
+                    },
+                )
+            stl_record = (report or {}).get("manufacturing", {})
+            stl_size = _bbox_size(stl_record)
+            if stl_size is not None:
+                deltas = [abs(float(dims[index]) - stl_size[index]) for index in range(3)]
+                audit.add(
+                    "print_package_matches_stl_bounds",
+                    max(deltas) <= args.tol,
+                    {
+                        "package_dimensions_mm": dims.round(5).tolist(),
+                        "stl_dimensions_mm": stl_size,
+                        "max_delta_mm": round(max(deltas), 5),
+                    },
+                    {"tolerance": args.tol},
+                    category="print-package",
+                )
+        result = {
+            "checks": audit.checks,
+            "errors": [item["name"] for item in audit.checks if item["status"] == "fail"],
+            "intent": str(Path(args.intent).resolve()) if args.intent else None,
+            "mesh": {
+                "bounds_mm": bounds.round(5).tolist() if bounds is not None else None,
+                "dimensions_mm": dims.round(5).tolist() if dims is not None else None,
+                "faces": len(faces),
+                "surface_area_mm2": round(float(mesh.area), 5) if len(faces) else 0.0,
+                "vertices": len(vertices),
+            },
+            "pass": audit.passed,
+            "print_package": archive,
+            "printer_profile": ({
+                "id": profile["id"], "path": str(Path(args.profile).resolve()),
+                "sha256": profile_hash,
+            } if profile is not None else None),
+            "report": str(Path(args.report).resolve()) if args.report else None,
+            "schema": "evidence-color-print-package-audit/v1",
+            "scope": "print-package",
+            "status": audit.status,
+            "model": str(model_path.resolve()),
+            "warnings": [
+                item["name"] for item in audit.checks
+                if item["status"] in {"warning", "not_evaluated"}
+            ],
+        }
+        payload = json.dumps(result, indent=2)
+        if args.out:
+            Path(args.out).write_text(payload + "\n", encoding="utf-8")
+        print(payload)
+        return 0 if audit.passed else 1
+
     audit.add("watertight", mesh.is_watertight, mesh.is_watertight, True)
     audit.add("consistent_winding", mesh.is_winding_consistent, mesh.is_winding_consistent, True)
     areas = np.asarray(mesh.area_faces)
@@ -617,8 +786,6 @@ def main() -> int:
     positive_volume = volume is not None and np.isfinite(volume) and volume > 1e-6
     audit.add("positive_volume", positive_volume, volume, "> 0")
 
-    bounds = np.asarray(mesh.bounds, dtype=float) if finite else None
-    dims = bounds[1] - bounds[0] if bounds is not None and bounds.shape == (2, 3) else None
     if dims is not None:
         for index, axis in enumerate("xyz"):
             expected = getattr(args, f"expect_{axis}")
@@ -641,8 +808,15 @@ def main() -> int:
             "printable_height_mm": tool["height_mm"],
             "printable_polygon_mm": tool["polygon_mm"],
         }, category="printability", repair={
-            "forbidden_actions": ["Do not switch profiles or scale fixed user dimensions to pass."],
-            "preferred_actions": ["Use the reported XY rotation or a permitted split."],
+            "forbidden_actions": [
+                "Do not switch profiles or scale fixed user dimensions to pass.",
+                "Do not flatten or simplify replica geometry to improve bed fit.",
+            ],
+            "preferred_actions": [
+                "Use the selected whole-package rigid print orientation.",
+                "Split only where the contract permits a real assembly interface.",
+                "Use a supported larger printer only when dimensions are fixed.",
+            ],
         })
 
         floor = float(profile["derived"]["single_line_floor_mm"])
@@ -754,7 +928,12 @@ def main() -> int:
                 "support_policy": intent["printability"]["support_policy"],
                 "threshold_angle_deg": profile["process"]["support_threshold_angle_from_horizontal_deg"],
             }, category="printability", severity="warning", repair={
-                "fallback": "Declare supports-required if the geometry cannot be repaired."
+                "fallback": "Declare supports-required if faithful geometry still needs support.",
+                "preferred_actions": [
+                    "Reorient the finished body without changing semantic geometry.",
+                    "Split only where the contract permits a real assembly interface.",
+                    "Add support-friendly geometry only when it matches the object.",
+                ],
             })
         else:
             audit.skip(
@@ -792,7 +971,7 @@ def main() -> int:
         "schema": "evidence-color-mesh-audit/v4",
         "scope": "topology" if args.topology_only else "manufacturing",
         "status": audit.status,
-        "stl": str(Path(args.stl).resolve()),
+        "stl": str(model_path.resolve()),
         "warnings": [item["name"] for item in audit.checks
                      if item["status"] in {"warning", "not_evaluated"}],
     }

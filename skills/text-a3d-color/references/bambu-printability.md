@@ -4,24 +4,27 @@ Resolve this skill's printer profile before geometry. The profile fixes the
 machine, selected tool, nozzle, standard process, printable polygon, line-width
 floor, wall target, and support threshold for the entire evidence run.
 
-## Audit the manufacturing mesh
+## Audit the print package and manufacturing mesh
 
-Color-region meshes are semantic partitions, not independent evidence of how a
-co-printed object is supported. A downward face in one region may sit directly
-on another material. For that reason:
+Color-region meshes are semantic partitions, not printable parts or
+independent evidence of how a co-printed object is supported. A downward face
+in one region may sit directly on another material. For that reason:
 
-1. Audit each region with `--topology-only` to prove its mesh and components.
-2. Pass `parent=` for every co-printed body so `export_regions()` can prove
-   coverage and export a clean `NAME-manufacturing.stl`.
-3. Run profile-backed bed, feature, wall, and overhang checks on that
-   manufacturing STL only.
+1. Use hidden internal region meshes only for optional topology debugging.
+2. Pass `parent=` so `export_regions()` can prove coverage and export a clean
+   `NAME.stl`.
+3. Run lightweight static print-package QA on `NAME.3mf` for package
+   provenance, unit, build items, region names/colors, dimensions, Z0, and bed
+   fit.
+4. Run profile-backed feature, wall, and overhang checks on `NAME.stl`, the
+   clean whole-body manufacturing mesh. Treat these printability checks as
+   advisory unless they expose a broad process blocker.
 
-If regions are separately manufactured parts, omit `parent=` only when the
-intent records that architecture. The manufacturing STL may then have multiple
-components; pass the reported `manufacturing.solid_count` to `--components` and
-review each part's actual print orientation separately. `NAME.3mf` is the
-colored print package for the slicer. `NAME-region-REGION.stl` files prove
-region topology; they are not substitutes for manufacturing printability QA.
+`NAME.3mf` is the preferred colored print package. `NAME.stl` is retained as
+the clean whole-body mesh for single-color-style manufacturing QA and fallback
+printing. Hidden `NAME-region-REGION.stl` files are intermediate meshes, not
+final artifacts. If the design truly needs separate printed parts, those parts
+need real assembly interfaces; do not use color regions as a substitute.
 
 ## Design targets
 
@@ -32,6 +35,13 @@ region topology; they are not substitutes for manufacturing printability QA.
   material where possible.
 - Avoid thin decorative color skins that are below one practical layer or one
   extrusion width.
+- Keep continuous-core regions as one solid. Put contrasting surface details on
+  outer shells, shallow insets, raised overlays, or shallow filled grooves
+  instead of full-depth color blocks that sever handles, housings, posts, tabs,
+  or ribs into separate solids.
+- Preserve single-material-visible engravings, recesses, reliefs, and raised
+  textures in the parent geometry so `NAME.stl` does not lose the feature when
+  color assignments are discarded.
 - Treat purge reduction as secondary to appearance, region integrity, and
   printable boundaries.
 - For internal paths, sockets, fasteners, and installed components, observe a
@@ -41,10 +51,36 @@ region topology; they are not substitutes for manufacturing printability QA.
 ## Supports and orientation
 
 The profile's support angle is measured upward from horizontal. Prefer a
-support-free orientation for the manufacturing assembly. Reorient, slope, chamfer,
-arch, or split the object before declaring supports required. Do not treat a
-bridge as automatically safe, and do not infer support need from an isolated
-co-printed region.
+support-free orientation for the manufacturing assembly only after the requested
+shape is preserved. Reorient first; split where the contract permits; add
+slopes, chamfers, or arches only when they are faithful to the object or
+explicitly accepted as a manufacturing compromise. Do not treat a bridge as
+automatically safe, and do not infer support need from an isolated co-printed
+region. If support-free printing conflicts with replica fidelity, preserve the
+replica and declare supports required or disclose the warning.
+Do not optimize for warning-free QA. Repair overhangs only when support-free
+output is a user requirement or support demand is excessive enough to threaten
+the print process. Ordinary local overhangs should become disclosed support
+requirements, not a reason to flatten, move, thicken, simplify, or convert
+semantic color regions into full-depth columns.
+
+`export_regions()` performs a lightweight whole-package orientation selection
+at export time. It keeps the semantic source model intact, evaluates the six
+bed-facing orientations including a top-down 180-degree flip, and scores
+profile fit, rough overhang area, bed contact stability, contact area,
+protected appearance faces, and print height. Profile fit remains a hard gate;
+among fitting poses, support burden and stable contact outrank minimizing print
+height. Candidate evidence includes the uniform scale required to fit the
+selected profile. Use it only as a repair signal: if dimensions are inferred,
+update the semantic model, intent, and parameters together before rebuilding;
+if dimensions are user-fixed, do not scale to clear QA. It applies the selected
+rigid rotation/translation to `NAME.3mf` and `NAME.stl`; `NAME-assemble.step`,
+`NAME-display.glb`, and semantic region preview meshes stay in semantic object
+orientation for CAD and visual review. Repair semantic geometry only for
+feature, wall, overlap, coverage, or visual failures; repair bed-fit and height
+failures with a different recorded print orientation when possible.
+Never flatten a full-3D replica, remove underside detail, or alter a handle/head
+cross-section solely to clear overhang checks.
 
 ## Optical materials
 
@@ -55,5 +91,7 @@ slicer. Archive color readback proves region RGB assignment, not optical
 material behavior.
 
 Never switch profiles, lower limits, or scale fixed user dimensions merely to
-clear QA. At most three repair passes are allowed; unresolved warnings remain
+clear QA. Preserve identity-bearing geometry, expected feature relationships,
+semantic color boundaries, and visual landmarks over eliminating advisory
+warnings. At most three repair passes are allowed; unresolved warnings remain
 visible in the final status.

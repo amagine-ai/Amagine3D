@@ -2,11 +2,12 @@
 name: text-a3d-color
 description: >
   Evidence-driven multi-color CAD and manufacturing-region synthesis. Creates
-  per-region topology STLs, a colored print 3MF, clean manufacturing mesh, and
-  STEP assembly masters plus display GLB models from explicit color semantics,
-  deterministic palette reduction, strict overlap/coverage checks, archive
-  color readback, pinned Bambu printability evidence, provenance hashes, and
-  mandatory colored-view review.
+  a colored print 3MF, clean manufacturing mesh, STEP assembly masters, and
+  display GLB models from explicit color semantics, deterministic palette
+  reduction, strict overlap/coverage checks, archive color readback, pinned
+  Bambu printability evidence, provenance hashes, and mandatory colored-view
+  review. Region meshes are internal intermediates, not printable part
+  deliverables.
   Takes priority when reference colors identify screens, controls, text/logos,
   materials, inlays, functional regions, or the object's recognizable palette,
   even if the user does not mention multi-color, 3MF, or AMS.
@@ -18,8 +19,9 @@ This skill treats color as manufactured geometry with semantic purpose. A
 valid 3MF object count is insufficient: region topology, stored palette,
 appearance, source evidence, and current-run provenance must agree.
 
-`<SKILL_DIR>` means this directory. Outputs belong directly in the current
-session working directory.
+`<SKILL_DIR>` means this directory. Resolve it to an absolute path before
+running commands from a nested output directory. Outputs belong directly in the
+current session working directory.
 
 ## Resources
 
@@ -56,6 +58,14 @@ control, logo/text, material, inlay, or functional region. Do not route here
 for lighting, shadow, reflection, background, or photo noise alone. An explicit
 single-color request routes to `text-a3d`.
 
+When the user names a specific real, catalog, branded, or fictional object, the
+named object sets the identity target. When adequate reference images,
+drawings, scans, or reliable dimensions are supplied, use
+`reference-reproduction` and preserve the identity-bearing form and color
+regions. When no reference evidence is supplied, choose `reference-inspired` or
+`recognizable-form`, generate a faithful-inspired object from broad known
+landmarks, and clearly report that it is not an exact replica.
+
 Distinguish permanent printed color from transient display content. A physical
 LED/LCD is normally one screen region; model individual lit pixels only for a
 requested static decorative face or mosaic.
@@ -64,6 +74,9 @@ RGB stored in a 3MF does not prove optical behavior. Record every region as
 `opaque`, `translucent`, or `transparent` in the intent when optical behavior
 changes the model. Do not invent real filament assignments; the user chooses
 actual slicer materials.
+Color regions are co-printed partitions, not printable assembly parts. If the
+object needs real separately printed parts, design printable interfaces first;
+do not turn `NAME-region-REGION.stl` into a user deliverable.
 
 ## 1. Open the evidence run
 
@@ -78,6 +91,11 @@ python "<SKILL_DIR>/reference_analyze.py" "/absolute/reference.png" --out "<name
 Honor a named user or project printer. Otherwise omit `--machine` to resolve
 the conservative A1 mini default and record the assumption. Read the generated
 profile before modeling; never change it later merely to clear QA.
+
+If the user supplied no image, skip `reference_analyze.py`, set
+`reference_files` to `[]`, and record which identity, dimension, and palette
+targets are inferred rather than evidenced. A no-reference run should be framed
+as reference-inspired or recognizable-form, not exact reference reproduction.
 
 When source colors exceed available color channels, create a proposed plan:
 
@@ -95,10 +113,16 @@ python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 
 The contract must bind the profile hash, fixed object coordinate system, build
 orientation, support policy, wall target, feature kind/face/direction for
-functional openings, functional acceptance criteria, critical feature IDs, and
-each region's optical transmission. Critical IDs must later resolve to named
-build evidence; for routed cavities, observe a representative local
-cross-section.
+functional openings, functional acceptance criteria, critical feature IDs,
+replica-fidelity limits, and each region's optical transmission. Critical IDs
+must later resolve to named build evidence; for routed cavities, observe a
+representative local cross-section.
+
+Printability must not rewrite the object. A full-3D replica must model the
+bottom, side, back, and underside forms that belong to the object. Do not make a
+flat-backed prop, relief, or plain planar underside merely to avoid supports or
+make Z0 contact. Solve print concerns through rigid orientation, permitted
+multipart interfaces, or an honest `supports-required`/warning result.
 
 ## 2. Design region architecture
 
@@ -106,8 +130,13 @@ Read `references/color-architecture.md` and
 `references/bambu-printability.md`. Choose parent split, inset, raised overlay,
 or separately assembled insert for every boundary. Build the complete parent
 form first when regions collectively represent one co-printed body; this
-enables coverage checking, a clean manufacturing STL, and support analysis
-without false positives at material interfaces.
+enables coverage checking, a clean whole-body STL, and support analysis without
+false positives at material interfaces.
+
+For replica work, build the semantic object first and choose print orientation
+second. Color boundaries, palette reductions, and support strategy must not
+remove object-owned underside/back-side form or turn a full-3D request into a
+flat relief.
 
 Use the fixed object frame from the intent: `+X` user right, `+Y` object back,
 and `+Z` object top. Front is `Y-min`; bottom is `Z-min`. Put ports, holes, and
@@ -153,16 +182,27 @@ if __name__ == "__main__":
     export_regions(regions, NAME, parent=parent, intent_path=INTENT)
 ```
 
-For separately assembled inserts whose union intentionally differs from one
-parent, omit `parent=` only after recording that architecture in the contract.
-`export_regions()` always emits `NAME.3mf` as the multi-color print package,
-`NAME-manufacturing.stl` as the clean printability mesh,
-`NAME-region-REGION.stl` as region topology evidence, `NAME-assemble.step` as
-the physical assembly master, and `NAME-display.glb` as the display master.
-When `parent=` is provided, the manufacturing STL is the coverage-checked
-parent without internal material-interface faces. It also emits
-`NAME_material-plan.json` as region metadata because 3MF RGB values do not
-prove optical behavior.
+`export_regions()` chooses one lightweight rigid print orientation from the
+semantic parent shape before final export. It evaluates the six bed-facing
+orientations: identity, front/back side lays, left/right side lays, and a
+top-down 180-degree flip. Profile fit is a hard gate; among fitting candidates,
+support burden and bed contact quality outrank low print height, so a taller
+top-down pose may beat a lower side-lay when it materially reduces supports.
+Every candidate records the uniform scale needed to fit the selected profile.
+Do not silently scale during export; when dimensions are inferred rather than
+fixed by the user, use that scale as repair evidence, update the contract and
+driving parameters together, then rebuild before rejecting a lower-support pose.
+It then emits `NAME.3mf` as the preferred multi-color print package and
+`NAME.stl` as the clean whole-body manufacturing mesh in selected print
+coordinates. `NAME-assemble.step` and `NAME-display.glb` preserve the semantic
+object orientation for CAD review and visual fidelity. The report keeps the
+original semantic bounds plus `semantic_to_print` rotation/translation evidence
+under `print_orientation` and `manufacturing.transform`.
+It requires `parent=` and writes hidden internal print-pose region meshes for
+3MF packing plus hidden semantic-pose region meshes for colored visual review;
+neither set is a user deliverable. The STL is the coverage-checked parent
+without internal material-interface faces. It also emits `NAME_material-plan.json`
+as region metadata because 3MF RGB values do not prove optical behavior.
 
 Expose every meaningful user-adjustable driving dimension with `parameter()`:
 overall dimensions plus local feature, interface, inset, clearance, and region
@@ -177,22 +217,44 @@ construction.
 
 ## 4. Audit meshes, archive, and appearance
 
-Audit every region STL for topology only. Do not run overhang checks on an
-isolated co-printed region because adjacent materials may provide support:
+Audit hidden internal region meshes only when debugging color-region topology.
+Do not present those meshes as printable parts, and do not run overhang checks
+on an isolated co-printed region because adjacent materials may provide
+support:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>-region-<region>.stl" --topology-only --region <region> --components <N> --out "<name>-region-<region>_mesh-audit.json"
+python "<SKILL_DIR>/qa_check.py" ".amagine3d-internal/<name>/<name>-region-<region>.stl" --topology-only --region <region> --components <N> --out "<name>-region-<region>_mesh-audit.json"
 ```
 
-Run Bambu manufacturing checks exactly once on the clean manufacturing STL:
+Run a lightweight static print-package QA on the 3MF. This checks package
+provenance, names, colors, units, build items, dimensions, Z0, and bed fit:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>-manufacturing.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --tol <T> --require-z0 --out "<name>_manufacturing-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>.3mf" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --tol <T> --require-z0 --out "<name>_package-audit.json"
+```
+
+Then run full Bambu manufacturing mesh checks exactly once on the clean whole
+body STL:
+
+```bash
+python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --tol <T> --require-z0 --out "<name>_mesh-audit.json"
 ```
 
 Read every `fail`, `warning`, and `not_evaluated` result. A region topology
 pass cannot replace the manufacturing bed-fit, wall, feature, or overhang
 evidence.
+Treat printability advisory checks as coarse process-risk guardrails, not as a
+goal to make every warning disappear. Package validity, parent coverage,
+region/color integrity, contract dimensions, and visual/semantic fidelity are
+higher-priority success criteria than warning-free support or overhang reports.
+Only repair a printability advisory by changing source geometry when it points
+to a broad process blocker, such as impossible bed fit, impossible height,
+globally undersized walls, critical features below the line-width floor, or
+support burden so large that the print process is likely to fail. Local
+overhangs, localized support needs, and cosmetic-print risks should normally be
+reported as `supports-required` or `static print-package QA passed with
+warnings` instead of flattening, thickening, moving, converting to full-depth
+color columns, or simplifying identity-bearing geometry.
 
 Then verify that 3MF names and colors match the build report:
 
@@ -211,37 +273,61 @@ when explicit `--expect-x/y/z` values are omitted. `step_check.py` also reads
 region solid counts from `--report` when available; pass explicit expected
 values only to override the evidence.
 
-Render all regions with contract colors, producing five views and the matched
-view:
+Render all regions with contract colors in semantic object orientation,
+producing five views and the matched view. Use the hidden semantic region meshes
+as renderer inputs. Use print-pose meshes and `NAME.3mf` only for package and
+manufacturing checks, not for judging whether the model was built well:
 
 ```bash
-python "<SKILL_DIR>/render_preview.py" --part "<name>-region-<region-a>.stl=#RRGGBB" --part "<name>-region-<region-b>.stl=#RRGGBB" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
+python "<SKILL_DIR>/render_preview.py" --part ".amagine3d-internal/<name>/semantic/<name>-region-<region-a>.stl=#RRGGBB" --part ".amagine3d-internal/<name>/semantic/<name>-region-<region-b>.stl=#RRGGBB" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
 ```
 
 Use `read` on both. Judge geometry landmarks, silhouette/depth, region
-placement, boundary thickness, and palette—not merely whether colors exist.
+placement, boundary thickness, palette, and unexpectedly plain underside—not
+merely whether colors exist. For `full-3d` replicas, the bottom view must be
+reviewed when the object's underside contributes to identity or volume; a flat
+bottom created for print convenience is a visual-fidelity failure.
+For open-ended recognizable objects, keep `visual.landmarks` as a compact
+quality rubric, usually 3-7 identity-critical landmarks. Prefer major
+silhouette, proportion, material/color-region, and one or two signature details
+over an exhaustive checklist of every small decoration. Optional micro-details
+may be reported as compromises instead of blocking delivery.
 Use silhouette scoring only for a corresponding orthographic/flat source.
 
 ## 5. Repair and close
 
 Repair the failed evidence class: parent geometry, region boundary, palette
-mapping, mesh topology, bed fit, feature size, wall thickness, overhang,
-archive assignment, or visual placement. Never lower the profile limits or
-scale fixed user dimensions to clear QA. Every change requires rebuild, all
-affected region audits, manufacturing audit, 3MF assembly audit, STEP assembly
-audit, render, and read.
-Maximum three evidence-repair passes; disclose remaining failures at the cap.
+mapping, mesh topology, bed fit, feature size, broad wall-thickness failure,
+excessive support burden, archive assignment, or visual placement. Bed-fit and
+excessive-height failures should first be repaired by a different whole-package
+rigid orientation when a candidate exists. If a lower-support candidate only
+misses the profile because inferred dimensions are too large, uniformly scale
+the semantic design and intent before falling back to a worse-support fitting
+pose; do not scale user-fixed dimensions. Overlap, coverage, or visual failures
+repair the semantic source model. Feature and wall repairs are for
+critical or broad process failures, not isolated cosmetic advisory risk.
+Overhang repairs are required only when support-free output was explicitly
+promised or the support burden is likely to make the print process fail;
+otherwise preserve the semantic shape and declare supports required. Never
+lower the profile limits or scale fixed user dimensions to clear QA. Never
+chase warning-free QA by changing object identity, expected part relationships,
+meaningful proportions, appearance landmarks, or semantic color boundaries.
+Every change requires rebuild, all affected internal region topology checks
+when used, package audit, mesh audit, 3MF assembly audit, STEP assembly audit,
+render, and read. Maximum three evidence-repair passes; disclose remaining
+failures at the cap.
 
 Freshness must cover the printer profile, intent, palette plan when used,
-source, every region STL, manufacturing STL, assembly STEP, display GLB, 3MF,
-material plan, build report, region mesh audits, manufacturing audit, 3MF
-assembly audit, STEP assembly audit, visual previews, and the render evidence
-report.
+source, STL, assembly STEP, display GLB, 3MF, material plan, build report, 3MF
+package audit, mesh audit, 3MF assembly audit, STEP assembly audit, visual
+previews, and the render evidence report.
 
 Deliver the complete evidence bundle. Report geometry, region integrity, 3MF
-readback, STEP master validity, optical-region metadata, freshness, visual
-fidelity, palette fidelity, bed fit, feature resolution, walls, and overhangs
-as separate statuses. Summarize the print result as `print preflight passed`, `print
-preflight passed with warnings`, or `print preflight failed`. Report `actual
-slicer validation: not evaluated` unless a real Bambu Studio or equivalent
-slicer run was completed.
+package QA, 3MF color readback, STEP master validity, optical-region metadata,
+freshness, visual fidelity, palette fidelity, bed fit, feature resolution,
+walls, and overhangs as separate statuses. Summarize the result as
+`static print-package QA passed`, `static print-package QA passed with
+warnings`, or `static print-package QA failed`. Report `actual slicer
+validation: intentionally out of scope / not planned`; never list it as a
+pending issue, and never call static package or mesh QA definitive proof that a
+real slicer accepted the file.
