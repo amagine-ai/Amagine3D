@@ -69,19 +69,18 @@ semantic color regions into full-depth columns.
 
 `export_regions()` performs a lightweight whole-package orientation selection
 at export time. It keeps the semantic source model intact, evaluates the six
-bed-facing orientations including a top-down 180-degree flip, and scores
-profile fit, rough overhang area, bed contact stability, contact area,
-protected appearance faces, and print height. Profile fit remains a hard gate;
-among fitting poses, support burden and stable contact outrank minimizing print
-height. Candidate evidence includes the uniform scale required to fit the
-selected profile. Use it only as a repair signal: if dimensions are inferred,
-update the semantic model, intent, and parameters together before rebuilding;
-if dimensions are user-fixed, do not scale to clear QA. It applies the selected
-rigid rotation/translation to `NAME.3mf` and `NAME.stl`; `NAME-assemble.step`,
+bed-facing orientations including a top-down 180-degree flip, computes any
+uniform print scale required by the selected profile, and scores the scaled
+candidate. Support burden is estimated with a support-volume proxy rather than
+only downward face area. Lower support burden and stable bed contact outrank
+low print height and scale penalty, so a taller pose may beat a low side-lay
+when it materially reduces support material. It applies the selected
+rotation/scale/translation to `NAME.3mf` and `NAME.stl`; `NAME-assemble.step`,
 `NAME-display.glb`, and semantic region preview meshes stay in semantic object
 orientation for CAD and visual review. Repair semantic geometry only for
 feature, wall, overlap, coverage, or visual failures; repair bed-fit and height
-failures with a different recorded print orientation when possible.
+failures with a different recorded print orientation and uniform print scale
+when possible.
 Never flatten a full-3D replica, remove underside detail, or alter a handle/head
 cross-section solely to clear overhang checks.
 
@@ -93,8 +92,11 @@ model or visual promise, and leave real filament selection to the user and
 slicer. Archive color readback proves region RGB assignment, not optical
 material behavior.
 
-Never switch profiles, lower limits, or scale fixed user dimensions merely to
-clear QA. Preserve identity-bearing geometry, expected feature relationships,
-semantic color boundaries, and visual landmarks over eliminating advisory
-warnings. At most three repair passes are allowed; unresolved warnings remain
-visible in the final status.
+Never switch profiles or lower limits merely to clear QA. If final dimensions
+are explicitly fixed, use a larger profile or real multipart strategy instead
+of scaling. Otherwise a recorded uniform print scale is allowed when it
+preserves the object better than a worse-support pose. Preserve
+identity-bearing geometry, expected feature relationships, semantic color
+boundaries, and visual landmarks over eliminating advisory warnings. At most
+three repair passes are allowed; unresolved warnings remain visible in the
+final status.

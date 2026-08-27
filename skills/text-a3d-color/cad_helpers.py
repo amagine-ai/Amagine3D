@@ -62,6 +62,7 @@ _PARAMETERS: dict[str, dict] = {}
 _REGION_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 _PARAMETER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
+PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
 
 
 def _parameter_overrides() -> dict:
@@ -250,7 +251,7 @@ def _uniform_scale_to_fit_profile(dimensions: list[float], profile: dict | None)
             round(value * scale, 5) for value in dimensions
         ],
         "fits_without_scaling": scale >= 1.0 - 1e-9,
-        "scale": round(scale, 8),
+        "scale": scale,
     }
 
 
@@ -303,6 +304,8 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
             "contact_bounds_mm": None,
             "overhang_area_mm2": float("inf"),
             "stability_offset_ratio": float("inf"),
+            "support_mean_clearance_mm": float("inf"),
+            "support_volume_proxy_mm3": float("inf"),
         }
     normals = np.asarray(mesh.face_normals, dtype=float)
     triangles = np.asarray(mesh.triangles, dtype=float)
@@ -340,6 +343,16 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
     above_build_plane = triangles[:, :, 2].max(axis=1) > minimum_z + 0.08
     risky = (normals[:, 2] < -1e-8) & above_build_plane & (slopes < threshold_deg)
     overhang_area = float(areas[risky].sum())
+    risky_clearance = np.maximum(
+        triangles[:, :, 2].mean(axis=1) - minimum_z,
+        0.0,
+    )
+    support_volume_proxy = float((areas[risky] * risky_clearance[risky]).sum())
+    support_mean_clearance = (
+        support_volume_proxy / overhang_area
+        if overhang_area > 1e-9
+        else 0.0
+    )
     return {
         "center_inside_contact_bounds": center_inside,
         "contact_area_mm2": round(contact_area, 5),
@@ -351,6 +364,8 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
         ),
         "overhang_area_mm2": round(overhang_area, 5),
         "stability_offset_ratio": round(stability_offset, 8),
+        "support_mean_clearance_mm": round(support_mean_clearance, 5),
+        "support_volume_proxy_mm3": round(support_volume_proxy, 5),
     }
 
 
@@ -390,19 +405,36 @@ def _orientation_candidates(
             float(box.max.Y - box.min.Y),
             float(box.max.Z - box.min.Z),
         ]
-        bed_fits, bed = _footprint_fits(dimensions[0], dimensions[1], profile)
+        scale_fit = _uniform_scale_to_fit_profile(dimensions, profile)
+        scale = (
+            float(scale_fit["scale"])
+            if scale_fit.get("available") is True
+            else 1.0
+        )
+        if not math.isfinite(scale) or scale <= 0:
+            scale = 1.0
+        scaled = rotated.scale(scale) if scale < 1.0 - 1e-9 else rotated
+        scaled_box = scaled.bounding_box()
+        print_dimensions = [
+            float(scaled_box.max.X - scaled_box.min.X),
+            float(scaled_box.max.Y - scaled_box.min.Y),
+            float(scaled_box.max.Z - scaled_box.min.Z),
+        ]
+        bed_fits, bed = _footprint_fits(
+            print_dimensions[0], print_dimensions[1], profile
+        )
         height_fits = (
             True
             if not isinstance(height_limit, (int, float)) or isinstance(height_limit, bool)
-            else dimensions[2] <= float(height_limit) + 1e-9
+            else print_dimensions[2] <= float(height_limit) + 1e-9
         )
         fits = bed_fits and height_fits
         translate = [
-            round(float(-box.min.X), 5),
-            round(float(-box.min.Y), 5),
-            round(float(-box.min.Z), 5),
+            round(float(-scaled_box.min.X), 5),
+            round(float(-scaled_box.min.Y), 5),
+            round(float(-scaled_box.min.Z), 5),
         ]
-        placed = _translate(rotated, *translate)
+        placed = _translate(scaled, *translate)
         metrics = _mesh_orientation_metrics(
             placed,
             threshold_deg=float(threshold_deg),
@@ -415,29 +447,35 @@ def _orientation_candidates(
             "bed_contact_semantic_face": bed_face,
             "bed_fit": bed,
             "dimensions_mm": [round(value, 5) for value in dimensions],
+            "eligible_after_uniform_scale": bool(fits),
             "fits_profile": bool(fits),
             "height_fits": bool(height_fits),
             "orientation_metrics": metrics,
             "name": name,
             "preference": preference,
+            "print_dimensions_mm": [round(value, 5) for value in print_dimensions],
             "protected_contact_face_penalty": protected_penalty,
+            "requires_uniform_scale": bool(
+                scale_fit.get("available") is True
+                and not scale_fit.get("fits_without_scaling", True)
+            ),
             "rotate_degrees_xyz": [round(value, 5) for value in rotation],
             "score": [
                 0 if fits else 1,
+                round(float(metrics["support_volume_proxy_mm3"]), 5),
                 round(float(metrics["overhang_area_mm2"]), 5),
                 no_contact_penalty,
                 center_penalty,
                 round(float(metrics["stability_offset_ratio"]), 8),
                 round(-float(metrics["contact_area_mm2"]), 5),
                 protected_penalty,
-                round(dimensions[2], 5),
+                round(max(0.0, 1.0 - scale), 8),
+                round(print_dimensions[2], 5),
                 preference,
             ],
+            "scale_to_apply": scale,
             "translate_mm": translate,
-            "uniform_scale_to_fit_profile": _uniform_scale_to_fit_profile(
-                dimensions,
-                profile,
-            ),
+            "uniform_scale_to_fit_profile": scale_fit,
         })
     return results
 
@@ -457,14 +495,16 @@ def _select_print_orientation(
             for key, value in selected.items()
             if key != "preference"
         },
-        "strategy": "lightweight-stability-support-appearance-score",
+        "strategy": "scaled-support-contact-appearance-score",
     }
 
 
 def _apply_print_orientation(shape, orientation: dict):
     selected = orientation["selected"]
     rotated = _rotate(shape, *selected["rotate_degrees_xyz"])
-    return _translate(rotated, *selected["translate_mm"])
+    scale = float(selected.get("scale_to_apply", 1.0) or 1.0)
+    scaled = rotated.scale(scale) if scale < 1.0 - 1e-9 else rotated
+    return _translate(scaled, *selected["translate_mm"])
 
 
 def observe(shape, feature_id: str, role: str = "feature") -> None:
@@ -692,6 +732,18 @@ def export_regions(
             "name": region_name,
             "transmission": transmission,
         })
+        continuity = item.get("continuity")
+        if continuity is not None:
+            report["regions"][region_name]["continuity"] = continuity
+
+    package_mode = intent_data.get("printability", {}).get(
+        "print_package_mode", "co_print_body"
+    )
+    if package_mode not in PRINT_PACKAGE_MODES:
+        raise RegionInvariantError(
+            "printability.print_package_mode must be co_print_body or separate_parts"
+        )
+    report["print_package_mode"] = package_mode
 
     names = list(normalized)
     for index, left in enumerate(names):
@@ -794,6 +846,7 @@ def export_regions(
         "transform": {
             "from": "semantic",
             "rotate_degrees_xyz": print_orientation["selected"]["rotate_degrees_xyz"],
+            "scale": print_orientation["selected"].get("scale_to_apply", 1.0),
             "to": "print",
             "translate_mm": print_orientation["selected"]["translate_mm"],
         },
@@ -802,7 +855,12 @@ def export_regions(
     report["internal_region_meshes"] = internal_region_meshes
 
     archive_path = output / f"{name}.3mf"
-    report["three_mf"] = write_color_archive(entries, str(archive_path))
+    report["three_mf"] = write_color_archive(
+        entries,
+        str(archive_path),
+        package_mode=package_mode,
+        package_name=name,
+    )
     artifacts["3mf"] = {
         "path": str(archive_path.resolve()),
         "sha256": _digest(archive_path),
