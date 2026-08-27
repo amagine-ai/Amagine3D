@@ -77,6 +77,7 @@ skill's `intent_contract.py`.
     },
     "build_axis": "+Z",
     "bed_contact": "z-min",
+    "print_package_mode": "co_print_body",
     "support_policy": "support-free",
     "minimum_wall_target_mm": 0.9,
     "critical_features": ["fastener-clearance", "accent-inset"]
@@ -140,7 +141,11 @@ edge fails the design contract.
 The printability profile must come from this skill's `bambu_profile.py`. Its
 hash locks the machine, selected tool, nozzle, process, bed, feature floor,
 wall target, and support threshold. Use `NAME.3mf` for preferred multi-color
-print package QA and archive readback. Use `NAME.stl` for the clean whole-body
+print package QA and archive readback. `printability.print_package_mode`
+defaults to `co_print_body`, where one top-level 3MF mesh build item stores
+all color regions with per-triangle colors and region metadata. Use
+`separate_parts` only for real multipart prints with physical assembly
+interfaces. Use `NAME.stl` for the clean whole-body
 manufacturing mesh QA that matches the single-color skill's STL checks. Hidden
 `NAME-region-REGION.stl` meshes are internal topology inputs only, not
 printable part deliverables. If a feature must be visible in the STL fallback,

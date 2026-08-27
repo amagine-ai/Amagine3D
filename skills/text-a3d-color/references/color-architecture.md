@@ -70,7 +70,12 @@ cross-checks the intent's region names/colors, exports `NAME.stl`,
 artifact hashes. It may write hidden internal print-pose region meshes for 3MF
 packing and debugging plus semantic-pose region meshes for colored visual
 review, but they are not user deliverables.
-`export_3mf.py` stores a shared palette and reads the archive XML back.
+The default `NAME.3mf` package mode is `co_print_body`: one top-level mesh
+build item stores the named color regions with per-triangle colors and region
+metadata. Use `separate_parts` only for real separately printed components with
+physical assembly interfaces.
+`export_3mf.py` stores a shared palette, writes region metadata, and reads the
+archive XML back.
 `assembly_check.py` compares the expected region names/colors against what is
 actually stored in the 3MF. Optical transmission remains region metadata
 because RGB readback cannot prove real material behavior.

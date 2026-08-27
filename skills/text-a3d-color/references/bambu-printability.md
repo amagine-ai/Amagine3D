@@ -14,8 +14,8 @@ in one region may sit directly on another material. For that reason:
 2. Pass `parent=` so `export_regions()` can prove coverage and export a clean
    `NAME.stl`.
 3. Run lightweight static print-package QA on `NAME.3mf` for package
-   provenance, unit, build items, region names/colors, dimensions, Z0, and bed
-   fit.
+   provenance, package mode, unit, the top-level build item, region
+   names/colors, dimensions, Z0, and bed fit.
 4. Run profile-backed feature, wall, and overhang checks on `NAME.stl`, the
    clean whole-body manufacturing mesh. Treat these printability checks as
    advisory unless they expose a broad process blocker.
@@ -23,8 +23,11 @@ in one region may sit directly on another material. For that reason:
 `NAME.3mf` is the preferred colored print package. `NAME.stl` is retained as
 the clean whole-body mesh for single-color-style manufacturing QA and fallback
 printing. Hidden `NAME-region-REGION.stl` files are intermediate meshes, not
-final artifacts. If the design truly needs separate printed parts, those parts
-need real assembly interfaces; do not use color regions as a substitute.
+final artifacts. The default package mode is `co_print_body`, which writes one
+top-level 3MF mesh build item with per-triangle colors and region metadata. If
+the design truly needs separate printed parts, set
+`printability.print_package_mode` to `separate_parts`; those parts need real
+assembly interfaces, not color regions used as a substitute.
 
 ## Design targets
 
