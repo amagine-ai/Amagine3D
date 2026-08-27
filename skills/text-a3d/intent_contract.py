@@ -21,6 +21,17 @@ REPRESENTATIONS = {"full-3d", "orthographic-solid", "relief", "surface-led"}
 SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
 MANUFACTURING_MODES = {"multipart", "single-part"}
+INTERFACE_CONNECTIONS = {
+    "dovetail",
+    "glue-face",
+    "peg-socket",
+    "pin-socket",
+    "press-fit",
+    "snap-fit",
+    "tab-slot",
+    "threaded-insert",
+}
+ASSEMBLY_AXES = {"+X", "+Y", "+Z", "-X", "-Y", "-Z"}
 INTENT_SCHEMA = "evidence-cad-intent/v4"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
 FEATURE_KINDS = {
@@ -147,7 +158,10 @@ def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> 
     return profile
 
 
-def validate_manufacturing(manufacturing) -> list[str]:
+def validate_manufacturing(
+    manufacturing,
+    feature_ids: set[str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     if not isinstance(manufacturing, dict):
         return ["manufacturing must be an object"]
@@ -217,12 +231,45 @@ def validate_manufacturing(manufacturing) -> list[str]:
                         "manufacturing.interfaces"
                         f"[{index}].between references unknown parts"
                     )
+                connection = interface.get("connection")
+                if connection not in INTERFACE_CONNECTIONS:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].connection is invalid"
+                    )
+                assembly_axis = interface.get("assembly_axis")
+                if assembly_axis not in ASSEMBLY_AXES:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].assembly_axis is invalid"
+                    )
                 if (
-                    "clearance_mm" in interface
-                    and not _non_negative_number(interface.get("clearance_mm"))
+                    "clearance_mm" not in interface
+                    or not _non_negative_number(interface.get("clearance_mm"))
                 ):
                     errors.append(
                         f"manufacturing.interfaces[{index}].clearance_mm must be finite and non-negative"
+                    )
+                if not _positive_number(interface.get("engagement_mm")):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].engagement_mm must be positive"
+                    )
+                interface_features = interface.get("features")
+                if not isinstance(interface_features, list) or not interface_features:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].features must reference modeled connector feature IDs"
+                    )
+                elif not all(
+                    isinstance(item, str) and ID_PATTERN.fullmatch(item)
+                    for item in interface_features
+                ):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].features must contain valid feature IDs"
+                    )
+                elif feature_ids is not None and not set(interface_features).issubset(
+                    feature_ids
+                ):
+                    errors.append(
+                        "manufacturing.interfaces"
+                        f"[{index}].features reference unknown feature IDs"
                     )
                 if (
                     not isinstance(interface.get("acceptance"), str)
@@ -340,7 +387,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         else set()
     )
 
-    errors.extend(validate_manufacturing(data.get("manufacturing")))
+    errors.extend(validate_manufacturing(data.get("manufacturing"), feature_ids))
 
     visual = data.get("visual")
     if not isinstance(visual, dict) or not isinstance(visual.get("required"), bool):

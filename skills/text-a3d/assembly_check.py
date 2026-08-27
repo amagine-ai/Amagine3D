@@ -4,13 +4,31 @@ from __future__ import annotations
 
 import argparse
 from hashlib import sha256
+import importlib.util
 from itertools import combinations
 import json
 import math
 from pathlib import Path
 import sys
 
-from intent_contract import INTENT_SCHEMA, validate_manufacturing
+
+def _load_local_module(module_name: str, filename: str):
+    path = Path(__file__).resolve().with_name(filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_intent_contract = _load_local_module(
+    "_text_a3d_intent_contract_for_assembly_check",
+    "intent_contract.py",
+)
+INTENT_SCHEMA = _intent_contract.INTENT_SCHEMA
+validate_manufacturing = _intent_contract.validate_manufacturing
 
 
 BUILD_SCHEMA = "evidence-cad-assembly-build/v3"
@@ -42,6 +60,19 @@ def _finite_non_negative(value) -> bool:
         and math.isfinite(value)
         and value >= 0
     )
+
+
+def _interface_feature_ids(manufacturing) -> set[str]:
+    if not isinstance(manufacturing, dict):
+        return set()
+    features: set[str] = set()
+    for interface in manufacturing.get("interfaces", []):
+        if not isinstance(interface, dict):
+            continue
+        for feature_id in interface.get("features", []):
+            if isinstance(feature_id, str):
+                features.add(feature_id)
+    return features
 
 
 class Audit:
@@ -316,6 +347,21 @@ def audit_report(
     events_valid = isinstance(events, list) and all(
         isinstance(event, dict) and event.get("part") in part_map
         for event in event_list
+    )
+    interface_features = _interface_feature_ids(manufacturing)
+    observed_feature_ids = set(feature_map) | {
+        event.get("id") for event in event_list if isinstance(event.get("id"), str)
+    }
+    missing_interface_features = sorted(interface_features - observed_feature_ids)
+    audit.add(
+        "interface_feature_evidence",
+        bool(interface_features) and not missing_interface_features,
+        {
+            "missing_feature_ids": missing_interface_features,
+            "observed_feature_ids": sorted(observed_feature_ids),
+            "required_feature_ids": sorted(interface_features),
+        },
+        "each assembly interface names modeled connector features",
     )
     audit.add(
         "part_evidence_ownership",

@@ -466,6 +466,154 @@ class PrintabilityGeometryTests(unittest.TestCase):
             self.assertIn("printability_bed_fit", fail_payload["errors"])
 
 
+class SinglePartOrientationExportTests(unittest.TestCase):
+    def setUp(self):
+        cad_helpers._FEATURES.clear()
+        cad_helpers._EVENTS.clear()
+        cad_helpers._PARAMETERS.clear()
+
+    def test_export_part_rotates_print_stl_but_keeps_semantic_step(self):
+        profile = bambu_profile.resolve_profile(
+            bambu_profile.load_catalog(),
+            machine_name="a1-mini",
+            nozzle=0.4,
+            tool_index=0,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "tower_printer-profile.json"
+            profile_path.write_text(bambu_profile.serialize(profile), encoding="utf-8")
+            profile_hash = sha256(profile_path.read_bytes()).hexdigest()
+            intent_path = root / "tower_intent.json"
+            intent_path.write_text(
+                json.dumps({
+                    "schema": "evidence-cad-intent/v4",
+                    "part": "tower",
+                    "task_mode": "specification",
+                    "representation": "full-3d",
+                    "coordinate_system": COORDINATE_SYSTEM,
+                    "reference_files": [],
+                    "dimensions_mm": {
+                        "x": {"value": 20, "source": "user", "confidence": "high"},
+                        "y": {"value": 10, "source": "user", "confidence": "high"},
+                        "z": {"value": 80, "source": "user", "confidence": "high"},
+                    },
+                    "features": [
+                        {
+                            "id": "tower-body",
+                            "kind": "additive",
+                            "evidence": "fixture body is a tall rectangular part",
+                            "acceptance": "semantic body remains 20 x 10 x 80 mm",
+                        }
+                    ],
+                    "manufacturing": {"mode": "single-part"},
+                    "printability": {
+                        "profile": {"path": profile_path.name, "sha256": profile_hash},
+                        "build_axis": "+Z",
+                        "bed_contact": "z-min",
+                        "support_policy": "support-free",
+                        "minimum_wall_target_mm": 0.87,
+                        "critical_features": ["tower-body"],
+                    },
+                    "visual": {
+                        "required": True,
+                        "reference_view": "front",
+                        "landmarks": ["tall semantic tower"],
+                    },
+                    "assumptions": [],
+                }),
+                encoding="utf-8",
+            )
+            body = Box(20, 10, 80, align=(Align.MIN, Align.MIN, Align.MIN))
+            cad_helpers.observe(body, "tower-body", "additive")
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = cad_helpers.export_part(
+                    body,
+                    "tower",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                )
+
+            self.assertEqual(report["shape"]["bbox_mm"]["size"], [20.0, 10.0, 80.0])
+            self.assertEqual(report["print"]["bbox_mm"]["size"], [20.0, 80.0, 10.0])
+            self.assertEqual(
+                report["print_orientation"]["selected"]["name"],
+                "rotate-x--90",
+            )
+            self.assertEqual(
+                report["print"]["transform"]["rotate_degrees_xyz"],
+                [-90.0, 0.0, 0.0],
+            )
+
+            mesh = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "qa_check.py"),
+                    str(root / "tower.stl"),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "tower_report.json"),
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(mesh.returncode, 0, mesh.stdout + mesh.stderr)
+            mesh_payload = json.loads(mesh.stdout)
+            dimension_z = next(
+                item for item in mesh_payload["checks"]
+                if item["name"] == "dimension_z"
+            )
+            self.assertEqual(dimension_z["expected"]["value"], 10.0)
+
+            step = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "step_check.py"),
+                    str(root / "tower-assemble.step"),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "tower_report.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(step.returncode, 0, step.stdout + step.stderr)
+            step_payload = json.loads(step.stdout)
+            dimension_z = next(
+                item for item in step_payload["checks"]
+                if item["name"] == "dimension_z"
+            )
+            self.assertEqual(dimension_z["expected"]["value"], 80.0)
+
+    def test_orientation_candidates_include_top_down_and_scale_evidence(self):
+        profile = bambu_profile.resolve_profile(
+            bambu_profile.load_catalog(),
+            machine_name="a1-mini",
+            nozzle=0.4,
+            tool_index=0,
+        )
+        oversized = Box(40, 20, 220, align=(Align.MIN, Align.MIN, Align.MIN))
+        candidates = cad_helpers._orientation_candidates(oversized, profile)
+        by_name = {item["name"]: item for item in candidates}
+        self.assertIn("rotate-x-180", by_name)
+        top_down = by_name["rotate-x-180"]
+        self.assertEqual(top_down["bed_contact_semantic_face"], "top")
+        self.assertFalse(top_down["uniform_scale_to_fit_profile"]["fits_without_scaling"])
+        self.assertAlmostEqual(
+            top_down["uniform_scale_to_fit_profile"]["scale"],
+            180 / 220,
+            places=6,
+        )
+
+
 class SingleMaterialAssemblyTests(unittest.TestCase):
     def setUp(self):
         cad_helpers._FEATURES.clear()
@@ -497,24 +645,49 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                         ],
                         "interfaces": [
                             {
-                                "id": "lid-body-seam",
+                                "id": "lid-tab-slot",
                                 "between": ["lower-shell", "top-lid"],
+                                "connection": "tab-slot",
+                                "assembly_axis": "+Z",
                                 "clearance_mm": 0.3,
-                                "acceptance": "non-overlapping separated parts",
+                                "engagement_mm": 2.0,
+                                "features": ["lid-tab", "lid-slot"],
+                                "acceptance": "2 mm printable tab enters the lid slot with 0.3 mm clearance",
                             }
                         ],
                     },
                 }),
                 encoding="utf-8",
             )
-            lower = Box(20, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
-            lid = Pos(0, 0, 6) * Box(
+            tab = Pos(0, 0, 4) * Box(
+                6, 3, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            lower = (
+                Box(20, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
+                + tab
+            )
+            lid_blank = Pos(0, 0, 4) * Box(
                 20, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            slot = Pos(0, 0, 3.9) * Box(
+                6.3, 3.3, 2.2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            lid = cad_helpers.checked_cut(
+                lid_blank,
+                slot,
+                "lid-slot",
+                part_name="top-lid",
             )
             cad_helpers.observe(
                 lower,
                 "lower-shell-envelope",
                 "part",
+                part_name="lower-shell",
+            )
+            cad_helpers.observe(
+                tab,
+                "lid-tab",
+                "interface",
                 part_name="lower-shell",
             )
             cad_helpers.observe(
@@ -560,7 +733,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 expect_solids=2,
                 expect_x=20,
                 expect_y=10,
-                expect_z=8,
+                expect_z=6,
             )
             self.assertTrue(assemble_audit["pass"], assemble_audit)
             assemble_cli = subprocess.run(
@@ -591,7 +764,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                     item["feature_id"]
                     for item in qa_check.feature_measurements(report, "top-lid")
                 ],
-                ["top-lid-envelope"],
+                ["top-lid-envelope", "lid-slot"],
             )
 
             top_lid = subprocess.run(
@@ -653,7 +826,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertTrue((root / "case_views.png").is_file())
             preview_payload = json.loads(preview_report.read_text(encoding="utf-8"))
             self.assertEqual(len(preview_payload["meshes"]), 1)
-            self.assertEqual(preview_payload["dimensions_mm"], [20.0, 10.0, 8.0])
+            self.assertEqual(preview_payload["dimensions_mm"], [20.0, 10.0, 6.0])
             self.assertTrue(
                 all("preview_color_rgb" in item for item in preview_payload["meshes"])
             )
@@ -694,9 +867,14 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                         ],
                         "interfaces": [
                             {
-                                "id": "lid-body-seam",
+                                "id": "lid-tab-slot",
                                 "between": ["lower-shell", "wrong-lid"],
-                                "acceptance": "named parts form one interface",
+                                "connection": "tab-slot",
+                                "assembly_axis": "+Z",
+                                "clearance_mm": 0.3,
+                                "engagement_mm": 2.0,
+                                "features": ["lid-tab", "lid-slot"],
+                                "acceptance": "2 mm printable tab enters the lid slot with 0.3 mm clearance",
                             }
                         ],
                     },
@@ -736,9 +914,14 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                         ],
                         "interfaces": [
                             {
-                                "id": "contact",
+                                "id": "glue-contact",
                                 "between": ["base", "lid"],
-                                "acceptance": "touching faces",
+                                "connection": "glue-face",
+                                "assembly_axis": "+Z",
+                                "clearance_mm": 0.0,
+                                "engagement_mm": 1.0,
+                                "features": ["base-glue-face", "lid-glue-face"],
+                                "acceptance": "flat mating faces align before glue-up",
                             }
                         ],
                     },
@@ -750,7 +933,19 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 10, 10, 1, align=(Align.CENTER, Align.CENTER, Align.MIN)
             )
             cad_helpers.observe(base, "base", "part", part_name="base")
+            cad_helpers.observe(
+                base,
+                "base-glue-face",
+                "interface",
+                part_name="base",
+            )
             cad_helpers.observe(lid, "lid", "part", part_name="lid")
+            cad_helpers.observe(
+                lid,
+                "lid-glue-face",
+                "interface",
+                part_name="lid",
+            )
             with contextlib.redirect_stdout(io.StringIO()):
                 cad_helpers.export_assembly(
                     {"base": base, "lid": lid},
@@ -813,6 +1008,7 @@ class ContractTests(unittest.TestCase):
         data = json.loads(example_path.read_text(encoding="utf-8"))
         data["manufacturing"] = {
             "mode": "multipart",
+            "decision": "top lid is a functional cover that needs a printable connector",
             "parts": [
                 {
                     "name": "lower-shell",
@@ -827,13 +1023,31 @@ class ContractTests(unittest.TestCase):
             ],
             "interfaces": [
                 {
-                    "id": "lid-body-seam",
+                    "id": "lid-tab-slot",
                     "between": ["lower-shell", "top-lid"],
+                    "connection": "tab-slot",
+                    "assembly_axis": "+Z",
                     "clearance_mm": 0.3,
-                    "acceptance": "non-overlapping mating faces",
+                    "engagement_mm": 2.0,
+                    "features": ["lid-tab", "lid-slot"],
+                    "acceptance": "2 mm tab enters the lid slot with 0.3 mm clearance",
                 }
             ],
         }
+        data["features"].extend([
+            {
+                "id": "lid-tab",
+                "kind": "interface",
+                "evidence": "lower shell carries the printable tab",
+                "acceptance": "tab is wide enough for the selected nozzle",
+            },
+            {
+                "id": "lid-slot",
+                "kind": "interface",
+                "evidence": "top lid carries the matching slot",
+                "acceptance": "slot includes the declared clearance",
+            },
+        ])
         self.assertEqual(intent_contract.validate(data, example_path.parent), [])
 
         data["manufacturing"]["interfaces"][0]["between"] = [
@@ -849,6 +1063,10 @@ class ContractTests(unittest.TestCase):
         ]
         errors = intent_contract.validate(data, example_path.parent)
         self.assertTrue(any("distinct parts" in error for error in errors), errors)
+
+        data["manufacturing"]["interfaces"][0].pop("features")
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("modeled connector feature IDs" in error for error in errors), errors)
 
     def test_flat_semantic_feature_fields_are_validated(self):
         example_path = SKILL / "examples" / "intent.example.json"
