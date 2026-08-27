@@ -18,8 +18,9 @@ The deliverable is not merely a watertight mesh. It is a model whose source,
 assumptions, measurable targets, visual evidence, and current-run artifacts
 agree.
 
-`<SKILL_DIR>` means this directory. Outputs belong directly in the current
-session working directory.
+`<SKILL_DIR>` means this directory. Resolve it to an absolute path before
+running commands from a nested output directory. Outputs belong directly in the
+current session working directory.
 
 ## Resources
 
@@ -59,6 +60,14 @@ request overrides this preference.
 Classify the job as specification, reference reproduction, reference inspired,
 recognizable form, or inspect-only. Inspect-only never claims generation.
 
+When the user names a specific real, catalog, branded, or fictional object, the
+named object sets the identity target. When adequate reference images,
+drawings, scans, or reliable dimensions are supplied, use
+`reference-reproduction` and preserve the identity-bearing form. When no
+reference evidence is supplied, choose `reference-inspired` or
+`recognizable-form`, generate a faithful-inspired object from broad known
+landmarks, and clearly report that it is not an exact replica.
+
 ## 1. Open a traceable run
 
 Choose a filename-safe name and create the marker before writing any contract or
@@ -87,6 +96,11 @@ For image evidence, run:
 python "<SKILL_DIR>/reference_analyze.py" "/absolute/reference.png" --out "<name>_reference.json"
 ```
 
+If the user supplied no image, skip `reference_analyze.py`, set
+`reference_files` to `[]`, and record which identity and dimension targets are
+inferred rather than evidenced. A no-reference run should be framed as
+reference-inspired or recognizable-form, not exact reference reproduction.
+
 Write `<name>_intent.json` using
 `references/evidence-contract.md`, then validate it:
 
@@ -97,23 +111,37 @@ python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 The contract must expose inferred dimensions, hidden-side assumptions, the
 object coordinate system, feature kind/face/direction for functional openings,
 profile path and hash, build orientation, minimum wall target, critical feature
-IDs, support policy, and manufacturing mode. Use `single-part` by default; use
-`multipart` whenever separate covers, lids, inserts, hinges, latches, or
-replacement pieces are part of the requested object. Do not weaken it later to
-match the output.
+IDs, support policy, replica-fidelity limits, and manufacturing mode. Default to one printable
+manufacturing body when it can preserve the requested object, printable feature
+sizes, strength, and appearance. Do not split solely because the first profile
+is too small; when the user did not fix a physical size, scale the whole model
+to fit before considering multipart. Use `multipart` only when separate printed
+parts create a real manufacturing benefit such as cleaner support strategy,
+better strength orientation, post-installed components, functional movement, or
+separable covers/inserts inferred from the object. Do not weaken the contract
+later to match the output.
+
+Printability must not rewrite the object. A full-3D replica must model the
+bottom, side, back, and underside forms that belong to the object. Do not make a
+flat-backed prop, relief, or plain planar underside merely to avoid supports or
+make Z0 contact. Solve print concerns through rigid orientation, permitted
+multipart interfaces, or an honest `supports-required`/warning result.
 
 ## 2. Choose construction from evidence
 
 Read `references/construction-strategies.md` and
 `references/bambu-printability.md`. Pick full 3D, orthographic solid, relief,
-or surface-led construction deliberately. Use the required object frame:
+or surface-led construction deliberately; never call a relief-like or
+flat-backed build `full-3d`. Use the required object frame:
 `+X` is user right, `+Y` is object back, `+Z` is object top; front is `Y-min`
 and bottom is `Z-min`. Put ports, holes, and cutouts on named semantic faces.
 A bottom opening is valid when the contract says it belongs on the bottom; an
 accidental front/bottom edge cut is a design failure, not a Z0 rule failure.
-Establish the print orientation, wall parameters, and a feature dependency
-graph before code. Pixel/icon inputs use analyzer cells; never hand-copy their
-coordinates.
+Establish the semantic model, underside/back-side fidelity targets, wall
+parameters, and feature dependency graph before code. Print orientation is a
+post-modeling manufacturing decision; it may rotate the finished body but may
+not change the source shape. Pixel/icon inputs use analyzer cells; never
+hand-copy their coordinates.
 
 ## 3. Build with observable operations
 
@@ -153,10 +181,22 @@ if __name__ == "__main__":
     export_part(body, NAME, intent_path=INTENT)
 ```
 
-`export_part()` emits `NAME.stl` as the printable single-part mesh,
-`NAME-display.glb` as the user-visible display model, and
-`NAME-assemble.step` as the OCCT-readable physical assembly master. Only the
-STL is in print coordinates.
+`export_part()` chooses one lightweight rigid print orientation from the
+semantic body before final export, using the same orientation evidence strategy
+as the color skill. It evaluates the six bed-facing orientations: identity,
+front/back side lays, left/right side lays, and a top-down 180-degree flip.
+Profile fit is a hard gate; among fitting candidates, support burden and bed
+contact quality outrank low print height, so a taller top-down pose may beat a
+lower side-lay when it materially reduces supports. Every candidate records the
+uniform scale needed to fit the selected profile. Do not silently scale during
+export; when dimensions are inferred rather than fixed by the user, use that
+scale as repair evidence, update the contract and driving parameters together,
+then rebuild before rejecting a lower-support pose. It emits `NAME.stl` as the
+printable single-part mesh in the selected print coordinates,
+`NAME-display.glb` as the user-visible semantic display model, and
+`NAME-assemble.step` as the OCCT-readable semantic physical master. The report
+stores the semantic bounds plus `print_orientation` and `print.transform`
+rotation/translation evidence.
 
 For same-material multipart assemblies, build each manufacturing part as its
 own valid solid and export the assembly:
@@ -227,6 +267,17 @@ operation ledger. Read every `fail`, `warning`, and `not_evaluated` check plus
 its structured `repair` object. Mesh success does not prove STEP assembly
 correctness, STEP success does not prove printability, and GLB display success
 does not prove CAD topology.
+Treat printability advisory checks as coarse process-risk guardrails, not as a
+goal to make every warning disappear. Geometry validity, contract dimensions,
+critical feature evidence, and visual/semantic fidelity are higher-priority
+success criteria than warning-free support or overhang reports. Only repair a
+printability advisory by changing source geometry when it points to a broad
+process blocker, such as impossible bed fit, impossible height, globally
+undersized walls, critical features below the line-width floor, or support
+burden so large that the print process is likely to fail. Local overhangs,
+localized support needs, and cosmetic-print risks should normally be reported
+as `supports-required` or `pass_with_warnings` instead of flattening,
+thickening, moving, or simplifying identity-bearing geometry.
 `qa_check.py` and `step_check.py` read contract dimensions from `--intent`
 when explicit `--expect-x/y/z` values are omitted. `qa_check.py` skips that
 automatic dimension check for multipart assembly reports because individual
@@ -235,7 +286,9 @@ reads assembly solid counts from `--report` when available; pass explicit
 expected values only to override the evidence.
 
 Visual review is mandatory for reference reproduction, recognizable form, or
-any appearance requirement. Render after mesh success:
+any appearance requirement. Render the semantic display model after mesh
+success; use the print STL to judge manufacturing placement, not object
+identity:
 
 ```bash
 python "<SKILL_DIR>/render_preview.py" "<name>-display.glb" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
@@ -249,7 +302,16 @@ python "<SKILL_DIR>/render_preview.py" "<name>-display.glb" --out "<name>_views.
 ```
 
 Use `read` on the new five-view PNG and matched-view PNG. Compare every
-contract landmark, silhouette, ratio, negative space, and unintended depth.
+contract landmark, silhouette, ratio, negative space, unintended depth, and
+unexpectedly plain underside. For `full-3d` replicas, the bottom view must be
+reviewed when the object's underside contributes to identity or volume; a flat
+bottom created for print convenience is a visual-fidelity failure.
+For open-ended recognizable objects, keep `visual.landmarks` as a compact
+quality rubric, usually 3-7 identity-critical landmarks. Prefer major
+silhouette, proportion, material/region boundaries represented as geometry, and
+one or two signature details over an exhaustive checklist of every small
+decoration. Optional micro-details may be reported as compromises instead of
+blocking delivery.
 For a truly corresponding orthographic/flat reference, also run
 `compare_silhouette.py` and read its overlay.
 
@@ -260,16 +322,25 @@ For a truly corresponding orthographic/flat reference, also run
 - silhouette failure: change envelope/profile, not tiny details
 - depth/view failure: change representation or secondary volumes
 - mesh failure: repair topology without relaxing the contract
-- bed overflow: try reported XY rotation or orientation; preserve fixed dimensions and profile
+- bed overflow: try reported XY rotation or orientation; if a lower-support
+  candidate only misses the profile because inferred dimensions are too large,
+  uniformly scale the semantic design and intent before falling back to a
+  worse-support fitting pose; preserve fixed user dimensions and profile
 - feature resolution: widen the named feature parameter to the profile floor
-- thin wall: thicken the responsible shell or reduce a decorative recess
-- overhang: reorient, slope, chamfer, arch, or declare supports required
+- thin wall: repair only when the affected area is broad, structural, or
+  critical; report localized cosmetic thin-wall risk without distorting the
+  object
+- overhang/support burden: repair only when support demand is excessive for the
+  print process or the user required support-free output; otherwise preserve
+  the semantic shape and declare supports required
 - not evaluated: restore the missing evidence; never call it a pass
 
 Never lower a profile limit, enable slicer compensation as the only repair, or
-scale user dimensions to make QA pass. After any source/build change, rerun
-execution, mesh audit, render, and reads. Maximum three evidence-repair passes.
-At the limit, report `pass_with_warnings` or the failed category honestly.
+scale user dimensions to make QA pass. Never chase warning-free QA by changing
+object identity, expected part relationships, meaningful proportions, or
+appearance landmarks. After any source/build change, rerun execution, mesh
+audit, render, and reads. Maximum three evidence-repair passes. At the limit,
+report `pass_with_warnings` or the failed category honestly.
 
 ## 6. Freshness and delivery
 
@@ -292,6 +363,6 @@ specification, manufacturing structure, topology, freshness, visual fidelity,
 bed fit, feature resolution, wall thickness, and overhang/support need as
 separate statuses. Summarize the print result as `print preflight passed`,
 `print preflight passed with warnings`, or `print preflight failed`. Report
-`actual slicer validation: not evaluated` unless a real Bambu Studio or
-equivalent slicer run was completed; never call a profile-backed mesh audit
+`actual slicer validation: intentionally out of scope / not planned`; never
+list it as a pending issue, and never call a profile-backed mesh audit
 definitive proof that the part is printable.

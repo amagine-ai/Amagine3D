@@ -123,6 +123,22 @@ def _intent_dimensions(intent: dict | None) -> tuple[float, float, float] | None
     return tuple(values)
 
 
+def _report_print_dimensions(
+    report: dict | None,
+    part_name: str | None,
+) -> tuple[float, float, float] | None:
+    if not isinstance(report, dict) or part_name is not None:
+        return None
+    value = report.get("print", {}).get("bbox_mm", {}).get("size")
+    if not isinstance(value, list) or len(value) != 3:
+        return None
+    try:
+        dimensions = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    return dimensions if all(np.isfinite(item) and item > 0 for item in dimensions) else None
+
+
 def _load_profile(path: str) -> tuple[dict, str]:
     payload = Path(path).read_bytes()
     profile = json.loads(payload)
@@ -677,12 +693,15 @@ def main() -> int:
         profile, profile_hash = _load_profile(args.profile) if args.profile else (None, None)
         intent = _load_json(args.intent) if args.intent else None
         report = _load_json(args.report) if args.report else None
-        expected_dimensions = _intent_dimensions(intent)
         report_part = _report_part_for_stl(
             report,
             Path(args.stl),
             Path(args.report).resolve().parent if args.report else None,
         )
+        expected_dimensions = _report_print_dimensions(
+            report,
+            report_part,
+        ) or _intent_dimensions(intent)
         if (
             isinstance(report, dict)
             and report.get("schema") == "evidence-cad-assembly-build/v3"
@@ -1020,11 +1039,12 @@ def main() -> int:
                 category="printability",
                 severity="warning",
                 repair={
-                    "fallback": "Declare support_required; never claim support-free printability.",
+                    "fallback": "Declare supports-required; never claim support-free printability.",
                     "preferred_actions": [
                         "Reorient the build while preserving required dimensions.",
-                        "Replace the underside with a slope at or above the profile threshold.",
-                        "Use a chamfer, arch, teardrop opening, or permitted assembly split.",
+                        "Split the model only when the contract permits assembly.",
+                        "Add chamfers, arches, or teardrop openings only when faithful to the object.",
+                        "Preserve replica geometry and disclose required supports when needed.",
                     ],
                 },
             )

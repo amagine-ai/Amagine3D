@@ -69,11 +69,21 @@ Allowed task modes are `specification`, `reference-reproduction`,
 `reference-inspired`, `recognizable-form`, and `inspect`. Representations are
 `full-3d`, `orthographic-solid`, `relief`, and `surface-led`.
 
+When the user asks to replicate, reproduce, or exactly match a named real,
+catalog, branded, or fictional object, preserve that identity as the target.
+Use `reference-reproduction` when supplied or discoverable evidence supports it.
+If no reference evidence is supplied, choose `reference-inspired` or
+`recognizable-form`, record inferred landmarks and dimensions, and report that
+the result is inspired by the named object rather than an exact replica.
+
 The printability profile must come from this skill's `bambu_profile.py`. Its
 hash locks the machine, selected tool, nozzle, standard process, printable
 polygon, wall targets, and support threshold used for the run. The minimum
 wall target must meet the resolved process wall target. Use `support-free`
-unless supports are explicitly accepted or unavoidable.
+only when it does not change the requested geometry; otherwise preserve the
+object and set `supports-required` or disclose support warnings. Support
+avoidance must not flatten an underside, remove back-side details, or turn a
+full-3D object into a relief.
 
 Matched visual views may be `front`, `side`, `top`, `bottom`, or `isometric`;
 use `bottom` when the appearance-bearing face is intentionally printed at Z0.
@@ -105,10 +115,14 @@ feature is intentionally on an edge or corner.
 
 ## Manufacturing structure
 
-Always declare `manufacturing`. Use `single-part` for one printed body. Use
-`multipart` when the requested object needs separate same-material parts such
-as a lower shell and top lid, snap-on cap, removable cover, insert, hinge leaf,
-latch, or slide.
+Always declare `manufacturing`. Use `single-part` for one reliable printed
+body. A model may have semantic sub-parts without becoming multipart when they
+can be fused as one printable body. Do not split only because the default
+printer profile is small; if the user did not fix the final size, scale the
+whole model first. Use `multipart` only when separate printed parts create a
+real manufacturing benefit such as cleaner support strategy, better strength
+orientation, post-installed components, functional movement, or separable
+covers, inserts, hinges, latches, or slides inferred from the object.
 
 Multipart contracts must declare every printed part and assembly interface:
 
@@ -129,10 +143,14 @@ Multipart contracts must declare every printed part and assembly interface:
   ],
   "interfaces": [
     {
-      "id": "lid-body-seam",
+      "id": "lid-tab-slot",
       "between": ["lower-shell", "top-lid"],
+      "connection": "tab-slot",
+      "assembly_axis": "+Z",
       "clearance_mm": 0.3,
-      "acceptance": "non-overlapping mating faces with a visible seam"
+      "engagement_mm": 2.0,
+      "features": ["lid-tab", "lid-slot"],
+      "acceptance": "2 mm printable tab enters the lid slot with 0.3 mm clearance"
     }
   ]
 }
@@ -140,12 +158,16 @@ Multipart contracts must declare every printed part and assembly interface:
 
 Each multipart `parts[].name` becomes an exported STL suffix. Do not convert a
 separate requested lid or cover into an open-top single body unless the user
-explicitly asks for a one-piece slip-on sleeve.
+explicitly asks for a one-piece slip-on sleeve. Do not export separate parts
+unless their interfaces name modeled connector feature IDs.
 
 ## Evidence rules
 
 - User values outrank standards, standards outrank reference measurement, and
   reference measurement outranks inference.
+- Replica fidelity outranks print convenience. Bed contact and support
+  reduction may choose orientation, but they may not alter the semantic source
+  shape.
 - Every inferred dimension must be exposed with low or medium confidence.
 - A photograph proves visible relationships, not hidden-side dimensions.
 - Landmarks describe identity-bearing relationships. “Looks similar” is not
@@ -181,9 +203,16 @@ explicitly asks for a one-piece slip-on sleeve.
 
 The five-view render detects unintended depth, hidden-side placement, bottom
 features, and topology; the matched view tests silhouette and landmark
-placement. `compare_silhouette.py` is valid only
+placement. Visual review uses semantic orientation; print orientation evidence
+is for manufacturing fit, contact, support burden, and Z0 placement. For
+`full-3d`, a plain planar underside is acceptable only when the object itself
+has one or the user requested a relief/flat-backed prop.
+`compare_silhouette.py` is valid only
 for a flat or genuinely corresponding orthographic reference. Its IoU cannot
 prove depth, semantic identity, or printability.
 
-After each visual read, list target-specific deltas. A failed landmark remains
-failed even if mesh integrity and dimensions pass.
+After each visual read, list target-specific deltas. Use a compact landmark
+rubric proportional to the request, usually 3-7 identity-critical landmarks for
+recognizable objects rather than every small decorative detail. A failed
+must-have landmark remains failed even if mesh integrity and dimensions pass;
+optional micro-detail gaps may be reported as compromises.
