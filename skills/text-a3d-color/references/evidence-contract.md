@@ -90,6 +90,14 @@ skill's `intent_contract.py`.
 }
 ```
 
+When the user asks to replicate, reproduce, or exactly match a named real,
+catalog, branded, or fictional object, preserve that identity as the target.
+Use `reference-reproduction` when supplied or discoverable evidence supports it.
+If no reference evidence is supplied, choose `reference-inspired` or
+`recognizable-form`, record inferred landmarks, dimensions, and semantic colors,
+and report that the result is inspired by the named object rather than an exact
+replica.
+
 Color sampled from a photograph is evidence, not automatically a filament.
 Separate semantic regions first; reduce shades inside each semantic region
 second. Preserve rare colors when they encode a logo, control, status, or
@@ -126,12 +134,24 @@ edge fails the design contract.
 
 The printability profile must come from this skill's `bambu_profile.py`. Its
 hash locks the machine, selected tool, nozzle, process, bed, feature floor,
-wall target, and support threshold. Use `NAME-manufacturing.stl` for
-printability evidence; isolated `NAME-region-REGION.stl` meshes are topology
-evidence only. Use `NAME.3mf` for slicer color packaging and archive readback.
+wall target, and support threshold. Use `NAME.3mf` for preferred multi-color
+print package QA and archive readback. Use `NAME.stl` for the clean whole-body
+manufacturing mesh QA that matches the single-color skill's STL checks. Hidden
+`NAME-region-REGION.stl` meshes are internal topology inputs only, not
+printable part deliverables.
+Use `support-free` only when it does not change the requested geometry;
+otherwise preserve the object and set `supports-required` or disclose support
+warnings. Support avoidance must not flatten an underside, remove back-side
+details, or turn a full-3D object into a relief.
 Use `NAME-assemble.step` for OCCT-backed CAD master checks; STEP checks do not
-replace print-bed mesh QA. Use `NAME-display.glb` as the user-visible colored
-display model; GLB does not replace CAD topology QA.
+replace print-bed mesh QA. Keep `NAME-assemble.step` and `NAME-display.glb` in
+semantic object orientation so replica review is not confused with print
+placement. Use `NAME-display.glb` as the user-visible colored display model;
+GLB does not replace CAD topology QA.
+Hidden print-pose region meshes support 3MF packing and package debugging;
+hidden semantic-pose region meshes support colored visual review. Do not judge
+identity, landmark placement, or reference-view matching from print-pose region
+meshes.
 
 Allowed task modes are `specification`, `reference-reproduction`,
 `reference-inspired`, `recognizable-form`, and `inspect`. Matched visual views

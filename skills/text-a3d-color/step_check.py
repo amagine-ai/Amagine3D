@@ -49,6 +49,19 @@ def _intent_dimensions(intent: dict | None) -> tuple[float, float, float] | None
     return tuple(values)
 
 
+def _report_dimensions(report: dict | None) -> tuple[float, float, float] | None:
+    if not isinstance(report, dict):
+        return None
+    value = report.get("assembly", {}).get("shape", {}).get("bbox_mm", {}).get("size")
+    if not isinstance(value, list) or len(value) != 3:
+        return None
+    try:
+        dimensions = tuple(float(item) for item in value)
+    except (TypeError, ValueError):
+        return None
+    return dimensions if all(math.isfinite(item) and item > 0 for item in dimensions) else None
+
+
 def _nested_int(data: dict, keys: tuple[str, ...]) -> int | None:
     value = data
     for key in keys:
@@ -192,7 +205,7 @@ def main() -> int:
     try:
         intent = _load_json(args.intent)
         report = _load_json(args.report)
-        dimensions = _intent_dimensions(intent)
+        dimensions = _report_dimensions(report) or _intent_dimensions(intent)
         expect_solids = args.expect_solids
         if expect_solids is None:
             expect_solids = _report_expected_solids(report)

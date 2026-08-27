@@ -1,4 +1,4 @@
-"""Render color-region STLs as orthographic, hash-bound visual evidence."""
+"""Render internal color-region meshes as orthographic, hash-bound evidence."""
 
 from __future__ import annotations
 

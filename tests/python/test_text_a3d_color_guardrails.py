@@ -218,9 +218,26 @@ class ColorPipelineTests(unittest.TestCase):
             self.assertIn("events", report)
             self.assertIn("bbox_mm", report["features"]["thin-color-detail"])
             self.assertIn("bbox_mm", report["events"][0]["tool"])
-            self.assertTrue((root / "tile-manufacturing.stl").is_file())
-            self.assertTrue((root / "tile-region-red.stl").is_file())
-            self.assertTrue((root / "tile-region-blue.stl").is_file())
+            self.assertTrue((root / "tile.stl").is_file())
+            self.assertFalse((root / "tile-manufacturing.stl").exists())
+            self.assertFalse((root / "tile-region-red.stl").exists())
+            self.assertFalse((root / "tile-region-blue.stl").exists())
+            self.assertTrue(
+                (root / ".amagine3d-internal" / "tile" / "tile-region-red.stl").is_file()
+            )
+            self.assertTrue(
+                (
+                    root
+                    / ".amagine3d-internal"
+                    / "tile"
+                    / "semantic"
+                    / "tile-region-red.stl"
+                ).is_file()
+            )
+            self.assertIn("semantic", report["internal_region_meshes"])
+            self.assertIn("red", report["internal_region_meshes"]["semantic"])
+            self.assertNotIn("stl:region:red", report["artifacts"])
+            self.assertNotIn("region_topology", report["coordinates"])
             self.assertTrue((root / "tile-assemble.step").is_file())
             self.assertTrue((root / "tile-display.glb").is_file())
             self.assertEqual(
@@ -269,6 +286,27 @@ class ColorPipelineTests(unittest.TestCase):
             self.assertEqual(assembly_payload["schema"], "color-assembly-audit/v4")
             self.assertFalse(assembly_payload["requires_manual_slicer_assignment"])
 
+    def test_color_regions_require_a_parent_manufacturing_body(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            left = Pos(-5, 0, 0) * Box(
+                10, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            right = Pos(5, 0, 0) * Box(
+                10, 10, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            _, _, intent_path = self._build_fixture(root)
+            with self.assertRaisesRegex(
+                self.cad_helpers.RegionInvariantError,
+                "requires parent",
+            ):
+                self.cad_helpers.export_regions(
+                    {"red": (left, "#CC2233"), "blue": (right, "#2255CC")},
+                    "tile",
+                    str(root),
+                    intent_path=str(intent_path),
+                )
+
     def test_manufacturing_qa_rejects_unbound_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -277,7 +315,7 @@ class ColorPipelineTests(unittest.TestCase):
             base_command = [
                 sys.executable,
                 str(COLOR / "qa_check.py"),
-                str(root / "tile-manufacturing.stl"),
+                str(root / "tile.stl"),
                 "--profile",
                 str(profile_path),
                 "--intent",
@@ -286,7 +324,7 @@ class ColorPipelineTests(unittest.TestCase):
                 str(report_path),
             ]
 
-            report["artifacts"]["stl:manufacturing"]["sha256"] = "0" * 64
+            report["artifacts"]["stl"]["sha256"] = "0" * 64
             report_path.write_text(json.dumps(report), encoding="utf-8")
             unbound = subprocess.run(
                 base_command, check=False, capture_output=True, text=True
@@ -316,7 +354,7 @@ class ColorPipelineTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(COLOR / "qa_check.py"),
-                    str(root / "tile-manufacturing.stl"),
+                    str(root / "tile.stl"),
                     "--profile",
                     str(profile_path),
                     "--intent",
@@ -350,7 +388,12 @@ class ColorPipelineTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(COLOR / "qa_check.py"),
-                    str(root / "tile-region-red.stl"),
+                    str(
+                        root
+                        / ".amagine3d-internal"
+                        / "tile"
+                        / "tile-region-red.stl"
+                    ),
                     "--topology-only",
                     "--region",
                     "red",
@@ -373,7 +416,7 @@ class ColorPipelineTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(COLOR / "qa_check.py"),
-                    str(root / "tile-manufacturing.stl"),
+                    str(root / "tile.stl"),
                     "--profile",
                     str(profile_path),
                     "--intent",
@@ -416,6 +459,236 @@ class ColorPipelineTests(unittest.TestCase):
                 "complete-parent", coverage["observed"]["measured_feature_ids"]
             )
 
+            package = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "qa_check.py"),
+                    str(root / "tile.3mf"),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(report_path),
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            package_payload = json.loads(package.stdout)
+            self.assertEqual(package.returncode, 0, package.stdout + package.stderr)
+            self.assertEqual(package_payload["scope"], "print-package")
+            self.assertEqual(
+                package_payload["schema"],
+                "evidence-color-print-package-audit/v1",
+            )
+            checks = {item["name"]: item for item in package_payload["checks"]}
+            self.assertEqual(checks["region_names"]["status"], "pass")
+            self.assertEqual(checks["region_colors"]["status"], "pass")
+            self.assertEqual(checks["build_plane_z0"]["status"], "pass")
+            self.assertEqual(checks["printability_bed_fit"]["status"], "pass")
+            self.assertEqual(
+                checks["print_package_matches_stl_bounds"]["status"],
+                "pass",
+            )
+
+    def test_export_selects_low_profile_print_orientation_for_tall_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.cad_helpers._FEATURES.clear()
+            self.cad_helpers._EVENTS.clear()
+            self.cad_helpers._PARAMETERS.clear()
+
+            lower = Box(20, 10, 40, align=(Align.MIN, Align.MIN, Align.MIN))
+            upper = Pos(0, 0, 40) * Box(
+                20, 10, 40, align=(Align.MIN, Align.MIN, Align.MIN)
+            )
+            parent = lower + upper
+            self.cad_helpers.observe(parent, "complete-parent", "parent")
+            self.cad_helpers.observe(lower, "lower-region", "region")
+            self.cad_helpers.observe(upper, "upper-region", "region")
+
+            profile = color_profile.resolve_profile(
+                color_profile.load_catalog(),
+                machine_name="a1-mini",
+                nozzle=0.4,
+                tool_index=0,
+            )
+            profile_path = root / "tower_printer-profile.json"
+            profile_path.write_text(color_profile.serialize(profile), encoding="utf-8")
+            profile_hash = sha256(profile_path.read_bytes()).hexdigest()
+            intent = {
+                "schema": "evidence-color-intent/v3",
+                "part": "tower",
+                "task_mode": "specification",
+                "representation": "full-3d",
+                "coordinate_system": COORDINATE_SYSTEM,
+                "reference_files": [],
+                "dimensions_mm": {
+                    "x": {"value": 20, "source": "user", "confidence": "high"},
+                    "y": {"value": 10, "source": "user", "confidence": "high"},
+                    "z": {"value": 80, "source": "user", "confidence": "high"},
+                },
+                "features": [
+                    {
+                        "id": "complete-parent",
+                        "evidence": "fixture parent is the complete tower",
+                        "acceptance": "parent covers both regions",
+                    },
+                    {
+                        "id": "lower-region",
+                        "evidence": "lower half is red",
+                        "acceptance": "lower half is observed",
+                    },
+                    {
+                        "id": "upper-region",
+                        "evidence": "upper half is blue",
+                        "acceptance": "upper half is observed",
+                    },
+                ],
+                "color_regions": [
+                    {
+                        "name": "lower",
+                        "hex": "#CC2233",
+                        "purpose": "lower half",
+                        "boundary": "Z 0 through 40 mm",
+                        "evidence": "fixture specification",
+                    },
+                    {
+                        "name": "upper",
+                        "hex": "#2255CC",
+                        "purpose": "upper half",
+                        "boundary": "Z 40 through 80 mm",
+                        "evidence": "fixture specification",
+                    },
+                ],
+                "palette_reduction": {"applied": False, "reason": "two colors"},
+                "printability": {
+                    "profile": {"path": profile_path.name, "sha256": profile_hash},
+                    "build_axis": "+Z",
+                    "bed_contact": "z-min",
+                    "support_policy": "support-free",
+                    "minimum_wall_target_mm": 0.87,
+                    "critical_features": [
+                        "complete-parent",
+                        "lower-region",
+                        "upper-region",
+                    ],
+                },
+                "visual": {
+                    "required": True,
+                    "reference_view": "front",
+                    "landmarks": ["two stacked color regions"],
+                },
+                "assumptions": [],
+            }
+            intent_path = root / "tower_intent.json"
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = self.cad_helpers.export_regions(
+                    {"lower": (lower, "#CC2233"), "upper": (upper, "#2255CC")},
+                    "tower",
+                    str(root),
+                    parent=parent,
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                )
+            self.assertEqual(
+                report["print_orientation"]["selected"]["name"],
+                "rotate-x--90",
+            )
+            self.assertEqual(
+                report["print_orientation"]["selected"]["bed_contact_semantic_face"],
+                "back",
+            )
+            self.assertEqual(
+                report["manufacturing"]["bbox_mm"]["size"],
+                [20.0, 80.0, 10.0],
+            )
+            self.assertEqual(report["semantic"]["shape"]["bbox_mm"]["size"], [20.0, 10.0, 80.0])
+            self.assertEqual(report["assembly"]["shape"]["bbox_mm"]["size"], [20.0, 10.0, 80.0])
+
+            package = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "qa_check.py"),
+                    str(root / "tower.3mf"),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "tower_report.json"),
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(package.returncode, 0, package.stdout + package.stderr)
+            package_payload = json.loads(package.stdout)
+            dimensions = package_payload["mesh"]["dimensions_mm"]
+            self.assertEqual(dimensions, [20.0, 80.0, 10.0])
+
+            step = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "step_check.py"),
+                    str(root / "tower-assemble.step"),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "tower_report.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(step.returncode, 0, step.stdout + step.stderr)
+            step_payload = json.loads(step.stdout)
+            dimension_z = next(
+                item for item in step_payload["checks"]
+                if item["name"] == "dimension_z"
+            )
+            self.assertEqual(dimension_z["expected"]["value"], 80.0)
+
+            assemble = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "step_check.py"),
+                    str(root / "tower-assemble.step"),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "tower_report.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(assemble.returncode, 0, assemble.stdout + assemble.stderr)
+
+    def test_orientation_candidates_include_top_down_and_scale_evidence(self):
+        profile = color_profile.resolve_profile(
+            color_profile.load_catalog(),
+            machine_name="a1-mini",
+            nozzle=0.4,
+            tool_index=0,
+        )
+        oversized = Box(40, 20, 220, align=(Align.MIN, Align.MIN, Align.MIN))
+        candidates = self.cad_helpers._orientation_candidates(oversized, profile)
+        by_name = {item["name"]: item for item in candidates}
+        self.assertIn("rotate-x-180", by_name)
+        top_down = by_name["rotate-x-180"]
+        self.assertEqual(top_down["bed_contact_semantic_face"], "top")
+        self.assertFalse(top_down["uniform_scale_to_fit_profile"]["fits_without_scaling"])
+        self.assertAlmostEqual(
+            top_down["uniform_scale_to_fit_profile"]["scale"],
+            180 / 220,
+            places=6,
+        )
+
     def test_bottom_matched_view_is_available(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -426,9 +699,9 @@ class ColorPipelineTests(unittest.TestCase):
                     sys.executable,
                     str(COLOR / "render_preview.py"),
                     "--part",
-                    f"{root / 'tile-region-red.stl'}=#CC2233",
+                    f"{root / '.amagine3d-internal' / 'tile' / 'tile-region-red.stl'}=#CC2233",
                     "--part",
-                    f"{root / 'tile-region-blue.stl'}=#2255CC",
+                    f"{root / '.amagine3d-internal' / 'tile' / 'tile-region-blue.stl'}=#2255CC",
                     "--out",
                     str(root / "views.png"),
                     "--reference-view",
