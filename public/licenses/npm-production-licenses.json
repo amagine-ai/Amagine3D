@@ -391,6 +391,16 @@
       "license": "MIT"
     },
     {
+      "name": "@trpc/client",
+      "version": "11.18.0",
+      "license": "MIT"
+    },
+    {
+      "name": "@trpc/server",
+      "version": "11.18.0",
+      "license": "MIT"
+    },
+    {
       "name": "@types/debug",
       "version": "4.1.13",
       "license": "MIT"
@@ -1801,6 +1811,11 @@
       "license": "MIT"
     },
     {
+      "name": "typescript",
+      "version": "5.9.2",
+      "license": "Apache-2.0"
+    },
+    {
       "name": "undici",
       "version": "8.9.0",
       "license": "MIT"
@@ -1914,6 +1929,11 @@
       "name": "yaml",
       "version": "2.9.0",
       "license": "ISC"
+    },
+    {
+      "name": "zod",
+      "version": "4.4.3",
+      "license": "MIT"
     },
     {
       "name": "zwitch",

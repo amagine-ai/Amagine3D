@@ -5,7 +5,8 @@ import trash from 'trash';
 
 import { SessionManager } from '@amagine3d/a3d-runtime';
 
-import { sessionWorkspaceRoot, USER_SESSION_ID } from './sessions.ts';
+import { USER_SESSION_ID } from '../src/session-id.ts';
+import { sessionWorkspaceRoot } from './sessions.ts';
 
 type MoveToTrash = (paths: string[]) => Promise<void>;
 
