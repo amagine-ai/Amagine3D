@@ -91,6 +91,29 @@ def _load_json(path: str) -> dict:
     return value
 
 
+def _intent_dimensions(intent: dict | None) -> tuple[float, float, float] | None:
+    if not isinstance(intent, dict):
+        return None
+    dimensions = intent.get("dimensions_mm")
+    if not isinstance(dimensions, dict):
+        return None
+    values = []
+    for axis in "xyz":
+        record = dimensions.get(axis)
+        if not isinstance(record, dict):
+            return None
+        value = record.get("value")
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not np.isfinite(value)
+            or value <= 0
+        ):
+            return None
+        values.append(float(value))
+    return tuple(values)
+
+
 def _digest(path: str) -> str:
     return sha256(Path(path).read_bytes()).hexdigest()
 
@@ -341,11 +364,12 @@ def semantic_placement_observation(
         kind = feature.get("kind")
         face = feature.get("face")
         edge_crossing = feature.get("edge_crossing", "allowed")
-        if (
-            kind not in PLACED_OPENING_KINDS
-            and face is None
-            and edge_crossing == "allowed"
-        ):
+        if kind not in PLACED_OPENING_KINDS:
+            if face is not None or edge_crossing != "allowed":
+                result["skipped"].append({
+                    "feature_id": feature_id if isinstance(feature_id, str) else None,
+                    "reason": "semantic outside-face checks apply only to openings",
+                })
             continue
         if not isinstance(feature_id, str) or not feature_id.strip():
             continue
@@ -525,6 +549,7 @@ def main() -> int:
         profile, profile_hash = _load_profile(args.profile) if args.profile else (None, None)
         intent = _load_json(args.intent) if args.intent else None
         report = _load_json(args.report) if args.report else None
+        expected_dimensions = _intent_dimensions(intent)
         if intent is not None:
             if profile is None:
                 raise ValueError("--intent requires --profile")
@@ -597,6 +622,8 @@ def main() -> int:
     if dims is not None:
         for index, axis in enumerate("xyz"):
             expected = getattr(args, f"expect_{axis}")
+            if expected is None and expected_dimensions is not None:
+                expected = expected_dimensions[index]
             if expected is not None:
                 audit.add(f"dimension_{axis}", abs(float(dims[index]) - expected) <= args.tol,
                           round(float(dims[index]), 5),
