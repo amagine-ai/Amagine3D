@@ -35,6 +35,7 @@ PLACED_OPENING_KINDS = {
     "slot",
     "window",
 }
+PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
 
 
 class Audit:
@@ -303,6 +304,61 @@ def evidence_feature_ids(report: dict | None) -> set[str]:
         and event["id"].strip()
     )
     return identifiers
+
+
+def print_package_mode(intent: dict | None, report: dict | None) -> str:
+    value = None
+    if isinstance(intent, dict):
+        value = intent.get("printability", {}).get("print_package_mode")
+    if value is None and isinstance(report, dict):
+        value = report.get("print_package_mode")
+    mode = value or "co_print_body"
+    return mode if mode in PRINT_PACKAGE_MODES else "invalid"
+
+
+def region_continuity_observation(intent: dict | None, report: dict | None) -> dict:
+    result = {
+        "examined": [],
+        "offenders": [],
+        "skipped": [],
+    }
+    if not isinstance(intent, dict) or not isinstance(report, dict):
+        return result
+    report_regions = report.get("regions", {})
+    if not isinstance(report_regions, dict):
+        result["skipped"].append({
+            "reason": "build report has no region records",
+            "region": None,
+        })
+        return result
+    for region in intent.get("color_regions", []):
+        if not isinstance(region, dict):
+            continue
+        if region.get("continuity") != "continuous-core":
+            continue
+        name = region.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        record = report_regions.get(name)
+        if not isinstance(record, dict):
+            result["offenders"].append({
+                "reason": "region missing from build report",
+                "region": name,
+            })
+            continue
+        solid_count = record.get("solid_count")
+        result["examined"].append({
+            "region": name,
+            "solid_count": solid_count,
+        })
+        if solid_count != 1:
+            result["offenders"].append({
+                "expected": 1,
+                "observed": solid_count,
+                "reason": "continuous-core region is split into multiple solids",
+                "region": name,
+            })
+    return result
 
 
 def _body_bounds(report: dict | None) -> np.ndarray | None:
@@ -597,6 +653,10 @@ def main() -> int:
                 raise ValueError("build report part does not match the intent contract")
             if report.get("intent", {}).get("sha256") != _digest(args.intent):
                 raise ValueError("build report is not bound to the supplied intent")
+            if print_package_mode(intent, report) == "invalid":
+                raise ValueError(
+                    "printability.print_package_mode must be co_print_body or separate_parts"
+                )
             artifacts = report.get("artifacts", {})
             if is_print_package:
                 archive = artifacts.get("3mf", {})
@@ -651,10 +711,12 @@ def main() -> int:
             for name, item in (report or {}).get("regions", {}).items()
             if isinstance(item, dict) and isinstance(item.get("color"), str)
         }
+        region_inventory = archive.get("regions") or archive.get("objects", [])
         observed_regions = {
             item["name"]: (item["color"] or "").upper()
-            for item in archive.get("objects", [])
+            for item in region_inventory
         }
+        expected_package_mode = print_package_mode(intent, report)
         audit.add(
             "print_package_unit",
             str(archive.get("unit", "")).lower() == "millimeter",
@@ -670,6 +732,32 @@ def main() -> int:
             category="print-package",
         )
         audit.add(
+            "print_package_mode",
+            archive.get("package_mode") == expected_package_mode,
+            archive.get("package_mode"),
+            expected_package_mode,
+            category="print-package",
+        )
+        if expected_package_mode == "co_print_body":
+            build_items = archive.get("build_items", [])
+            audit.add(
+                "print_package_co_print_build_item",
+                int(archive.get("build_item_count", 0)) == 1
+                and bool(build_items)
+                and build_items[0].get("object_kind") == "mesh",
+                {
+                    "build_item_count": archive.get("build_item_count", 0),
+                    "top_level_kinds": [
+                        item.get("object_kind") for item in build_items
+                    ],
+                },
+                {
+                    "build_item_count": 1,
+                    "top_level_kind": "mesh",
+                },
+                category="print-package",
+            )
+        audit.add(
             "region_names",
             set(expected_regions) == set(observed_regions),
             sorted(observed_regions),
@@ -683,6 +771,18 @@ def main() -> int:
             expected_regions,
             category="print-package",
         )
+        continuity = region_continuity_observation(intent, report)
+        if continuity["examined"] or continuity["offenders"]:
+            audit.add(
+                "region_continuity",
+                not continuity["offenders"],
+                continuity,
+                "continuous-core regions must remain one solid",
+                category="printability",
+                repair={
+                    "goal": "Keep the region's structural core continuous and move color details to surface shells, shallow insets, raised overlays, or shallow filled grooves."
+                },
+            )
         if dims is not None:
             for index, axis in enumerate("xyz"):
                 expected = getattr(args, f"expect_{axis}")
@@ -719,7 +819,7 @@ def main() -> int:
                     category="printability",
                     repair={
                         "preferred_actions": [
-                            "Select a different whole-package rigid print orientation.",
+                            "Select a lower-support whole-package print orientation and apply the recorded uniform print scale when needed.",
                             "Use a supported larger printer only when dimensions are fixed.",
                         ],
                     },
@@ -813,7 +913,7 @@ def main() -> int:
                 "Do not flatten or simplify replica geometry to improve bed fit.",
             ],
             "preferred_actions": [
-                "Use the selected whole-package rigid print orientation.",
+                "Use the selected whole-package print orientation and recorded uniform print scale.",
                 "Split only where the contract permits a real assembly interface.",
                 "Use a supported larger printer only when dimensions are fixed.",
             ],
@@ -843,6 +943,18 @@ def main() -> int:
                 "goal": "Observe every critical feature or record its checked operation."
             },
         )
+        continuity = region_continuity_observation(intent, report)
+        if continuity["examined"] or continuity["offenders"]:
+            audit.add(
+                "region_continuity",
+                not continuity["offenders"],
+                continuity,
+                "continuous-core regions must remain one solid",
+                category="printability",
+                repair={
+                    "goal": "Keep the region's structural core continuous and move color details to surface shells, shallow insets, raised overlays, or shallow filled grooves."
+                },
+            )
         semantic = semantic_placement_observation(intent, report)
         if semantic["examined"] or semantic["offenders"]:
             audit.add(
