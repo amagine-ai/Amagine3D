@@ -10,6 +10,7 @@ import type {
   SessionDetail,
   WorkspaceStorage,
 } from '../types';
+import { trpc } from './trpc-client';
 
 interface StreamAgentOptions {
   images: ImageAttachment[];
@@ -21,47 +22,55 @@ interface StreamAgentOptions {
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
-  const response = await fetch('/api/health');
-  if (!response.ok) throw new Error('无法连接到本地智能体服务。');
-  return (await response.json()) as HealthResponse;
+  try {
+    return await trpc.health.query();
+  } catch {
+    throw new Error('无法连接到本地智能体服务。');
+  }
 }
 
 export async function fetchSessionCatalog(): Promise<SessionCatalog> {
-  const response = await fetch('/api/sessions');
-  if (!response.ok) throw new Error('无法读取会话列表。');
-  return (await response.json()) as SessionCatalog;
+  try {
+    return await trpc.sessions.catalog.query();
+  } catch {
+    throw new Error('无法读取会话列表。');
+  }
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
-  if (!response.ok) throw new Error('无法读取这个会话。');
-  return (await response.json()) as SessionDetail;
+  try {
+    return await trpc.sessions.detail.query({ sessionId });
+  } catch {
+    throw new Error('无法读取这个会话。');
+  }
 }
 
 export async function fetchWorkspaceStorage(): Promise<WorkspaceStorage> {
-  const response = await fetch('/api/sessions/storage');
-  if (!response.ok) throw new Error('无法读取工作区存储。');
-  return (await response.json()) as WorkspaceStorage;
+  try {
+    return await trpc.sessions.storage.query();
+  } catch {
+    throw new Error('无法读取工作区存储。');
+  }
 }
 
 export async function fetchArtifacts(
   sessionId: string,
 ): Promise<ArtifactCollection> {
-  const response = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts`,
-  );
-  if (!response.ok) throw new Error('无法读取工作区文件。');
-  return (await response.json()) as ArtifactCollection;
+  try {
+    return await trpc.sessions.artifacts.query({ sessionId });
+  } catch {
+    throw new Error('无法读取工作区文件。');
+  }
 }
 
 export async function fetchModelParameters(
   sessionId: string,
 ): Promise<ParameterCollection> {
-  const response = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/parameters`,
-  );
-  if (!response.ok) throw new Error('无法读取模型参数。');
-  return (await response.json()) as ParameterCollection;
+  try {
+    return await trpc.sessions.parameters.query({ sessionId });
+  } catch {
+    throw new Error('无法读取模型参数。');
+  }
 }
 
 export async function rebuildModelParameters(
@@ -69,26 +78,21 @@ export async function rebuildModelParameters(
   model: ParameterModel,
   values: Record<string, number>,
 ): Promise<ParameterBuildResult> {
-  const response = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/parameters/rebuild`,
-    {
-      body: JSON.stringify({
-        primaryPreviewPath: model.primaryPreviewPath,
-        sourceHash: model.sourceHash,
-        sourcePath: model.sourcePath,
-        values,
-      }),
-      headers: { 'Content-Type': 'application/json' },
-      method: 'POST',
-    },
-  );
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      message?: string;
-    };
-    throw new Error(body.message || '参数化重建失败。');
+  try {
+    return await trpc.sessions.rebuildParameters.mutate({
+      primaryPreviewPath: model.primaryPreviewPath,
+      sessionId,
+      sourceHash: model.sourceHash,
+      sourcePath: model.sourcePath,
+      values,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof Error && error.message
+        ? error.message
+        : '参数化重建失败。',
+    );
   }
-  return (await response.json()) as ParameterBuildResult;
 }
 
 export async function fetchArtifactArchive(
@@ -111,24 +115,19 @@ export async function trashArtifacts(
   sessionId: string,
   paths: string[],
 ): Promise<void> {
-  const response = await fetch(
-    `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/trash`,
-    {
-      body: JSON.stringify({ paths }),
-      headers: { 'Content-Type': 'application/json' },
-      method: 'POST',
-    },
-  );
-  if (!response.ok) throw new Error('无法将所选文件移动到回收站。');
+  try {
+    await trpc.sessions.trashArtifacts.mutate({ paths, sessionId });
+  } catch {
+    throw new Error('无法将所选文件移动到回收站。');
+  }
 }
 
 export async function trashStorageSessions(sessionIds: string[]): Promise<void> {
-  const response = await fetch('/api/sessions/storage/trash', {
-    body: JSON.stringify({ sessionIds }),
-    headers: { 'Content-Type': 'application/json' },
-    method: 'POST',
-  });
-  if (!response.ok) throw new Error('无法将所选会话移动到回收站。');
+  try {
+    await trpc.sessions.trashStorage.mutate({ sessionIds });
+  } catch {
+    throw new Error('无法将所选会话移动到回收站。');
+  }
 }
 
 export async function streamAgent({

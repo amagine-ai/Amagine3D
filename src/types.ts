@@ -1,4 +1,4 @@
-export const API_VERSION = 7;
+export const API_VERSION = 8;
 export const BUNDLED_POMODORO_SESSION_ID = 'builtin:amagine3d-pomodoro';
 export const ACCEPTED_IMAGE_TYPES = [
   'image/png',

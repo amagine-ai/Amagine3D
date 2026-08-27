@@ -9,9 +9,9 @@ import { promisify } from 'node:util';
 
 import {
   parameterModelsForWorkspace,
-  parseParameterBuildRequest,
   rebuildModelWithParameters,
 } from '../server/model-parameters.ts';
+import { parameterBuildRequestSchema } from '../server/trpc/schemas.ts';
 
 const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 const PROJECT_ROOT = resolve(import.meta.dirname, '..');
@@ -180,15 +180,15 @@ test('rebuilds the complete model in staging and commits source only after succe
 });
 
 test('rejects malformed parameter build requests', () => {
-  assert.equal(parseParameterBuildRequest({ values: {} }), undefined);
+  assert.equal(parameterBuildRequestSchema.safeParse({ values: {} }).success, false);
   assert.equal(
-    parseParameterBuildRequest({
+    parameterBuildRequestSchema.safeParse({
       primaryPreviewPath: 'model.stl',
       sourceHash: 'a'.repeat(64),
       sourcePath: 'model.py',
       values: { size: Number.NaN },
-    }),
-    undefined,
+    }).success,
+    false,
   );
 });
 
