@@ -1,4 +1,4 @@
-"""Reduce an analyzed reference palette into a deterministic filament plan."""
+"""Reduce an analyzed reference palette into a deterministic printable palette."""
 
 from __future__ import annotations
 

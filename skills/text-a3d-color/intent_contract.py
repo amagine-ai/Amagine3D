@@ -248,10 +248,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 if not isinstance(region.get(key), str) or not region[key].strip():
                     errors.append(f"color_regions[{index}].{key} is required")
             material = region.get("material")
-            if not isinstance(material, dict):
-                errors.append(f"color_regions[{index}].material is required")
-            else:
-                transmission = material.get("transmission")
+            if material is not None and not isinstance(material, dict):
+                errors.append(f"color_regions[{index}].material must be an object")
+            elif isinstance(material, dict):
+                transmission = material.get("transmission", "opaque")
                 filament = material.get("filament")
                 if transmission not in TRANSMISSION:
                     errors.append(
@@ -263,13 +263,6 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(
                         f"color_regions[{index}].material.filament must be a "
                         "non-empty string when present"
-                    )
-                if transmission in {"translucent", "transparent"} and not (
-                    isinstance(filament, str) and filament.strip()
-                ):
-                    errors.append(
-                        f"color_regions[{index}].material.filament is required "
-                        "for non-opaque regions"
                     )
         if len(names) != len(set(names)):
             errors.append("color region names must be unique")

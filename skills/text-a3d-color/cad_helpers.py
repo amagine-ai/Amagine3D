@@ -341,19 +341,22 @@ def export_regions(
                 f"intent color for {region_name!r} does not match exported color"
             )
         material = item.get("material")
-        if not isinstance(material, dict):
-            raise RegionInvariantError(f"intent material for {region_name!r} is missing")
-        transmission = material.get("transmission")
+        if material is not None and not isinstance(material, dict):
+            raise RegionInvariantError(
+                f"intent material for {region_name!r} must be an object"
+            )
+        material = material or {}
+        transmission = material.get("transmission", "opaque")
         if transmission not in {"opaque", "translucent", "transparent"}:
             raise RegionInvariantError(
                 f"intent transmission for {region_name!r} is invalid"
             )
         filament = material.get("filament")
-        if transmission != "opaque" and not (
-            isinstance(filament, str) and filament.strip()
+        if filament is not None and (
+            not isinstance(filament, str) or not filament.strip()
         ):
             raise RegionInvariantError(
-                f"non-opaque region {region_name!r} requires a filament assignment"
+                f"intent filament for {region_name!r} must be a non-empty string"
             )
         material_regions.append({
             "color": color,
@@ -490,7 +493,7 @@ def export_regions(
         "part": name,
         "regions": material_regions,
         "requires_manual_slicer_assignment": any(
-            item["transmission"] != "opaque" or item["filament"]
+            item["filament"]
             for item in material_regions
         ),
         "schema": "evidence-color-material-plan/v1",

@@ -25,7 +25,7 @@ union is exported without internal region-interface faces.
 ## Palette planning
 
 Run `palette_plan.py` after `reference_analyze.py` when reference colors exceed
-available filaments. Use `--keep` for rare identity colors. Treat its weighted
+available color channels. Use `--keep` for rare identity colors. Treat its weighted
 mapping as a proposed manufacturing palette, then reconcile it with semantic
 regions in the contract.
 
@@ -48,8 +48,8 @@ cross-checks the intent's region names/colors, exports
 hashes.
 `export_3mf.py` stores a shared palette and reads the archive XML back.
 `assembly_check.py` compares the expected region names/colors against what is
-actually stored in the 3MF. Optical transmission remains a material-plan and
-slicer-assignment requirement because RGB readback cannot prove it.
+actually stored in the 3MF. Optical transmission remains region metadata
+because RGB readback cannot prove real material behavior.
 
 Use `step_check.py` on `NAME-assemble.step` for OCCT-backed master validation.
 That check proves CAD readability and shape structure; it does not prove Bambu

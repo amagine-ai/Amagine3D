@@ -46,21 +46,19 @@
       "hex": "#CC2233",
       "purpose": "Primary identity field",
       "boundary": "Left half of the parent volume split at X=0",
-      "evidence": "Specification assigns red to the left field.",
-      "material": {"transmission": "opaque"}
+      "evidence": "Specification assigns red to the left field."
     },
     {
       "name": "right_field",
       "hex": "#2255CC",
       "purpose": "Secondary identity field",
       "boundary": "Right half of the parent volume split at X=0",
-      "evidence": "Specification assigns blue to the right field.",
-      "material": {"transmission": "opaque"}
+      "evidence": "Specification assigns blue to the right field."
     }
   ],
   "palette_reduction": {
     "applied": false,
-    "reason": "The two semantic colors map directly to two filaments."
+    "reason": "The two semantic colors map directly to two printable color regions."
   },
   "printability": {
     "profile": {

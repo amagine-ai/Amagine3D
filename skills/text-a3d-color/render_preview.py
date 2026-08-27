@@ -50,6 +50,14 @@ def _rgb(value: str) -> tuple[int, int, int]:
     return tuple(int(value[index : index + 2], 16) for index in (1, 3, 5))
 
 
+def _region_name(path: Path) -> str:
+    marker = "-region-"
+    stem = path.stem
+    if marker in stem:
+        return stem.rsplit(marker, 1)[1]
+    return stem
+
+
 def _region(specification: str) -> Region:
     filename, separator, color = specification.rpartition("=")
     if not separator or not filename:
@@ -57,8 +65,9 @@ def _region(specification: str) -> Region:
     path = Path(filename).resolve()
     mesh = load_mesh(path)
     normalized_color = color.upper()
-    render_input = MeshInput(path.stem, mesh, _rgb(normalized_color), path)
-    return Region(path.stem, path, normalized_color, render_input)
+    name = _region_name(path)
+    render_input = MeshInput(name, mesh, _rgb(normalized_color), path)
+    return Region(name, path, normalized_color, render_input)
 
 
 def _save_png(image, destination: Path) -> None:

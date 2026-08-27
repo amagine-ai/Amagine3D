@@ -167,7 +167,6 @@ class ColorPipelineTests(unittest.TestCase):
                     "purpose": "left field",
                     "boundary": "X 0 through 10 mm",
                     "evidence": "fixture specification",
-                    "material": {"transmission": "opaque"},
                 },
                 {
                     "name": "blue",
@@ -175,13 +174,10 @@ class ColorPipelineTests(unittest.TestCase):
                     "purpose": "right field",
                     "boundary": "X 10 through 20 mm",
                     "evidence": "fixture specification",
-                    "material": {
-                        "transmission": "translucent",
-                        "filament": "translucent blue PLA",
-                    },
+                    "material": {"transmission": "translucent"},
                 },
             ],
-            "palette_reduction": {"applied": False, "reason": "two filaments"},
+            "palette_reduction": {"applied": False, "reason": "two colors"},
             "printability": {
                 "profile": {"path": profile_path.name, "sha256": profile_hash},
                 "build_axis": "+Z",
@@ -217,7 +213,7 @@ class ColorPipelineTests(unittest.TestCase):
     def test_v5_report_print_package_display_glb_step_master_and_material_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            report, _, _ = self._build_fixture(root)
+            report, _, intent_path = self._build_fixture(root)
             self.assertEqual(report["schema"], "evidence-color-build/v5")
             self.assertIn("events", report)
             self.assertIn("bbox_mm", report["features"]["thin-color-detail"])
@@ -232,16 +228,30 @@ class ColorPipelineTests(unittest.TestCase):
                 {(204, 34, 51), (34, 85, 204)},
             )
             plan = json.loads((root / "tile_material-plan.json").read_text())
-            self.assertTrue(plan["requires_manual_slicer_assignment"])
+            self.assertFalse(plan["requires_manual_slicer_assignment"])
             self.assertEqual(plan["archive_omits"], ["filament", "transmission"])
-            assemble_audit = color_step_check.audit_step(
-                root / "tile-assemble.step",
-                expect_solids=2,
-                expect_x=20,
-                expect_y=10,
-                expect_z=2,
+            assemble = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "step_check.py"),
+                    str(root / "tile-assemble.step"),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "tile_report.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
             )
+            assemble_audit = json.loads(assemble.stdout)
+            self.assertEqual(assemble.returncode, 0, assemble.stdout + assemble.stderr)
             self.assertTrue(assemble_audit["pass"], assemble_audit)
+            checks = {item["name"]: item for item in assemble_audit["checks"]}
+            self.assertEqual(checks["expected_solids"]["observed"], 2)
+            self.assertEqual(checks["dimension_x"]["expected"]["value"], 20.0)
+            self.assertEqual(checks["dimension_y"]["expected"]["value"], 10.0)
+            self.assertEqual(checks["dimension_z"]["expected"]["value"], 2.0)
 
             assembly = subprocess.run(
                 [
@@ -257,7 +267,7 @@ class ColorPipelineTests(unittest.TestCase):
             assembly_payload = json.loads(assembly.stdout)
             self.assertEqual(assembly.returncode, 0, assembly.stdout + assembly.stderr)
             self.assertEqual(assembly_payload["schema"], "color-assembly-audit/v4")
-            self.assertTrue(assembly_payload["requires_manual_slicer_assignment"])
+            self.assertFalse(assembly_payload["requires_manual_slicer_assignment"])
 
     def test_manufacturing_qa_rejects_unbound_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -372,12 +382,6 @@ class ColorPipelineTests(unittest.TestCase):
                     str(report_path),
                     "--components",
                     str(report["manufacturing"]["solid_count"]),
-                    "--expect-x",
-                    "20",
-                    "--expect-y",
-                    "10",
-                    "--expect-z",
-                    "2",
                     "--require-z0",
                 ],
                 check=False,
@@ -441,6 +445,10 @@ class ColorPipelineTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             render = json.loads(report_path.read_text())
             self.assertEqual(render["matched_view"]["name"], "bottom")
+            self.assertEqual(
+                [region["name"] for region in render["regions"]],
+                ["red", "blue"],
+            )
             self.assertTrue((root / "bottom.png").is_file())
 
 
@@ -459,12 +467,14 @@ class ColorContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["pass"])
 
-    def test_non_opaque_regions_require_a_filament_assignment(self):
+    def test_non_opaque_regions_leave_filament_choice_to_user(self):
         example_path = COLOR / "examples" / "intent.example.json"
         data = json.loads(example_path.read_text())
+        data["color_regions"][0].pop("material", None)
         data["color_regions"][1]["material"] = {"transmission": "translucent"}
         errors = color_intent.validate(data, example_path.parent)
-        self.assertTrue(any("filament is required" in item for item in errors))
+        self.assertFalse(any("filament" in item for item in errors))
+        self.assertFalse(any("material" in item for item in errors))
 
     def test_flat_semantic_feature_fields_are_validated(self):
         example_path = COLOR / "examples" / "intent.example.json"
@@ -525,6 +535,42 @@ class ColorContractTests(unittest.TestCase):
         observed = color_qa.semantic_placement_observation(intent, report)
         self.assertEqual(observed["offenders"][0]["feature_id"], "charging-port")
         self.assertEqual(observed["offenders"][0]["adjacent_external_faces"], ["front"])
+
+    def test_semantic_feature_placement_skips_non_opening_face_hints(self):
+        intent = {
+            "features": [
+                {
+                    "id": "surface-logo",
+                    "kind": "logo",
+                    "face": "top",
+                    "edge_crossing": "forbidden",
+                }
+            ]
+        }
+        report = {
+            "assembly": {
+                "shape": {
+                    "bbox_mm": {
+                        "min": [-20, -10, 0],
+                        "max": [20, 10, 40],
+                        "size": [40, 20, 40],
+                    },
+                }
+            },
+            "features": {
+                "surface-logo": {
+                    "bbox_mm": {
+                        "min": [-5, -5, 39],
+                        "max": [5, 5, 39.5],
+                        "size": [10, 10, 0.5],
+                    }
+                }
+            },
+        }
+        observed = color_qa.semantic_placement_observation(intent, report)
+        self.assertEqual(observed["examined"], 0)
+        self.assertEqual(observed["offenders"], [])
+        self.assertEqual(observed["skipped"][0]["feature_id"], "surface-logo")
 
     def test_single_color_contract_accepts_bottom_matched_view(self):
         example_path = SINGLE / "examples" / "intent.example.json"

@@ -54,16 +54,14 @@ skill's `intent_contract.py`.
       "hex": "#E8E4DC",
       "purpose": "main enclosure",
       "boundary": "complete parent shell",
-      "evidence": "warm light housing in reference",
-      "material": {"transmission": "opaque", "filament": "matte warm-white PLA"}
+      "evidence": "warm light housing in reference"
     },
     {
       "name": "accent",
       "hex": "#171A1D",
       "purpose": "identity-bearing front insert",
       "boundary": "front inset rectangle",
-      "evidence": "dark contrasting insert region",
-      "material": {"transmission": "opaque", "filament": "matte charcoal PLA"}
+      "evidence": "dark contrasting insert region"
     }
   ],
   "palette_reduction": {
@@ -101,12 +99,11 @@ The contract must distinguish permanent printed color from transient display
 content. A real LED/LCD screen is usually one physical screen region; reproduce
 individual pixels only when the user wants a static decorative face or mosaic.
 
-Every region declares `material.transmission` as `opaque`, `translucent`, or
-`transparent`. A non-opaque region must name its filament; an opaque region may
-also do so. The filament remains a manufacturing instruction rather than
-something RGB-only 3MF readback can prove. `export_regions()` cross-checks
-contract names and colors and writes a material plan that preserves these
-optical assignments.
+Use `material.transmission` only when optical behavior changes the geometry or
+visual promise; omitted material defaults to opaque. A region may preserve a
+user-specified filament, but the skill should not invent one. `export_regions()`
+cross-checks contract names and colors and writes a material plan that records
+region metadata without treating RGB readback as proof of real material choice.
 
 Declare functional and identity-bearing requirements independently in
 `features`. Every item needs evidence and a concrete acceptance condition.

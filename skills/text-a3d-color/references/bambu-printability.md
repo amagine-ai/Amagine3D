@@ -49,10 +49,10 @@ co-printed region.
 ## Optical materials
 
 Basic 3MF RGB assignments do not encode filament translucency, transparency,
-diffusion, or chemistry. Record optical transmission in the intent and deliver
-the generated material plan. Any non-opaque region requires an explicit slicer
-filament assignment; archive color readback alone is not an optical-material
-pass.
+diffusion, or chemistry. Record optical transmission only when it changes the
+model or visual promise, and leave real filament selection to the user and
+slicer. Archive color readback proves region RGB assignment, not optical
+material behavior.
 
 Never switch profiles, lower limits, or scale fixed user dimensions merely to
 clear QA. At most three repair passes are allowed; unresolved warnings remain

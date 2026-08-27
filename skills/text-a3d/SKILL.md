@@ -45,6 +45,8 @@ The renderer defaults to a 640-pixel output, 1x supersampling, a 1280-pixel
 internal view limit, and 500,000 input triangles. `--supersample 2`,
 `--max-resolution`, and
 `--max-triangles` may adjust those values within the built-in hard caps.
+When running outside Amagine3D's managed session, initialize the repository
+runtime and use its Python executable instead of an unrelated system Python.
 
 ## 0. Route before modeling
 
@@ -204,8 +206,8 @@ Execute the source and save the mesh audit:
 
 ```bash
 python "<name>.py"
-python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --require-z0 --out "<name>_mesh-audit.json"
-python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids 1 --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --out "<name>_assemble-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --tol <T> --require-z0 --out "<name>_mesh-audit.json"
+python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --intent "<name>_intent.json" --report "<name>_report.json" --tol <T> --out "<name>_assemble-audit.json"
 ```
 
 For multipart assemblies, audit each part STL as an individual print placement,
@@ -217,7 +219,7 @@ python "<SKILL_DIR>/qa_check.py" "<name>-lower-shell.stl" --profile "<name>_prin
 python "<SKILL_DIR>/qa_check.py" "<name>-top-lid.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 1 --require-z0 --out "<name>-top-lid_mesh-audit.json"
 python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components 2 --require-z0 --out "<name>_mesh-audit.json"
 python "<SKILL_DIR>/assembly_check.py" "<name>_report.json" "<name>.stl" --out "<name>_assembly-audit.json"
-python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids 2 --out "<name>_assemble-audit.json"
+python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --intent "<name>_intent.json" --report "<name>_report.json" --out "<name>_assemble-audit.json"
 ```
 
 Cross-check contract features against the build report's observed features and
@@ -225,6 +227,12 @@ operation ledger. Read every `fail`, `warning`, and `not_evaluated` check plus
 its structured `repair` object. Mesh success does not prove STEP assembly
 correctness, STEP success does not prove printability, and GLB display success
 does not prove CAD topology.
+`qa_check.py` and `step_check.py` read contract dimensions from `--intent`
+when explicit `--expect-x/y/z` values are omitted. `qa_check.py` skips that
+automatic dimension check for multipart assembly reports because individual
+parts and print-bed layouts can have different extents. `step_check.py` also
+reads assembly solid counts from `--report` when available; pass explicit
+expected values only to override the evidence.
 
 Visual review is mandatory for reference reproduction, recognizable form, or
 any appearance requirement. Render after mesh success:

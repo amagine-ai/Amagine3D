@@ -24,7 +24,7 @@ session working directory.
 ## Resources
 
 - `reference_analyze.py` extracts objective image/pixel/palette evidence
-- `palette_plan.py` reduces source colors into a deterministic filament plan
+- `palette_plan.py` reduces source colors into a deterministic printable palette
 - `bambu_profile.py` resolves this skill's pinned Bambu machine/process limits
 - `intent_contract.py` validates color semantics and boundaries before geometry
 - `examples/intent.example.json` is a copyable valid color contract
@@ -61,8 +61,9 @@ LED/LCD is normally one screen region; model individual lit pixels only for a
 requested static decorative face or mosaic.
 
 RGB stored in a 3MF does not prove optical behavior. Record every region as
-`opaque`, `translucent`, or `transparent` in the intent. Non-opaque regions
-also require the generated material plan and explicit slicer filament mapping.
+`opaque`, `translucent`, or `transparent` in the intent when optical behavior
+changes the model. Do not invent real filament assignments; the user chooses
+actual slicer materials.
 
 ## 1. Open the evidence run
 
@@ -78,7 +79,7 @@ Honor a named user or project printer. Otherwise omit `--machine` to resolve
 the conservative A1 mini default and record the assumption. Read the generated
 profile before modeling; never change it later merely to clear QA.
 
-When source colors exceed available filaments, create a proposed plan:
+When source colors exceed available color channels, create a proposed plan:
 
 ```bash
 python "<SKILL_DIR>/palette_plan.py" "<name>_reference.json" --max-colors <N> [--keep "#RRGGBB"] --out "<name>_palette.json"
@@ -114,10 +115,10 @@ cutouts on named semantic faces. A bottom opening is valid when the contract
 says it belongs on the bottom; an accidental front/bottom edge cut is a design
 failure, not a Z0 rule failure.
 
-The color contract defines region name, hex, optical material, purpose,
-geometric boundary, and evidence. Use the profile's line-width and wall targets
-for every boundary. Do not collapse distinct semantic regions merely to fit an
-arbitrary palette limit; record every compromise.
+The color contract defines region name, hex, purpose, geometric boundary,
+evidence, and optional optical material. Use the profile's line-width and wall
+targets for every boundary. Do not collapse distinct semantic regions merely to
+fit an arbitrary palette limit; record every compromise.
 
 ## 3. Build and export strict regions
 
@@ -160,8 +161,8 @@ parent, omit `parent=` only after recording that architecture in the contract.
 the physical assembly master, and `NAME-display.glb` as the display master.
 When `parent=` is provided, the manufacturing STL is the coverage-checked
 parent without internal material-interface faces. It also emits
-`NAME_material-plan.json` because 3MF RGB values cannot encode translucency or
-filament chemistry.
+`NAME_material-plan.json` as region metadata because 3MF RGB values do not
+prove optical behavior.
 
 Expose every meaningful user-adjustable driving dimension with `parameter()`:
 overall dimensions plus local feature, interface, inset, clearance, and region
@@ -186,7 +187,7 @@ python "<SKILL_DIR>/qa_check.py" "<name>-region-<region>.stl" --topology-only --
 Run Bambu manufacturing checks exactly once on the clean manufacturing STL:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>-manufacturing.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --expect-x <X> --expect-y <Y> --expect-z <Z> --tol <T> --require-z0 --out "<name>_manufacturing-audit.json"
+python "<SKILL_DIR>/qa_check.py" "<name>-manufacturing.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --tol <T> --require-z0 --out "<name>_manufacturing-audit.json"
 ```
 
 Read every `fail`, `warning`, and `not_evaluated` result. A region topology
@@ -202,8 +203,13 @@ python "<SKILL_DIR>/assembly_check.py" "<name>_report.json" "<name>.3mf" --out "
 Then verify the STEP assembly master with OCCT:
 
 ```bash
-python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --expect-solids <N> --out "<name>_assemble-audit.json"
+python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --intent "<name>_intent.json" --report "<name>_report.json" --out "<name>_assemble-audit.json"
 ```
+
+`qa_check.py` and `step_check.py` read contract dimensions from `--intent`
+when explicit `--expect-x/y/z` values are omitted. `step_check.py` also reads
+region solid counts from `--report` when available; pass explicit expected
+values only to override the evidence.
 
 Render all regions with contract colors, producing five views and the matched
 view:
@@ -233,10 +239,9 @@ assembly audit, STEP assembly audit, visual previews, and the render evidence
 report.
 
 Deliver the complete evidence bundle. Report geometry, region integrity, 3MF
-readback, STEP master validity, material/transmission assignment, freshness,
-visual fidelity, palette fidelity, bed fit, feature resolution, walls, and
-overhangs as separate statuses. Summarize the print result as `print preflight passed`, `print
+readback, STEP master validity, optical-region metadata, freshness, visual
+fidelity, palette fidelity, bed fit, feature resolution, walls, and overhangs
+as separate statuses. Summarize the print result as `print preflight passed`, `print
 preflight passed with warnings`, or `print preflight failed`. Report `actual
 slicer validation: not evaluated` unless a real Bambu Studio or equivalent
-slicer run was completed. For Bambu Studio, prefer the colored 3MF; region STLs
-remain the fallback for manual filament assignment.
+slicer run was completed.

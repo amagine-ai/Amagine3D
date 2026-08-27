@@ -277,6 +277,40 @@ class PrintabilityGeometryTests(unittest.TestCase):
         self.assertEqual(bad["offenders"][0]["feature_id"], "charging-port")
         self.assertEqual(bad["offenders"][0]["adjacent_external_faces"], ["front"])
 
+    def test_semantic_feature_placement_skips_non_opening_face_hints(self):
+        intent = {
+            "features": [
+                {
+                    "id": "surface-logo",
+                    "kind": "logo",
+                    "face": "top",
+                    "edge_crossing": "forbidden",
+                }
+            ]
+        }
+        report = {
+            "shape": {
+                "bbox_mm": {
+                    "min": [-20, -10, 0],
+                    "max": [20, 10, 40],
+                    "size": [40, 20, 40],
+                },
+            },
+            "features": {
+                "surface-logo": {
+                    "bbox_mm": {
+                        "min": [-5, -5, 39],
+                        "max": [5, 5, 39.5],
+                        "size": [10, 10, 0.5],
+                    }
+                }
+            },
+        }
+        observed = qa_check.semantic_placement_observation(intent, report)
+        self.assertEqual(observed["examined"], 0)
+        self.assertEqual(observed["offenders"], [])
+        self.assertEqual(observed["skipped"][0]["feature_id"], "surface-logo")
+
     def test_cli_fails_when_critical_feature_has_no_build_evidence(self):
         profile = bambu_profile.resolve_profile(
             self.catalog, machine_name="a1-mini", nozzle=0.4, tool_index=0
@@ -529,6 +563,29 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 expect_z=8,
             )
             self.assertTrue(assemble_audit["pass"], assemble_audit)
+            assemble_cli = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "step_check.py"),
+                    str(root / "case-assemble.step"),
+                    "--report",
+                    str(root / "case_report.json"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                assemble_cli.returncode,
+                0,
+                assemble_cli.stdout + assemble_cli.stderr,
+            )
+            assemble_cli_payload = json.loads(assemble_cli.stdout)
+            expected_solids = next(
+                item for item in assemble_cli_payload["checks"]
+                if item["name"] == "expected_solids"
+            )
+            self.assertEqual(expected_solids["observed"], 2)
             self.assertEqual(
                 [
                     item["feature_id"]
@@ -563,12 +620,6 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                     str(root / "case_report.json"),
                     "--components",
                     "2",
-                    "--expect-x",
-                    "45",
-                    "--expect-y",
-                    "10",
-                    "--expect-z",
-                    "4",
                     "--require-z0",
                 ],
                 check=False,
