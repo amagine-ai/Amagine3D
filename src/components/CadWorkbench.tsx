@@ -44,7 +44,10 @@ import {
   trashArtifacts,
   trashStorageSessions,
 } from '../lib/agent-api';
-import { preferredPreviewArtifact } from '../lib/artifact-selection';
+import {
+  fileSectionArtifacts,
+  preferredPreviewArtifact,
+} from '../lib/artifact-selection';
 import {
   appendChatStepText,
   completeChatTurn,
@@ -170,7 +173,9 @@ export function CadWorkbench({
       () =>
         selectedArtifact?.kind === 'model'
           ? parameterModels.find(
-              (model) => model.primaryPreviewPath === selectedArtifact.path,
+              (model) =>
+                model.primaryPreviewPath === selectedArtifact.path ||
+                model.displayPreviewPath === selectedArtifact.path,
             )
           : undefined,
       [parameterModels, selectedArtifact],
@@ -316,7 +321,9 @@ export function CadWorkbench({
 
     function selectInitialArtifact(nextArtifacts: ArtifactSummary[]) {
       setSelectedPath(
-        preferredPreviewArtifact(nextArtifacts)?.path ?? nextArtifacts[0]?.path,
+        preferredPreviewArtifact(nextArtifacts)?.path ??
+          fileSectionArtifacts(nextArtifacts)[0]?.path ??
+          nextArtifacts[0]?.path,
       );
     }
 
@@ -361,6 +368,7 @@ export function CadWorkbench({
             detail.artifacts.some(({ path }) => path === preferredArtifactPath)
             ? preferredArtifactPath
             : preferredPreviewArtifact(detail.artifacts)?.path ??
+                fileSectionArtifacts(detail.artifacts)[0]?.path ??
                 detail.artifacts[0]?.path,
         );
       } catch (error) {
@@ -389,6 +397,7 @@ export function CadWorkbench({
           }
           return (
             preferredPreviewArtifact(next.artifacts)?.path ??
+            fileSectionArtifacts(next.artifacts)[0]?.path ??
             next.artifacts[0]?.path
           );
         });
@@ -638,7 +647,7 @@ export function CadWorkbench({
         setArtifacts(next.artifacts);
         setArtifactWorkspace(next.artifactWorkspace);
         setParameterModels(next.models);
-        setSelectedPath(model.primaryPreviewPath);
+        setSelectedPath(model.displayPreviewPath);
         addRuntimeEntry(
           text('Complete model rebuilt', '完整模型已重建'),
           'parameters',

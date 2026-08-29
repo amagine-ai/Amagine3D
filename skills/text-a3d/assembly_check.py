@@ -4,16 +4,34 @@ from __future__ import annotations
 
 import argparse
 from hashlib import sha256
+import importlib.util
 from itertools import combinations
 import json
 import math
 from pathlib import Path
 import sys
 
-from intent_contract import INTENT_SCHEMA, validate_manufacturing
+
+def _load_local_module(module_name: str, filename: str):
+    path = Path(__file__).resolve().with_name(filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-BUILD_SCHEMA = "evidence-cad-assembly-build/v1"
+_intent_contract = _load_local_module(
+    "_text_a3d_intent_contract_for_assembly_check",
+    "intent_contract.py",
+)
+INTENT_SCHEMA = _intent_contract.INTENT_SCHEMA
+validate_manufacturing = _intent_contract.validate_manufacturing
+
+
+BUILD_SCHEMA = "evidence-cad-assembly-build/v3"
 
 
 def _digest(path: Path) -> str:
@@ -42,6 +60,19 @@ def _finite_non_negative(value) -> bool:
         and math.isfinite(value)
         and value >= 0
     )
+
+
+def _interface_feature_ids(manufacturing) -> set[str]:
+    if not isinstance(manufacturing, dict):
+        return set()
+    features: set[str] = set()
+    for interface in manufacturing.get("interfaces", []):
+        if not isinstance(interface, dict):
+            continue
+        for feature_id in interface.get("features", []):
+            if isinstance(feature_id, str):
+                features.add(feature_id)
+    return features
 
 
 class Audit:
@@ -100,7 +131,7 @@ def _check_reference(
 def audit_report(
     report_path: Path,
     *,
-    combined_stl: Path,
+    print_stl: Path,
     max_overlap_mm3: float | None = None,
 ) -> dict:
     report = _load_json(report_path)
@@ -185,8 +216,9 @@ def audit_report(
     artifacts = report.get("artifacts")
     artifact_map = artifacts if isinstance(artifacts, dict) else {}
     expected_keys = {f"stl:{part_name}" for part_name in part_names} | {
-        "stl:combined",
-        "step",
+        "glb:display",
+        "stl",
+        "step:assemble",
     }
     audit.add(
         "artifact_keys",
@@ -202,25 +234,38 @@ def audit_report(
             artifact_map.get(key),
         )
 
-    combined = report.get("combined")
-    combined_solids = combined.get("solid_count") if isinstance(combined, dict) else None
+    assembly = report.get("assembly")
+    assembly_shape = assembly.get("shape") if isinstance(assembly, dict) else None
+    assembly_solids = (
+        assembly_shape.get("solid_count") if isinstance(assembly_shape, dict) else None
+    )
     audit.add(
-        "combined_solid_count",
-        combined_solids == len(part_names),
-        combined_solids,
+        "assembly_solid_count",
+        assembly_solids == len(part_names),
+        assembly_solids,
         len(part_names),
     )
-    combined_ref = artifact_map.get("stl:combined")
-    expected_hash = (
-        combined_ref.get("sha256") if isinstance(combined_ref, dict) else None
+    print_plate = report.get("print_plate")
+    print_solids = (
+        print_plate.get("solid_count") if isinstance(print_plate, dict) else None
     )
-    supplied_exists = combined_stl.is_file()
-    supplied_hash = _digest(combined_stl) if supplied_exists else None
     audit.add(
-        "combined_stl_binding",
+        "print_plate_solid_count",
+        print_solids == len(part_names),
+        print_solids,
+        len(part_names),
+    )
+    print_ref = artifact_map.get("stl")
+    expected_hash = (
+        print_ref.get("sha256") if isinstance(print_ref, dict) else None
+    )
+    supplied_exists = print_stl.is_file()
+    supplied_hash = _digest(print_stl) if supplied_exists else None
+    audit.add(
+        "print_stl_binding",
         supplied_exists and expected_hash == supplied_hash,
-        {"path": str(combined_stl), "sha256": supplied_hash},
-        "supplied combined STL matches report artifact",
+        {"path": str(print_stl), "sha256": supplied_hash},
+        "supplied print STL matches report artifact",
     )
 
     assembly_policy = report.get("assembly")
@@ -303,6 +348,21 @@ def audit_report(
         isinstance(event, dict) and event.get("part") in part_map
         for event in event_list
     )
+    interface_features = _interface_feature_ids(manufacturing)
+    observed_feature_ids = set(feature_map) | {
+        event.get("id") for event in event_list if isinstance(event.get("id"), str)
+    }
+    missing_interface_features = sorted(interface_features - observed_feature_ids)
+    audit.add(
+        "interface_feature_evidence",
+        bool(interface_features) and not missing_interface_features,
+        {
+            "missing_feature_ids": missing_interface_features,
+            "observed_feature_ids": sorted(observed_feature_ids),
+            "required_feature_ids": sorted(interface_features),
+        },
+        "each assembly interface names modeled connector features",
+    )
     audit.add(
         "part_evidence_ownership",
         features_valid and events_valid,
@@ -329,14 +389,14 @@ def audit_report(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report")
-    parser.add_argument("combined_stl")
+    parser.add_argument("print_stl")
     parser.add_argument("--max-overlap", type=float)
     parser.add_argument("--out")
     args = parser.parse_args()
     try:
         result = audit_report(
             Path(args.report),
-            combined_stl=Path(args.combined_stl),
+            print_stl=Path(args.print_stl),
             max_overlap_mm3=args.max_overlap,
         )
     except Exception as error:

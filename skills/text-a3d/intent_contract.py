@@ -21,8 +21,86 @@ REPRESENTATIONS = {"full-3d", "orthographic-solid", "relief", "surface-led"}
 SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
 MANUFACTURING_MODES = {"multipart", "single-part"}
+INTERFACE_CONNECTIONS = {
+    "dovetail",
+    "glue-face",
+    "peg-socket",
+    "pin-socket",
+    "press-fit",
+    "snap-fit",
+    "tab-slot",
+    "threaded-insert",
+}
+ASSEMBLY_AXES = {"+X", "+Y", "+Z", "-X", "-Y", "-Z"}
 INTENT_SCHEMA = "evidence-cad-intent/v4"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
+FEATURE_KINDS = {
+    "additive",
+    "button",
+    "cavity",
+    "clearance",
+    "control",
+    "cutout",
+    "detail",
+    "envelope",
+    "fastener",
+    "hole",
+    "interface",
+    "logo",
+    "mount",
+    "part",
+    "port",
+    "recess",
+    "region",
+    "seam",
+    "slot",
+    "surface",
+    "window",
+}
+PLACED_OPENING_KINDS = {
+    "cavity",
+    "cutout",
+    "hole",
+    "port",
+    "recess",
+    "slot",
+    "window",
+}
+FACES = {"back", "bottom", "front", "internal", "left", "multiple", "right", "top"}
+DIRECTIONS = {
+    "+X",
+    "+Y",
+    "+Z",
+    "-X",
+    "-Y",
+    "-Z",
+    "multiple",
+    "none",
+    "surface-normal",
+    "through-X",
+    "through-Y",
+    "through-Z",
+}
+EDGE_CROSSING = {"allowed", "forbidden", "not-applicable", "required"}
+FACE_DIRECTIONS = {
+    "back": {"+Y", "through-Y"},
+    "bottom": {"-Z", "through-Z"},
+    "front": {"-Y", "through-Y"},
+    "left": {"-X", "through-X"},
+    "right": {"+X", "through-X"},
+    "top": {"+Z", "through-Z"},
+}
+COORDINATE_SYSTEM = {
+    "back": "y-max",
+    "bottom": "z-min",
+    "front": "y-min",
+    "left": "x-min",
+    "right": "x-max",
+    "top": "z-max",
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+}
 
 
 def _positive_number(value) -> bool:
@@ -80,7 +158,10 @@ def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> 
     return profile
 
 
-def validate_manufacturing(manufacturing) -> list[str]:
+def validate_manufacturing(
+    manufacturing,
+    feature_ids: set[str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     if not isinstance(manufacturing, dict):
         return ["manufacturing must be an object"]
@@ -150,12 +231,45 @@ def validate_manufacturing(manufacturing) -> list[str]:
                         "manufacturing.interfaces"
                         f"[{index}].between references unknown parts"
                     )
+                connection = interface.get("connection")
+                if connection not in INTERFACE_CONNECTIONS:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].connection is invalid"
+                    )
+                assembly_axis = interface.get("assembly_axis")
+                if assembly_axis not in ASSEMBLY_AXES:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].assembly_axis is invalid"
+                    )
                 if (
-                    "clearance_mm" in interface
-                    and not _non_negative_number(interface.get("clearance_mm"))
+                    "clearance_mm" not in interface
+                    or not _non_negative_number(interface.get("clearance_mm"))
                 ):
                     errors.append(
                         f"manufacturing.interfaces[{index}].clearance_mm must be finite and non-negative"
+                    )
+                if not _positive_number(interface.get("engagement_mm")):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].engagement_mm must be positive"
+                    )
+                interface_features = interface.get("features")
+                if not isinstance(interface_features, list) or not interface_features:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].features must reference modeled connector feature IDs"
+                    )
+                elif not all(
+                    isinstance(item, str) and ID_PATTERN.fullmatch(item)
+                    for item in interface_features
+                ):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].features must contain valid feature IDs"
+                    )
+                elif feature_ids is not None and not set(interface_features).issubset(
+                    feature_ids
+                ):
+                    errors.append(
+                        "manufacturing.interfaces"
+                        f"[{index}].features reference unknown feature IDs"
                     )
                 if (
                     not isinstance(interface.get("acceptance"), str)
@@ -166,6 +280,54 @@ def validate_manufacturing(manufacturing) -> list[str]:
                     )
             if len(interface_ids) != len(set(interface_ids)):
                 errors.append("manufacturing interface ids must be unique")
+    return errors
+
+
+def validate_coordinate_system(coordinate_system) -> list[str]:
+    if not isinstance(coordinate_system, dict):
+        return ["coordinate_system must declare the object semantic frame"]
+    errors = []
+    for key, expected in COORDINATE_SYSTEM.items():
+        if coordinate_system.get(key) != expected:
+            errors.append(f"coordinate_system.{key} must be {expected}")
+    return errors
+
+
+def validate_feature_semantics(feature: dict, index: int) -> list[str]:
+    errors: list[str] = []
+    feature_id = f"features[{index}]"
+    kind = feature.get("kind")
+    face = feature.get("face")
+    direction = feature.get("direction")
+    edge_crossing = feature.get("edge_crossing")
+
+    if kind is not None and kind not in FEATURE_KINDS:
+        errors.append(f"{feature_id}.kind is invalid")
+    if face is not None and face not in FACES:
+        errors.append(f"{feature_id}.face is invalid")
+    if direction is not None and direction not in DIRECTIONS:
+        errors.append(f"{feature_id}.direction is invalid")
+    if edge_crossing is not None and edge_crossing not in EDGE_CROSSING:
+        errors.append(f"{feature_id}.edge_crossing is invalid")
+    if direction is not None and face is None:
+        errors.append(f"{feature_id}.direction requires face")
+    if edge_crossing is not None and face is None:
+        errors.append(f"{feature_id}.edge_crossing requires face")
+    if kind in PLACED_OPENING_KINDS:
+        for key, value in (
+            ("face", face),
+            ("direction", direction),
+            ("edge_crossing", edge_crossing),
+        ):
+            if value is None:
+                errors.append(f"{feature_id}.{key} is required for kind {kind}")
+    if (
+        face in FACE_DIRECTIONS
+        and direction not in {None, "none", "surface-normal"}
+        and direction not in FACE_DIRECTIONS[face]
+    ):
+        expected = ", ".join(sorted(FACE_DIRECTIONS[face]))
+        errors.append(f"{feature_id}.direction must be one of {expected} for {face}")
     return errors
 
 
@@ -181,6 +343,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         errors.append(f"task_mode must be one of {sorted(MODES)}")
     if data.get("representation") not in REPRESENTATIONS:
         errors.append(f"representation must be one of {sorted(REPRESENTATIONS)}")
+    errors.extend(validate_coordinate_system(data.get("coordinate_system")))
 
     dimensions = data.get("dimensions_mm")
     if not isinstance(dimensions, dict):
@@ -212,7 +375,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(f"features[{index}].{key} is required")
             feature_id = feature.get("id")
             if isinstance(feature_id, str) and feature_id.strip():
+                if not ID_PATTERN.fullmatch(feature_id):
+                    errors.append(f"features[{index}].id is invalid")
                 ids.append(feature_id)
+            errors.extend(validate_feature_semantics(feature, index))
         if len(ids) != len(set(ids)):
             errors.append("feature ids must be unique")
     feature_ids = (
@@ -221,7 +387,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         else set()
     )
 
-    errors.extend(validate_manufacturing(data.get("manufacturing")))
+    errors.extend(validate_manufacturing(data.get("manufacturing"), feature_ids))
 
     visual = data.get("visual")
     if not isinstance(visual, dict) or not isinstance(visual.get("required"), bool):

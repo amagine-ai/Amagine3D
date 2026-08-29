@@ -1,4 +1,4 @@
-"""Render color-region STLs as orthographic, hash-bound visual evidence."""
+"""Render internal color-region meshes as orthographic, hash-bound evidence."""
 
 from __future__ import annotations
 
@@ -8,15 +8,9 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
-import sys
 import tracemalloc
 
-
-SKILLS_ROOT = Path(__file__).resolve().parents[1]
-if str(SKILLS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILLS_ROOT))
-
-from cpu_z_buffer import (  # noqa: E402
+from cpu_z_buffer import (
     CONTACT_VIEWS,
     DEFAULT_MAX_RESOLUTION,
     DEFAULT_OUTPUT_SIZE,
@@ -56,6 +50,14 @@ def _rgb(value: str) -> tuple[int, int, int]:
     return tuple(int(value[index : index + 2], 16) for index in (1, 3, 5))
 
 
+def _region_name(path: Path) -> str:
+    marker = "-region-"
+    stem = path.stem
+    if marker in stem:
+        return stem.rsplit(marker, 1)[1]
+    return stem
+
+
 def _region(specification: str) -> Region:
     filename, separator, color = specification.rpartition("=")
     if not separator or not filename:
@@ -63,8 +65,9 @@ def _region(specification: str) -> Region:
     path = Path(filename).resolve()
     mesh = load_mesh(path)
     normalized_color = color.upper()
-    render_input = MeshInput(path.stem, mesh, _rgb(normalized_color), path)
-    return Region(path.stem, path, normalized_color, render_input)
+    name = _region_name(path)
+    render_input = MeshInput(name, mesh, _rgb(normalized_color), path)
+    return Region(name, path, normalized_color, render_input)
 
 
 def _save_png(image, destination: Path) -> None:
@@ -165,12 +168,13 @@ def main() -> int:
         result = {
             "dimensions_mm": [round(float(value), 4) for value in dimensions],
             "performance": {
-                "four_view_seconds": round(contact.elapsed_seconds, 6),
+                "contact_sheet_seconds": round(contact.elapsed_seconds, 6),
                 "parallel_views": False,
                 "peak_memory_bytes": max(int(traced_peak), peak_buffer_bytes),
                 "processes": 1,
                 "supersample": args.supersample,
                 "triangle_count": count,
+                "view_count": len(CONTACT_VIEWS),
                 "views": {stat.view: stat.to_dict() for stat in contact.stats},
             },
             "preview": {
@@ -221,4 +225,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

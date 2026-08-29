@@ -10,14 +10,24 @@ test('discovers supported artifacts and keeps newest files first', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-artifacts-'));
   try {
     await mkdir(root, { recursive: true });
-    await writeFile(join(root, 'legacy.glb'), 'unsupported model');
+    await writeFile(join(root, 'legacy.obj'), 'unsupported model');
     await writeFile(join(root, 'part.py'), 'print("source")');
     await writeFile(join(root, 'part.stl'), 'solid part\nendsolid part\n');
+    await writeFile(join(root, 'part-display.glb'), 'glb');
+    await writeFile(join(root, 'part-assemble.step'), 'step');
     await writeFile(join(root, '.ignored.json'), '{}');
 
     const artifacts = await scanArtifacts(root);
-    assert.equal(artifacts.length, 2);
+    assert.equal(artifacts.length, 4);
     assert.equal(artifacts.find(({ name }) => name === 'part.stl')?.format, 'stl');
+    assert.equal(
+      artifacts.find(({ name }) => name === 'part-display.glb')?.format,
+      'glb',
+    );
+    assert.equal(
+      artifacts.find(({ name }) => name === 'part-assemble.step')?.format,
+      undefined,
+    );
     assert.equal(artifacts.find(({ name }) => name === 'part.py')?.kind, 'source');
   } finally {
     await rm(root, { force: true, recursive: true });

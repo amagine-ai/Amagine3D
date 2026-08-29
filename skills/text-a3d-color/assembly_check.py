@@ -25,14 +25,17 @@ def main() -> int:
     expected = {
         name: item["color"].upper() for name, item in report.get("regions", {}).items()
     }
+    region_inventory = archive.get("regions") or archive.get("objects", [])
     observed = {
-        item["name"]: (item["color"] or "").upper() for item in archive["objects"]
+        item["name"]: (item["color"] or "").upper() for item in region_inventory
     }
+    package_mode = report.get("print_package_mode", "co_print_body")
+    build_items = archive.get("build_items", [])
     checks = [
         {
             "name": "build_report_schema",
-            "pass": report.get("schema") == "evidence-color-build/v3",
-            "expected": "evidence-color-build/v3",
+            "pass": report.get("schema") == "evidence-color-build/v5",
+            "expected": "evidence-color-build/v5",
             "observed": report.get("schema"),
         },
         {
@@ -41,6 +44,33 @@ def main() -> int:
             == archive_hash,
             "expected": report.get("artifacts", {}).get("3mf", {}).get("sha256"),
             "observed": archive_hash,
+        },
+        {
+            "name": "print_package_mode",
+            "pass": archive.get("package_mode") == package_mode,
+            "expected": package_mode,
+            "observed": archive.get("package_mode"),
+        },
+        {
+            "name": "print_package_co_print_build_item",
+            "pass": package_mode != "co_print_body"
+            or (
+                archive.get("build_item_count") == 1
+                and bool(build_items)
+                and build_items[0].get("object_kind") == "mesh"
+            ),
+            "expected": (
+                "single top-level mesh build item"
+                if package_mode == "co_print_body"
+                else "separate top-level part build items allowed"
+            ),
+            "observed": {
+                "build_item_count": archive.get("build_item_count"),
+                "top_level_kinds": [
+                    item.get("object_kind")
+                    for item in build_items
+                ],
+            },
         },
         {
             "name": "region_names",
@@ -115,7 +145,7 @@ def main() -> int:
         "requires_manual_slicer_assignment": bool(
             material and material.get("requires_manual_slicer_assignment")
         ),
-        "schema": "color-assembly-audit/v3",
+        "schema": "color-assembly-audit/v4",
     }
     payload = json.dumps(result, indent=2)
     if args.out:

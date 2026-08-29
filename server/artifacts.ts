@@ -8,7 +8,7 @@ import type {
   PreviewFormat,
 } from '../src/types.ts';
 
-const MODEL_EXTENSIONS = new Set(['.3mf', '.step', '.stl', '.stp']);
+const MODEL_EXTENSIONS = new Set(['.3mf', '.glb', '.step', '.stl', '.stp']);
 const IMAGE_EXTENSIONS = new Set(['.gif', '.jpeg', '.jpg', '.png', '.webp']);
 const REPORT_EXTENSIONS = new Set(['.json', '.md', '.txt']);
 const SOURCE_EXTENSIONS = new Set(['.py']);
@@ -32,6 +32,7 @@ function kindForExtension(extension: string): ArtifactKind {
 
 function previewFormat(extension: string): PreviewFormat | undefined {
   if (extension === '.3mf') return '3mf';
+  if (extension === '.glb') return 'glb';
   if (extension === '.stl') return 'stl';
   return undefined;
 }
@@ -126,6 +127,8 @@ export function artifactContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
     case '.3mf':
       return 'model/3mf';
+    case '.glb':
+      return 'model/gltf-binary';
     case '.gif':
       return 'image/gif';
     case '.jpeg':

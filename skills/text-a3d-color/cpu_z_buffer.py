@@ -36,8 +36,8 @@ DEFAULT_OUTPUT_SIZE = 640
 DEFAULT_MAX_RESOLUTION = 1280
 DEFAULT_MAX_TRIANGLES = 500_000
 MAX_SUPERSAMPLE = 2
-CONTACT_VIEWS = ("isometric", "front", "side", "top")
-SUPPORTED_VIEWS = (*CONTACT_VIEWS, "bottom")
+CONTACT_VIEWS = ("isometric", "front", "side", "top", "bottom")
+SUPPORTED_VIEWS = CONTACT_VIEWS
 BACKGROUND = (255, 255, 255)
 DEFAULT_MATERIAL = (122, 163, 199)
 LIGHT = np.array((0.35, -0.55, 0.76), dtype=np.float64)
@@ -594,8 +594,8 @@ def render_contact_sheet(
     views: Iterable[str] = CONTACT_VIEWS,
 ) -> ContactRender:
     requested_views = tuple(views)
-    if len(requested_views) != 4:
-        raise ValueError("the contact sheet requires exactly four views")
+    if len(requested_views) not in {4, 5}:
+        raise ValueError("the contact sheet requires four or five views")
     if pixels < 320:
         raise ValueError("contact sheet size must be at least 320")
     if pixels > limits.max_resolution:
@@ -610,10 +610,14 @@ def render_contact_sheet(
     header_height = max(34, pixels // 20)
     gutter = max(8, pixels // 75)
     label_height = max(18, pixels // 40)
-    panel_width = (pixels - gutter * 3) // 2
-    panel_height = (pixels - header_height - gutter * 3 - label_height * 2) // 2
+    columns = 3 if len(requested_views) == 5 else 2
+    rows = math.ceil(len(requested_views) / columns)
+    panel_width = (pixels - gutter * (columns + 1)) // columns
+    panel_height = (
+        pixels - header_height - gutter * (rows + 1) - label_height * rows
+    ) // rows
     if panel_width < 1 or panel_height < 1:
-        raise ValueError("contact sheet size is too small for four views")
+        raise ValueError("contact sheet size is too small for requested views")
     _validate_request(meshes, panel_width, panel_height, supersample, limits)
 
     _centered_text(
@@ -626,8 +630,8 @@ def render_contact_sheet(
     pool = BufferPool()
     stats: list[RenderStats] = []
     for index, view in enumerate(requested_views):
-        column = index % 2
-        row = index // 2
+        column = index % columns
+        row = index // columns
         left = gutter + column * (panel_width + gutter)
         top = header_height + gutter + row * (panel_height + label_height + gutter)
         rendered = render_view(

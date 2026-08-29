@@ -52,17 +52,20 @@ if SIZE > 3:
 output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", "."))
 output.mkdir(parents=True, exist_ok=True)
 stl = output / "model.stl"
-step = output / "model.step"
+assemble_step = output / "model-assemble.step"
+display_glb = output / "model-display.glb"
 stl.write_text(f"solid {SIZE}\\nendsolid model\\n", encoding="utf-8")
-step.write_text(f"STEP {SIZE}\\n", encoding="utf-8")
+assemble_step.write_text(f"ASSEMBLE STEP {SIZE}\\n", encoding="utf-8")
+display_glb.write_bytes(b"glTF" + bytes(str(SIZE), encoding="utf-8"))
 digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 report = {
-    "schema": "evidence-cad-build/v2",
+    "schema": "evidence-cad-build/v4",
     "part": NAME,
     "source": {"path": str(Path(__file__).resolve()), "sha256": digest(Path(__file__))},
     "artifacts": {
         "stl": {"path": str(stl.resolve()), "sha256": digest(stl)},
-        "step": {"path": str(step.resolve()), "sha256": digest(step)},
+        "step:assemble": {"path": str(assemble_step.resolve()), "sha256": digest(assemble_step)},
+        "glb:display": {"path": str(display_glb.resolve()), "sha256": digest(display_glb)},
     },
     "parameters": {
         "local-offset": {"default": -2.5, "value": SIZE},
@@ -76,19 +79,22 @@ print(json.dumps(report))
 async function writeInitialBuild(root: string): Promise<void> {
   const sourcePath = join(root, 'model.py');
   const stlPath = join(root, 'model.stl');
-  const stepPath = join(root, 'model.step');
+  const assembleStepPath = join(root, 'model-assemble.step');
+  const displayGlbPath = join(root, 'model-display.glb');
   await writeFile(sourcePath, modelSource());
   await writeFile(stlPath, 'solid -2.5\nendsolid model\n');
-  await writeFile(stepPath, 'STEP -2.5\n');
+  await writeFile(assembleStepPath, 'ASSEMBLE STEP -2.5\n');
+  await writeFile(displayGlbPath, 'glTF -2.5\n');
   await writeFile(
     join(root, 'model_report.json'),
     JSON.stringify({
       artifacts: {
-        step: { path: stepPath, sha256: 'initial' },
         stl: { path: stlPath, sha256: 'initial' },
+        'step:assemble': { path: assembleStepPath, sha256: 'initial' },
+        'glb:display': { path: displayGlbPath, sha256: 'initial' },
       },
       part: 'model',
-      schema: 'evidence-cad-build/v2',
+      schema: 'evidence-cad-build/v4',
       source: { path: sourcePath, sha256: 'initial' },
     }),
   );
@@ -100,6 +106,7 @@ test('discovers only explicit parameter() declarations, including negative defau
     await writeInitialBuild(root);
     const [model] = await parameterModelsForWorkspace(root, PYTHON);
     assert.equal(model?.primaryPreviewPath, 'model.stl');
+    assert.equal(model?.displayPreviewPath, 'model-display.glb');
     assert.equal(model?.parameters.length, 1);
     assert.deepEqual(model?.parameters[0], {
       affects: ['mounting-hole'],
@@ -225,6 +232,7 @@ if __name__ == "__main__":
       const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
       assert.ok(model);
       assert.equal(model.primaryPreviewPath, 'parametric_box.stl');
+      assert.equal(model.displayPreviewPath, 'parametric_box-display.glb');
       assert.equal(model.parameters[0]?.labelZh, '总体宽度');
       assert.equal(model.parameters[0]?.groupZh, '外形尺寸');
       await rebuildModelWithParameters({
@@ -259,7 +267,7 @@ if __name__ == "__main__":
 );
 
 test(
-  'treats the combined 3MF as the adjustable top-level multi-color preview',
+  'treats the 3MF as the adjustable top-level multi-color print root',
   { skip: !existsSync(VENV_PYTHON) },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'amagine-color-parameter-'));
@@ -280,6 +288,17 @@ test(
               name: 'right',
             },
           ],
+          coordinate_system: {
+            back: 'y-max',
+            bottom: 'z-min',
+            front: 'y-min',
+            left: 'x-min',
+            right: 'x-max',
+            top: 'z-max',
+            x_positive: 'right',
+            y_positive: 'back',
+            z_positive: 'top',
+          },
           features: [
             { id: 'complete-parent' },
             { id: 'left-region' },
@@ -329,14 +348,14 @@ if __name__ == "__main__":
       const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
       assert.ok(model);
       assert.equal(model.primaryPreviewPath, 'color_bar.3mf');
+      assert.equal(model.displayPreviewPath, 'color_bar-display.glb');
       assert.deepEqual(
         model.artifactPaths.slice().sort(),
         [
-          'color_bar-left.stl',
-          'color_bar-right.stl',
-          'color_bar-combined.stl',
           'color_bar.3mf',
-          'color_bar.step',
+          'color_bar.stl',
+          'color_bar-assemble.step',
+          'color_bar-display.glb',
         ].sort(),
       );
       await rebuildModelWithParameters({
@@ -364,7 +383,7 @@ if __name__ == "__main__":
 );
 
 test(
-  'treats the combined STL as the adjustable top-level single-color assembly preview',
+  'treats the STL as the adjustable top-level single-color print root',
   { skip: !existsSync(VENV_PYTHON) },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'amagine-assembly-parameter-'));
@@ -402,6 +421,17 @@ if __name__ == "__main__":
         JSON.stringify({
           schema: 'evidence-cad-intent/v4',
           part: 'shell_case',
+          coordinate_system: {
+            back: 'y-max',
+            bottom: 'z-min',
+            front: 'y-min',
+            left: 'x-min',
+            right: 'x-max',
+            top: 'z-max',
+            x_positive: 'right',
+            y_positive: 'back',
+            z_positive: 'top',
+          },
           manufacturing: {
             mode: 'multipart',
             parts: [
@@ -419,7 +449,12 @@ if __name__ == "__main__":
             interfaces: [
               {
                 acceptance: 'named parts form one case',
+                assembly_axis: '+Z',
                 between: ['lower-shell', 'top-lid'],
+                clearance_mm: 0,
+                connection: 'glue-face',
+                engagement_mm: 2,
+                features: ['lower-shell', 'top-lid'],
                 id: 'case-seam',
               },
             ],
@@ -429,14 +464,16 @@ if __name__ == "__main__":
       await execFileAsync(VENV_PYTHON, ['shell_case.py'], { cwd: root });
       const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
       assert.ok(model);
-      assert.equal(model.primaryPreviewPath, 'shell_case-combined.stl');
+      assert.equal(model.primaryPreviewPath, 'shell_case.stl');
+      assert.equal(model.displayPreviewPath, 'shell_case-display.glb');
       assert.deepEqual(
         model.artifactPaths.slice().sort(),
         [
           'shell_case-lower-shell.stl',
           'shell_case-top-lid.stl',
-          'shell_case-combined.stl',
-          'shell_case.step',
+          'shell_case.stl',
+          'shell_case-assemble.step',
+          'shell_case-display.glb',
         ].sort(),
       );
       await rebuildModelWithParameters({
@@ -452,11 +489,16 @@ if __name__ == "__main__":
       const report = JSON.parse(
         await readFile(join(root, 'shell_case_report.json'), 'utf8'),
       ) as {
-        combined: { bbox_mm: { size: number[] }; solid_count: number };
+        assembly: {
+          shape: { bbox_mm: { size: number[] }; solid_count: number };
+        };
         parts: Record<string, { bbox_mm: { size: number[] } }>;
+        print_plate: { bbox_mm: { size: number[] }; solid_count: number };
       };
-      assert.equal(report.combined.solid_count, 2);
-      assert.deepEqual(report.combined.bbox_mm.size, [24, 10, 8]);
+      assert.equal(report.assembly.shape.solid_count, 2);
+      assert.deepEqual(report.assembly.shape.bbox_mm.size, [24, 10, 8]);
+      assert.equal(report.print_plate.solid_count, 2);
+      assert.deepEqual(report.print_plate.bbox_mm.size, [53, 10, 4]);
       assert.deepEqual(report.parts['top-lid']?.bbox_mm.size, [24, 10, 2]);
       assert.match(
         await readFile(join(root, 'shell_case.py'), 'utf8'),

@@ -1,4 +1,4 @@
-"""Create orthographic visual evidence for single-material STL files."""
+"""Create orthographic visual evidence for single-material STL or GLB files."""
 
 from __future__ import annotations
 
@@ -6,15 +6,9 @@ import argparse
 from hashlib import sha256
 import json
 from pathlib import Path
-import sys
 import tracemalloc
 
-
-SKILLS_ROOT = Path(__file__).resolve().parents[1]
-if str(SKILLS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILLS_ROOT))
-
-from cpu_z_buffer import (  # noqa: E402
+from cpu_z_buffer import (
     CONTACT_VIEWS,
     DEFAULT_MATERIAL,
     DEFAULT_MAX_RESOLUTION,
@@ -54,11 +48,11 @@ def _save_png(image, destination: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stl", nargs="?")
+    parser.add_argument("model", nargs="?")
     parser.add_argument(
         "--part",
         action="append",
-        help="STL to include in a single-material multipart preview",
+        help="STL or GLB to include in a single-material multipart preview",
     )
     parser.add_argument("--out")
     parser.add_argument("--size", type=int, default=DEFAULT_OUTPUT_SIZE)
@@ -87,10 +81,10 @@ def main() -> int:
     args = parser.parse_args()
     if bool(args.reference_view) != bool(args.reference_out):
         parser.error("--reference-view and --reference-out must be used together")
-    if args.stl and args.part:
-        parser.error("use either the positional STL or repeated --part inputs")
-    if not args.stl and not args.part:
-        parser.error("provide a positional STL or at least one --part")
+    if args.model and args.part:
+        parser.error("use either the positional model or repeated --part inputs")
+    if not args.model and not args.part:
+        parser.error("provide a positional model or at least one --part")
     if args.part and len(args.part) < 2:
         parser.error("multipart preview requires at least two --part inputs")
     if args.size < 320:
@@ -110,7 +104,7 @@ def main() -> int:
                 "matched-view internal resolution exceeds the configured maximum "
                 f"of {limits.max_resolution} pixels"
             )
-        sources = [Path(item).resolve() for item in (args.part or [args.stl])]
+        sources = [Path(item).resolve() for item in (args.part or [args.model])]
         destination = Path(
             args.out or sources[0].with_name(f"{sources[0].stem}_views.png")
         ).resolve()
@@ -183,12 +177,13 @@ def main() -> int:
                 if item.path is not None
             ],
             "performance": {
-                "four_view_seconds": round(contact.elapsed_seconds, 6),
+                "contact_sheet_seconds": round(contact.elapsed_seconds, 6),
                 "parallel_views": False,
                 "peak_memory_bytes": max(int(traced_peak), peak_buffer_bytes),
                 "processes": 1,
                 "supersample": args.supersample,
                 "triangle_count": count,
+                "view_count": len(CONTACT_VIEWS),
                 "views": {stat.view: stat.to_dict() for stat in contact.stats},
             },
             "preview": {
@@ -230,4 +225,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

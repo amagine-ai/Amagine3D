@@ -11,9 +11,9 @@ import trimesh
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILLS_ROOT = ROOT / "skills"
-if str(SKILLS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILLS_ROOT))
+SKILL = ROOT / "skills" / "text-a3d"
+if str(SKILL) not in sys.path:
+    sys.path.insert(0, str(SKILL))
 
 from cpu_z_buffer import (  # noqa: E402
     BACKGROUND,
@@ -60,7 +60,10 @@ class CpuZBufferRegressionTests(unittest.TestCase):
 
         # Opposite orthographic cameras must agree on the box's outline area.
         self.assertLess(abs(coverages["top"] - coverages["bottom"]), 0.01)
-        self.assertEqual(CONTACT_VIEWS, ("isometric", "front", "side", "top"))
+        self.assertEqual(
+            CONTACT_VIEWS,
+            ("isometric", "front", "side", "top", "bottom"),
+        )
 
     def test_double_through_hole_plate_has_no_false_top_face_groove(self) -> None:
         # Five coplanar solids form a plate with two fully enclosed square holes.
@@ -165,7 +168,7 @@ class CpuZBufferRegressionTests(unittest.TestCase):
         self.assertLess(rendered.peak_buffer_bytes, 2 * 1024 * 1024)
 
     def test_renderer_imports_only_headless_cpu_image_dependencies(self) -> None:
-        source = (SKILLS_ROOT / "cpu_z_buffer.py").read_text(encoding="utf-8")
+        source = (SKILL / "cpu_z_buffer.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         imports = {
             alias.name.split(".")[0]

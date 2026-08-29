@@ -14,10 +14,10 @@ npm run build
 ```
 
 The PNG evidence renderer is a headless CPU Z-buffer implemented with trimesh,
-NumPy, and Pillow. It renders four views sequentially in one process. Use
+NumPy, and Pillow. It renders five views sequentially in one process. Use
 `npm run benchmark:renderer` to record small, medium, and larger
 STL timings, peak memory, and triangle counts. The renderer defaults to 1x;
-the four-view output is 640 pixels, and 2x supersampling is opt-in. Its
+the five-view output is 640 pixels, and 2x supersampling is opt-in. Its
 `pathlib`-based, single-process path is covered
 on Ubuntu and Windows in CI and uses the same headless code on macOS.
 

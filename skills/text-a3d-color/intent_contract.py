@@ -20,7 +20,81 @@ MODES = {
 SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
 TRANSMISSION = {"opaque", "translucent", "transparent"}
+PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
+REGION_CONTINUITY = {
+    "continuous-core",
+    "not-applicable",
+    "separate-part",
+    "surface-detail",
+}
 VIEWS = {"bottom", "front", "isometric", "side", "top"}
+FEATURE_KINDS = {
+    "additive",
+    "button",
+    "cavity",
+    "clearance",
+    "control",
+    "cutout",
+    "detail",
+    "envelope",
+    "fastener",
+    "hole",
+    "interface",
+    "logo",
+    "mount",
+    "part",
+    "port",
+    "recess",
+    "region",
+    "seam",
+    "slot",
+    "surface",
+    "window",
+}
+PLACED_OPENING_KINDS = {
+    "cavity",
+    "cutout",
+    "hole",
+    "port",
+    "recess",
+    "slot",
+    "window",
+}
+FACES = {"back", "bottom", "front", "internal", "left", "multiple", "right", "top"}
+DIRECTIONS = {
+    "+X",
+    "+Y",
+    "+Z",
+    "-X",
+    "-Y",
+    "-Z",
+    "multiple",
+    "none",
+    "surface-normal",
+    "through-X",
+    "through-Y",
+    "through-Z",
+}
+EDGE_CROSSING = {"allowed", "forbidden", "not-applicable", "required"}
+FACE_DIRECTIONS = {
+    "back": {"+Y", "through-Y"},
+    "bottom": {"-Z", "through-Z"},
+    "front": {"-Y", "through-Y"},
+    "left": {"-X", "through-X"},
+    "right": {"+X", "through-X"},
+    "top": {"+Z", "through-Z"},
+}
+COORDINATE_SYSTEM = {
+    "back": "y-max",
+    "bottom": "z-min",
+    "front": "y-min",
+    "left": "x-min",
+    "right": "x-max",
+    "top": "z-max",
+    "x_positive": "right",
+    "y_positive": "back",
+    "z_positive": "top",
+}
 
 
 def _positive_number(value) -> bool:
@@ -61,6 +135,54 @@ def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> 
     return profile
 
 
+def validate_coordinate_system(coordinate_system) -> list[str]:
+    if not isinstance(coordinate_system, dict):
+        return ["coordinate_system must declare the object semantic frame"]
+    errors = []
+    for key, expected in COORDINATE_SYSTEM.items():
+        if coordinate_system.get(key) != expected:
+            errors.append(f"coordinate_system.{key} must be {expected}")
+    return errors
+
+
+def validate_feature_semantics(feature: dict, index: int) -> list[str]:
+    errors: list[str] = []
+    feature_id = f"features[{index}]"
+    kind = feature.get("kind")
+    face = feature.get("face")
+    direction = feature.get("direction")
+    edge_crossing = feature.get("edge_crossing")
+
+    if kind is not None and kind not in FEATURE_KINDS:
+        errors.append(f"{feature_id}.kind is invalid")
+    if face is not None and face not in FACES:
+        errors.append(f"{feature_id}.face is invalid")
+    if direction is not None and direction not in DIRECTIONS:
+        errors.append(f"{feature_id}.direction is invalid")
+    if edge_crossing is not None and edge_crossing not in EDGE_CROSSING:
+        errors.append(f"{feature_id}.edge_crossing is invalid")
+    if direction is not None and face is None:
+        errors.append(f"{feature_id}.direction requires face")
+    if edge_crossing is not None and face is None:
+        errors.append(f"{feature_id}.edge_crossing requires face")
+    if kind in PLACED_OPENING_KINDS:
+        for key, value in (
+            ("face", face),
+            ("direction", direction),
+            ("edge_crossing", edge_crossing),
+        ):
+            if value is None:
+                errors.append(f"{feature_id}.{key} is required for kind {kind}")
+    if (
+        face in FACE_DIRECTIONS
+        and direction not in {None, "none", "surface-normal"}
+        and direction not in FACE_DIRECTIONS[face]
+    ):
+        expected = ", ".join(sorted(FACE_DIRECTIONS[face]))
+        errors.append(f"{feature_id}.direction must be one of {expected} for {face}")
+    return errors
+
+
 def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     errors: list[str] = []
     if data.get("schema") != "evidence-color-intent/v3":
@@ -73,6 +195,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         "full-3d", "orthographic-solid", "relief", "surface-led",
     }:
         errors.append("representation is invalid")
+    errors.extend(validate_coordinate_system(data.get("coordinate_system")))
 
     dimensions = data.get("dimensions_mm")
     if not isinstance(dimensions, dict):
@@ -109,6 +232,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             for key in ("evidence", "acceptance"):
                 if not isinstance(feature.get(key), str) or not feature[key].strip():
                     errors.append(f"features[{index}].{key} is required")
+            errors.extend(validate_feature_semantics(feature, index))
         if len(ids) != len(set(ids)):
             errors.append("feature ids must be unique")
         feature_ids = {item for item in ids if isinstance(item, str)}
@@ -130,11 +254,14 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             for key in ("purpose", "boundary", "evidence"):
                 if not isinstance(region.get(key), str) or not region[key].strip():
                     errors.append(f"color_regions[{index}].{key} is required")
+            continuity = region.get("continuity")
+            if continuity is not None and continuity not in REGION_CONTINUITY:
+                errors.append(f"color_regions[{index}].continuity is invalid")
             material = region.get("material")
-            if not isinstance(material, dict):
-                errors.append(f"color_regions[{index}].material is required")
-            else:
-                transmission = material.get("transmission")
+            if material is not None and not isinstance(material, dict):
+                errors.append(f"color_regions[{index}].material must be an object")
+            elif isinstance(material, dict):
+                transmission = material.get("transmission", "opaque")
                 filament = material.get("filament")
                 if transmission not in TRANSMISSION:
                     errors.append(
@@ -146,13 +273,6 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(
                         f"color_regions[{index}].material.filament must be a "
                         "non-empty string when present"
-                    )
-                if transmission in {"translucent", "transparent"} and not (
-                    isinstance(filament, str) and filament.strip()
-                ):
-                    errors.append(
-                        f"color_regions[{index}].material.filament is required "
-                        "for non-opaque regions"
                     )
         if len(names) != len(set(names)):
             errors.append("color region names must be unique")
@@ -180,6 +300,9 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             errors.append("printability.build_axis must be +Z")
         if printability.get("bed_contact") != "z-min":
             errors.append("printability.bed_contact must be z-min")
+        package_mode = printability.get("print_package_mode", "co_print_body")
+        if package_mode not in PRINT_PACKAGE_MODES:
+            errors.append("printability.print_package_mode is invalid")
         if printability.get("support_policy") not in {
             "support-free",
             "supports-allowed",

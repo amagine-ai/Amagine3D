@@ -13,9 +13,9 @@ import tracemalloc
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILLS_ROOT = ROOT / "skills"
-if str(SKILLS_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILLS_ROOT))
+SKILL = ROOT / "skills" / "text-a3d"
+if str(SKILL) not in sys.path:
+    sys.path.insert(0, str(SKILL))
 
 from cpu_z_buffer import (  # noqa: E402
     DEFAULT_MATERIAL,
@@ -47,7 +47,7 @@ def _benchmark(path: Path, resolution: int, limits: RenderLimits) -> dict[str, o
     single = render_view(inputs, "isometric", resolution, limits=limits)
     single_seconds = time.perf_counter() - single_started
 
-    four = render_contact_sheet(
+    contact = render_contact_sheet(
         inputs,
         resolution,
         title=path.stem,
@@ -55,13 +55,14 @@ def _benchmark(path: Path, resolution: int, limits: RenderLimits) -> dict[str, o
     )
     _, traced_peak = tracemalloc.get_traced_memory()
     return {
-        "four_view_seconds": round(four.elapsed_seconds, 6),
+        "contact_sheet_seconds": round(contact.elapsed_seconds, 6),
         "peak_memory_bytes": max(
-            int(traced_peak), single.stats.buffer_bytes, four.peak_buffer_bytes
+            int(traced_peak), single.stats.buffer_bytes, contact.peak_buffer_bytes
         ),
         "single_view_seconds": round(single_seconds, 6),
         "triangle_count": len(loaded.faces),
-        "views": {stat.view: stat.to_dict() for stat in four.stats},
+        "view_count": len(contact.stats),
+        "views": {stat.view: stat.to_dict() for stat in contact.stats},
     }
 
 

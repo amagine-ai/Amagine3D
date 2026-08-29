@@ -1,6 +1,6 @@
 import type { ArtifactSummary } from '../types';
 
-const CURRENT_PREVIEW_FORMATS = new Set(['3mf', 'stl']);
+const CURRENT_PREVIEW_FORMATS = new Set(['3mf', 'glb', 'stl']);
 
 function modifiedTime(artifact: ArtifactSummary): number {
   const value = Date.parse(artifact.modifiedAt);
@@ -8,13 +8,10 @@ function modifiedTime(artifact: ArtifactSummary): number {
 }
 
 /**
- * Choose the printable model produced by the latest CAD build.
+ * Choose the visible model produced by the latest CAD build.
  *
- * Single-color builds emit a top-level STL, using a combined STL for multipart
- * assemblies. Multi-color builds emit a combined 3MF after their per-region
- * STLs. STEP is an export format here, not a browser preview source. A
- * same-time 3MF wins the tie without relying on filename keywords such as
- * "currentmodel".
+ * Generated builds mark their display GLB as featured. Without build metadata,
+ * prefer display GLBs for visual review and then fall back to print roots.
  */
 export function preferredPreviewArtifact(
   artifacts: readonly ArtifactSummary[],
@@ -29,8 +26,40 @@ export function preferredPreviewArtifact(
     .sort(
       (left, right) =>
         Number(Boolean(right.featured)) - Number(Boolean(left.featured)) ||
+        Number(right.path.endsWith('-display.glb')) -
+          Number(left.path.endsWith('-display.glb')) ||
         modifiedTime(right) - modifiedTime(left) ||
         Number(right.format === '3mf') - Number(left.format === '3mf') ||
         left.path.localeCompare(right.path),
     )[0];
+}
+
+function isPngImage(artifact: ArtifactSummary): boolean {
+  return (
+    artifact.kind === 'image' && artifact.path.toLowerCase().endsWith('.png')
+  );
+}
+
+function isPreviewModel(artifact: ArtifactSummary): boolean {
+  return (
+    artifact.kind === 'model' &&
+    artifact.format !== undefined &&
+    CURRENT_PREVIEW_FORMATS.has(artifact.format)
+  );
+}
+
+export function fileSectionArtifacts(
+  artifacts: readonly ArtifactSummary[],
+): ArtifactSummary[] {
+  const preferredPath = preferredPreviewArtifact(artifacts)?.path;
+  return artifacts
+    .map((artifact, index) => ({ artifact, index }))
+    .filter(({ artifact }) => isPreviewModel(artifact) || isPngImage(artifact))
+    .sort(
+      (left, right) =>
+        Number(right.artifact.path === preferredPath) -
+          Number(left.artifact.path === preferredPath) ||
+        left.index - right.index,
+    )
+    .map(({ artifact }) => artifact);
 }
