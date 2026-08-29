@@ -9,9 +9,9 @@ import { promisify } from 'node:util';
 
 import {
   parameterModelsForWorkspace,
-  parseParameterBuildRequest,
   rebuildModelWithParameters,
 } from '../server/model-parameters.ts';
+import { parameterBuildRequestSchema } from '../server/trpc/schemas.ts';
 
 const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 const PROJECT_ROOT = resolve(import.meta.dirname, '..');
@@ -187,15 +187,15 @@ test('rebuilds the complete model in staging and commits source only after succe
 });
 
 test('rejects malformed parameter build requests', () => {
-  assert.equal(parseParameterBuildRequest({ values: {} }), undefined);
+  assert.equal(parameterBuildRequestSchema.safeParse({ values: {} }).success, false);
   assert.equal(
-    parseParameterBuildRequest({
+    parameterBuildRequestSchema.safeParse({
       primaryPreviewPath: 'model.stl',
       sourceHash: 'a'.repeat(64),
       sourcePath: 'model.py',
       values: { size: Number.NaN },
-    }),
-    undefined,
+    }).success,
+    false,
   );
 });
 
@@ -352,10 +352,8 @@ if __name__ == "__main__":
       assert.deepEqual(
         model.artifactPaths.slice().sort(),
         [
-          'color_bar-region-left.stl',
-          'color_bar-region-right.stl',
-          'color_bar-manufacturing.stl',
           'color_bar.3mf',
+          'color_bar.stl',
           'color_bar-assemble.step',
           'color_bar-display.glb',
         ].sort(),
@@ -451,7 +449,12 @@ if __name__ == "__main__":
             interfaces: [
               {
                 acceptance: 'named parts form one case',
+                assembly_axis: '+Z',
                 between: ['lower-shell', 'top-lid'],
+                clearance_mm: 0,
+                connection: 'glue-face',
+                engagement_mm: 2,
+                features: ['lower-shell', 'top-lid'],
                 id: 'case-seam',
               },
             ],

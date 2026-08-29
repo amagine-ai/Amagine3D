@@ -13,6 +13,7 @@ export default defineConfig({
     port: webPort,
     proxy: {
       '/api': `http://127.0.0.1:${apiPort}`,
+      '/trpc': `http://127.0.0.1:${apiPort}`,
     },
   },
 });

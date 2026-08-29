@@ -15,6 +15,7 @@ import {
   type SessionSummary,
   type WorkspaceStorage,
 } from '../src/types.ts';
+import { USER_SESSION_ID } from '../src/session-id.ts';
 import { scanArtifacts } from './artifacts.ts';
 import { bundledPomodoroArtifacts } from './bundled-workspace.ts';
 import { discoverModelBuilds } from './model-builds.ts';
@@ -22,9 +23,6 @@ import {
   CHAT_TURN_CUSTOM_TYPE,
   restoreChatTurn,
 } from '../src/lib/chat-turn.ts';
-
-export const USER_SESSION_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const BUILTIN_CREATED_AT = '2026-08-19T15:34:44.000Z';
 const INTERNAL_PROMPT_SUFFIX =

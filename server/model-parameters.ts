@@ -18,6 +18,7 @@ import type {
 } from '../src/types.ts';
 import { scanArtifacts } from './artifacts.ts';
 import { discoverModelBuilds, type ModelBuild } from './model-builds.ts';
+import type { ParameterBuildRequest } from './trpc/schemas.ts';
 
 const PARAMETER_SOURCE_SCRIPT = resolve(
   import.meta.dirname,
@@ -31,13 +32,6 @@ interface ParameterSourceResponse {
   ok: boolean;
   parameters?: ModelParameter[];
   source?: string;
-}
-
-export interface ParameterBuildRequest {
-  primaryPreviewPath: string;
-  sourceHash: string;
-  sourcePath: string;
-  values: Record<string, number>;
 }
 
 export class ParameterBuildError extends Error {
@@ -182,43 +176,6 @@ async function rewriteSource(
     );
   }
   return response.source;
-}
-
-export function parseParameterBuildRequest(
-  value: unknown,
-): ParameterBuildRequest | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidate = value as Partial<ParameterBuildRequest>;
-  if (
-    typeof candidate.sourcePath !== 'string' ||
-    candidate.sourcePath.length === 0 ||
-    candidate.sourcePath.length > 1_024 ||
-    typeof candidate.primaryPreviewPath !== 'string' ||
-    candidate.primaryPreviewPath.length === 0 ||
-    candidate.primaryPreviewPath.length > 1_024 ||
-    typeof candidate.sourceHash !== 'string' ||
-    !/^[a-f0-9]{64}$/u.test(candidate.sourceHash) ||
-    !candidate.values ||
-    typeof candidate.values !== 'object' ||
-    Array.isArray(candidate.values)
-  ) {
-    return undefined;
-  }
-  const entries = Object.entries(candidate.values);
-  if (
-    entries.length === 0 ||
-    entries.length > 100 ||
-    entries.some(
-      ([id, parameterValue]) =>
-        id.length === 0 ||
-        id.length > 160 ||
-        typeof parameterValue !== 'number' ||
-        !Number.isFinite(parameterValue),
-    )
-  ) {
-    return undefined;
-  }
-  return candidate as ParameterBuildRequest;
 }
 
 export async function parameterModelsForWorkspace(
