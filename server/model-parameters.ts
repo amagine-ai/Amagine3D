@@ -71,7 +71,11 @@ async function runJsonProcess(
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(executable, args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: {
+        ...process.env,
+        ...options.env,
+        PYTHONUTF8: '1',
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
