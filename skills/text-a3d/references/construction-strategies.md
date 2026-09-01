@@ -22,12 +22,13 @@ cavity, or recess. Declare `manufacturing.mode` before modeling. Use
 printed prop or figure may still have semantic sub-parts, such as a handle and
 head, without becoming a multipart print if those volumes are fused with
 adequate section and fillets. Do not split solely to fit a default printer
-when the user did not fix the final size; scale the whole model first while
-preserving printable feature sizes. Use `multipart` only when separate printed
-parts create a real manufacturing benefit: cleaner support strategy, better
+when the user did not fix the final size; revise the driving envelope dimensions
+before construction while preserving printable feature sizes. Use `multipart`
+only when separate printed parts create a real manufacturing benefit: cleaner
+support strategy, better
 strength orientation, post-installed components, functional movement, or
-separable covers, inserts, hinges, latches, or slides inferred from the
-object. Model in dependency order:
+separable covers, inserts, hinged joints, retained closures, or slides inferred
+from the object. Model in dependency order:
 
 1. primary envelope
 2. identity-bearing additive volumes
@@ -58,7 +59,8 @@ do not continue with an unchanged body.
 For multipart work, give each printed part its own envelope, features, and
 mating-interface parameters. Every interface must be a printable connector or
 locating surface, not a visual seam: tab-slot, peg-socket, pin-socket,
-dovetail, snap-fit, press-fit, threaded-insert, or glue-face. Declare the
+dovetail, snap-fit, press-fit, self-tapping-screw, threaded-insert, or
+glue-face. Declare the
 connection, assembly axis, clearance, engagement depth, and feature IDs for
 the modeled connector geometry. If a printable connector cannot be made
 reliable, change strategy: keep the object single-part, move the split, alter
@@ -69,6 +71,19 @@ print placement, `NAME.stl` for print-bed layout, `NAME-assemble.step` for
 physical assembly QA, and `NAME-display.glb` for user preview. Pass
 `part_name=` to every `observe()`, checked cut, and checked finish so per-part
 QA reads only its own evidence.
+
+Read `multipart-connections.md` before choosing the interface. For an ordinary
+removable shell, cover, or base without a user-selected fastening method, and
+when ordinary driver access and purchased hardware are acceptable, prefer one
+locating collar/socket or spaced locating pins plus two symmetric M3 plastic
+self-tapping screw connections (two fastener axes). Let the locator position the
+seam and let the screws clamp it. Derive each cover clearance hole, receiver
+pilot, and boss from one
+screw axis with `self_tapping_screw_pair()`; apply the same rigid placement to
+the entire group and mirror/pattern repeated axes. Select snaps or dovetails for
+tool-free/hardware-free access, inserts for frequent service or higher clamp
+load, and hinges, sliders, fitted pockets, or adhesive when their assembly
+behavior is a better match.
 
 ## build123d guardrails
 

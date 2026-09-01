@@ -42,6 +42,7 @@ current session working directory.
 - `color/MODE.md` is the internal color-aware 3MF and region-manufacturing mode
 - Read `references/evidence-contract.md` whenever evidence or appearance matters
 - Read `references/construction-strategies.md` before writing geometry
+- Read `references/multipart-connections.md` before every multipart build
 - Read `references/bambu-printability.md` before every generated printable part
 
 Requires build123d, trimesh, Rtree, Pillow, and NumPy. Preview rendering uses the
@@ -370,6 +371,29 @@ bore. Each recipe returns one retained `male`, its clearance-derived
 placement transform to the pair, observe the retained feature, and use the
 matching checked cut on the receiving part. Do not maintain independent
 male/female dimensions when a paired recipe applies.
+
+For a serviceable shell, cover, or base when ordinary driver access and
+purchased hardware are acceptable and the user has not chosen another fastening
+method, positively start with a locating `collar_socket()` or spaced
+`pin_socket()` pair plus two symmetric
+`self_tapping_screw_pair()` connections. The locator controls alignment; the
+screws provide clamp force. The self-tapping recipe derives the removable-part
+clearance cutter, receiving blind pilot cutter, and printable boss from one
+local screw axis. Apply one rigid transform to that whole group, and derive
+repeated axes by mirror/pattern instead of copying hole coordinates. Use its M3
+defaults as configurable FDM starting values, then adjust the 2.6 mm pilot from
+the selected plastics-screw supplier or a calibration coupon. Keep purchased
+screws out of manufacturing exports. In a hybrid scene, make all three nodes
+select outputs of one `selfTappingScrewPair` procedural recipe instance; do not
+give the holes or boss independent source meshes/transforms. Represent each
+collar/socket or pin/socket locator as its own paired scene interface, then
+reference one or more of their IDs from the screw joint's `locatorInterfaceIds`.
+Read `references/multipart-connections.md` for the selection table, dimensions,
+intent/scene records, and alignment evidence. Hybrid compilation must report
+passing `fastenerGeometryChecks` whose boolean witness volumes prove the full
+clearance/pilot voids, cover land, minimum boss wall, and the blind pilot end; a
+centerline-only check is insufficient. The compiler separately requires every
+printed part to remain one fused physical body.
 
 Before building, map every manufactured part to at least one declared
 `manufacturing.interfaces` connection. The intent validator checks this before

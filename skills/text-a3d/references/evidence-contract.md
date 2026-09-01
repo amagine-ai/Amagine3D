@@ -123,7 +123,7 @@ intent dimensions and rebuild the source at unit scale before geometry exists.
 Use `multipart` only when separate printed parts create a
 real manufacturing benefit such as cleaner support strategy, better strength
 orientation, post-installed components, functional movement, or separable
-covers, inserts, hinges, latches, or slides inferred from the object.
+covers, inserts, hinged joints, retained closures, or slides inferred from the object.
 
 Multipart contracts must declare every printed part and assembly interface:
 
@@ -166,6 +166,27 @@ lid connector fail at intent time rather than after modeling. Do not convert a
 separate requested lid or cover into an open-top single body unless the user
 explicitly asks for a one-piece slip-on sleeve. Do not export separate parts
 unless their interfaces name modeled connector feature IDs.
+
+For a removable shell, cover, or base that uses direct fastening into printed
+plastic, declare `connection: "self-tapping-screw"` and read
+`multipart-connections.md`. Its required `fastening` object records nominal,
+pilot, clearance, boss, and closed-end dimensions; one or more ordered locator
+pairs; and one stable fastener ID mapped to a clearance, pilot, and boss feature
+for every screw. The scene models each locator pair as an independent interface
+referenced by `locatorInterfaceIds`. The intent records the target pairing but
+not duplicate hole coordinates. The mutable semantic scene owns one origin and
+unit direction per fastener ID, and all three geometry nodes select outputs from one
+`selfTappingScrewPair` procedural instance. The compiler generates and places
+that group once; independent fastener source meshes/transforms are invalid.
+This makes hole alignment a geometry-construction invariant rather than a
+visual estimate. Final hybrid QA uses full cylindrical and annular boolean
+witness volumes for the clearance, pilot, cover land, boss wall, and blind end;
+an unobstructed centerline alone is not acceptable evidence.
+Under the same conditions—a removable enclosure, ordinary driver access,
+purchased hardware accepted, and no user-selected alternative—the usual
+default is a collar/socket or spaced pin locator plus two symmetric M3
+self-tapping screw connections (two fastener axes). Other interface recipes
+remain valid when they better match the requested assembly behavior.
 
 Non-manufactured installed components do not belong in `manufacturing.parts`.
 For an LED/LCD, declare the shell's visible aperture, rear module keepout/seat,
