@@ -405,16 +405,11 @@ def _orientation_candidates(
             float(box.max.Y - box.min.Y),
             float(box.max.Z - box.min.Z),
         ]
+        # The fit scale is diagnostic repair evidence only.  Applying it here
+        # would make the print artifact a different object from STEP/GLB and
+        # silently change every wall, clearance, and interface dimension.
         scale_fit = _uniform_scale_to_fit_profile(dimensions, profile)
-        scale = (
-            float(scale_fit["scale"])
-            if scale_fit.get("available") is True
-            else 1.0
-        )
-        if not math.isfinite(scale) or scale <= 0:
-            scale = 1.0
-        scaled = rotated.scale(scale) if scale < 1.0 - 1e-9 else rotated
-        scaled_box = scaled.bounding_box()
+        scaled_box = box
         print_dimensions = [
             float(scaled_box.max.X - scaled_box.min.X),
             float(scaled_box.max.Y - scaled_box.min.Y),
@@ -434,7 +429,7 @@ def _orientation_candidates(
             round(float(-scaled_box.min.Y), 5),
             round(float(-scaled_box.min.Z), 5),
         ]
-        placed = _translate(scaled, *translate)
+        placed = _translate(rotated, *translate)
         metrics = _mesh_orientation_metrics(
             placed,
             threshold_deg=float(threshold_deg),
@@ -447,7 +442,9 @@ def _orientation_candidates(
             "bed_contact_semantic_face": bed_face,
             "bed_fit": bed,
             "dimensions_mm": [round(value, 5) for value in dimensions],
-            "eligible_after_uniform_scale": bool(fits),
+            "would_fit_after_uniform_scale": bool(
+                scale_fit.get("available") is True
+            ),
             "fits_profile": bool(fits),
             "height_fits": bool(height_fits),
             "orientation_metrics": metrics,
@@ -469,11 +466,11 @@ def _orientation_candidates(
                 round(float(metrics["stability_offset_ratio"]), 8),
                 round(-float(metrics["contact_area_mm2"]), 5),
                 protected_penalty,
-                round(max(0.0, 1.0 - scale), 8),
+                0.0,
                 round(print_dimensions[2], 5),
                 preference,
             ],
-            "scale_to_apply": scale,
+            "scale_to_apply": 1.0,
             "translate_mm": translate,
             "uniform_scale_to_fit_profile": scale_fit,
         })
@@ -495,7 +492,7 @@ def _select_print_orientation(
             for key, value in selected.items()
             if key != "preference"
         },
-        "strategy": "scaled-support-contact-appearance-score",
+        "strategy": "rigid-only-support-contact-appearance-score",
     }
 
 
@@ -503,8 +500,12 @@ def _apply_print_orientation(shape, orientation: dict):
     selected = orientation["selected"]
     rotated = _rotate(shape, *selected["rotate_degrees_xyz"])
     scale = float(selected.get("scale_to_apply", 1.0) or 1.0)
-    scaled = rotated.scale(scale) if scale < 1.0 - 1e-9 else rotated
-    return _translate(scaled, *selected["translate_mm"])
+    if not math.isclose(scale, 1.0, abs_tol=1e-12):
+        raise RegionInvariantError(
+            "print orientation must be rigid; rebuild driving dimensions "
+            "instead of applying export-time scale"
+        )
+    return _translate(rotated, *selected["translate_mm"])
 
 
 def observe(shape, feature_id: str, role: str = "feature") -> None:

@@ -118,8 +118,9 @@ feature is intentionally on an edge or corner.
 Always declare `manufacturing`. Use `single-part` for one reliable printed
 body. A model may have semantic sub-parts without becoming multipart when they
 can be fused as one printable body. Do not split only because the default
-printer profile is small; if the user did not fix the final size, scale the
-whole model first. Use `multipart` only when separate printed parts create a
+printer profile is small; if the user did not fix the final size, revise the
+intent dimensions and rebuild the source at unit scale before geometry exists.
+Use `multipart` only when separate printed parts create a
 real manufacturing benefit such as cleaner support strategy, better strength
 orientation, post-installed components, functional movement, or separable
 covers, inserts, hinges, latches, or slides inferred from the object.
@@ -156,10 +157,93 @@ Multipart contracts must declare every printed part and assembly interface:
 }
 ```
 
-Each multipart `parts[].name` becomes an exported STL suffix. Do not convert a
+Each multipart `parts[].name` becomes an exported STL suffix. By default a part
+has `"installation": "interface"` and must appear in at least one declared
+interface before geometry is written. Use `"installation": "adhesive"` or
+`"installation": "loose"` only when that exception is intentional and stated
+in the part acceptance; this makes an omitted button guide, insert pocket, or
+lid connector fail at intent time rather than after modeling. Do not convert a
 separate requested lid or cover into an open-top single body unless the user
 explicitly asks for a one-piece slip-on sleeve. Do not export separate parts
 unless their interfaces name modeled connector feature IDs.
+
+Non-manufactured installed components do not belong in `manufacturing.parts`.
+For an LED/LCD, declare the shell's visible aperture, rear module keepout/seat,
+and any printed retainer as physical intent features. In the mutable semantic
+scene, represent the glass/content as a `display-only` `displayComponent` linked
+through `physicalFeatureRef` to the aperture cutter. It is visible in
+`NAME-display.glb` but excluded from STEP/STL/3MF and manufacturing part counts.
+Use a real physical part only for an explicitly printable dummy, lens, or bezel.
+
+A screen fragment in the semantic scene should make the manufacturing/display
+split explicit:
+
+```json
+[
+  {
+    "id": "screen-window-cutter",
+    "partId": "housing",
+    "featureId": "screen/window",
+    "role": "cutter",
+    "operation": "subtract",
+    "recipe": {
+      "kind": "sourceMesh",
+      "parameters": {"sourceMesh": "screen-window-tool.stl"}
+    }
+  },
+  {
+    "id": "screen-module-keepout-cutter",
+    "partId": "housing",
+    "featureId": "screen/module-keepout",
+    "role": "cutter",
+    "operation": "subtract",
+    "recipe": {
+      "kind": "sourceMesh",
+      "parameters": {"sourceMesh": "screen-module-keepout-tool.stl"}
+    }
+  },
+  {
+    "id": "screen-active-surface",
+    "partId": "housing",
+    "featureId": "display/screen-active-surface",
+    "role": "display-only",
+    "operation": "none",
+    "physicalFeatureRef": "screen/window",
+    "recipe": {
+      "kind": "displayComponent",
+      "parameters": {
+        "sourceMesh": "screen-active-surface.ply",
+        "appearance": {"baseColor": "#111417", "roughness": 0.18}
+      }
+    }
+  }
+]
+```
+
+The two cutters and display plane share their center, normal, and component
+envelope parameters in source; the JSON fragment records their compiled roles.
+
+For a BRep multipart assembly whose colors follow physical part boundaries,
+keep color in the same `evidence-cad-intent/v4` document. Add one
+`color_regions` record per `manufacturing.parts[].name`, with matching `name`,
+`hex`, and optional `material.filament` / `material.transmission`. Set
+`printability.print_package_mode` to `separate_parts` when present, then bind
+the same values at export:
+
+```python
+export_assembly(
+    {"lower-shell": lower_shell, "top-lid": top_lid},
+    NAME,
+    intent_path=INTENT,
+    part_colors={"lower-shell": "#E8E0D4", "top-lid": "#20242A"},
+)
+```
+
+This emits the normal part/plate STLs and semantic STEP/GLB plus a colored
+separate-parts 3MF and material plan. The 3MF is derived from the same
+plate-aligned BRep shapes; the GLB stays in semantic assembly coordinates.
+All reported transforms are rigid with `scale: 1.0`. Do not create a second
+color-only intent or import color helpers through a second `sys.path` entry.
 
 ## Evidence rules
 
@@ -189,7 +273,9 @@ unless their interfaces name modeled connector feature IDs.
   printable body and `NAME.stl` is audited as the print-bed layout.
 - `NAME-assemble.step` is audited with OCCT for CAD readability, solid count,
   and dimensions. STEP checks do not replace mesh printability checks.
-- `NAME-display.glb` is the user-visible display model. GLB display checks can
+- `NAME-display.glb` is the user-visible assembly model. Its named physical
+  nodes must match manufacturing geometry; explicitly tagged display-only
+  installed components may also appear for assembly context. GLB checks can
   prove loadability and appearance, but not B-rep topology or printability.
 - A sub-line-width named feature is a warning tied to its feature ID.
 - Local wall thickness below the process wall target is a warning with sampled

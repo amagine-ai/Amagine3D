@@ -51,7 +51,15 @@ _intent_contract = _load_local_module(
 )
 INTENT_SCHEMA = _intent_contract.INTENT_SCHEMA
 validate_coordinate_system = _intent_contract.validate_coordinate_system
+validate_color_regions = _intent_contract.validate_color_regions
 validate_manufacturing = _intent_contract.validate_manufacturing
+
+_plate_layout = _load_local_module(
+    "_text_a3d_plate_layout_for_cad_helpers",
+    "plate_layout.py",
+)
+PlateLayoutError = _plate_layout.PlateLayoutError
+pack_plate_bboxes = _plate_layout.pack_bboxes
 
 
 class BuildInvariantError(RuntimeError):
@@ -63,6 +71,7 @@ _FEATURES: dict[str, dict] = {}
 _PARAMETERS: dict[str, dict] = {}
 _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DISPLAY_TINTS = (
     (155, 167, 179),
     (112, 142, 166),
@@ -169,6 +178,97 @@ def _digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
 
+def _rgb_color(value: str) -> tuple[int, int, int]:
+    return tuple(int(value[index:index + 2], 16) for index in (1, 3, 5))
+
+
+def _part_color_plan(
+    part_colors,
+    intent_data: dict,
+    part_names: set[str],
+) -> tuple[dict[str, str] | None, list[dict] | None]:
+    declared = intent_data.get("color_regions")
+    if part_colors is None:
+        if declared is not None:
+            raise BuildInvariantError(
+                "intent declares color_regions; pass matching part_colors to "
+                "export_assembly"
+            )
+        return None, None
+    if not isinstance(part_colors, dict):
+        raise BuildInvariantError("part_colors must be a part-name to #RRGGBB object")
+    if set(part_colors) != part_names:
+        raise BuildInvariantError(
+            "part_colors keys must exactly match exported assembly part names"
+        )
+    normalized: dict[str, str] = {}
+    for part_name, color in part_colors.items():
+        if not isinstance(color, str) or not _HEX_COLOR.fullmatch(color):
+            raise BuildInvariantError(
+                f"part color for {part_name!r} must be #RRGGBB"
+            )
+        normalized[part_name] = color.upper()
+
+    color_errors = validate_color_regions(declared, intent_data.get("manufacturing"))
+    if color_errors:
+        raise BuildInvariantError(
+            "invalid unified color intent: " + "; ".join(color_errors)
+        )
+    declared_by_name = {
+        item["name"]: item
+        for item in declared
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    for part_name, color in normalized.items():
+        if str(declared_by_name[part_name].get("hex", "")).upper() != color:
+            raise BuildInvariantError(
+                f"intent color for {part_name!r} does not match part_colors"
+            )
+    package_mode = intent_data.get("printability", {}).get(
+        "print_package_mode", "separate_parts"
+    )
+    if package_mode != "separate_parts":
+        raise BuildInvariantError(
+            "part-colored multipart assemblies require separate_parts 3MF output"
+        )
+
+    materials = []
+    for part_name in normalized:
+        material = declared_by_name[part_name].get("material") or {}
+        materials.append({
+            "color": normalized[part_name],
+            "filament": material.get("filament"),
+            "name": part_name,
+            "transmission": material.get("transmission", "opaque"),
+        })
+    return normalized, materials
+
+
+def _write_part_color_archive(entries, path: Path, name: str) -> dict:
+    """Load the unified color writer lazily and through its package namespace."""
+    try:
+        from color import export_3mf as color_export_3mf
+    except Exception as error:
+        raise BuildInvariantError(
+            "part-colored export requires the namespaced color.export_3mf runtime"
+        ) from error
+    expected = Path(__file__).resolve().parent / "color" / "export_3mf.py"
+    loaded = Path(getattr(color_export_3mf, "__file__", "")).resolve()
+    if loaded != expected.resolve():
+        raise BuildInvariantError(
+            f"color.export_3mf resolved outside the unified skill: {loaded}"
+        )
+    try:
+        return color_export_3mf.write_color_archive(
+            entries,
+            str(path),
+            package_mode="separate_parts",
+            package_name=name,
+        )
+    except Exception as error:
+        raise BuildInvariantError(f"could not write colored 3MF: {error}") from error
+
+
 def _valid(shape) -> bool:
     value = shape.is_valid
     return bool(value() if callable(value) else value)
@@ -205,6 +305,7 @@ def _print_part(shape):
     transform = [-box.min.X, -box.min.Y, -box.min.Z]
     return _translate(shape, *transform), {
         "from": "assembly",
+        "scale": 1.0,
         "to": "part-print",
         "translate_mm": [round(float(value), 5) for value in transform],
     }
@@ -225,6 +326,38 @@ def _profile_from_intent(intent_data: dict | None, intent_path: Path | None) -> 
     except Exception:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _bound_plate_profile(
+    intent_data: dict,
+    intent_path: Path,
+) -> dict | None:
+    """Resolve and verify the profile when the intent binds one."""
+    printability = intent_data.get("printability")
+    if not isinstance(printability, dict) or "profile" not in printability:
+        return None
+    reference = printability.get("profile")
+    if not isinstance(reference, dict):
+        raise BuildInvariantError(
+            "printability.profile must bind a readable printer profile"
+        )
+    raw_path = reference.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise BuildInvariantError("printability.profile.path is required")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = intent_path.parent / path
+    if not path.is_file():
+        raise BuildInvariantError(f"bound printer profile not found: {path}")
+    expected_digest = reference.get("sha256")
+    if not isinstance(expected_digest, str) or _digest(path) != expected_digest:
+        raise BuildInvariantError("bound printer profile hash does not match")
+    profile = _profile_from_intent(intent_data, intent_path)
+    if profile is None:
+        raise BuildInvariantError("bound printer profile could not be read")
+    if profile.get("schema") != "evidence-bambu-printer-profile/v1":
+        raise BuildInvariantError("bound printer profile schema is unsupported")
+    return profile
 
 
 def _rectangle_bounds(polygon) -> tuple[float, float, float, float] | None:
@@ -553,7 +686,8 @@ def _orientation_transform(orientation: dict) -> dict:
     }
 
 
-def _print_plate(parts: dict[str, object], spacing_mm: float = 5.0):
+def _serial_print_plate(parts: dict[str, object], spacing_mm: float = 5.0):
+    """Compatibility layout when a lightweight intent has no printer profile."""
     placed = {}
     transforms = {}
     cursor = 0.0
@@ -563,6 +697,7 @@ def _print_plate(parts: dict[str, object], spacing_mm: float = 5.0):
         placed[part_name] = placed_shape
         transforms[part_name] = {
             "from": "assembly",
+            "scale": 1.0,
             "to": "plate-print",
             "translate_mm": [
                 round(float(cursor - box.min.X), 5),
@@ -572,7 +707,63 @@ def _print_plate(parts: dict[str, object], spacing_mm: float = 5.0):
         }
         placed_box = placed_shape.bounding_box()
         cursor = placed_box.max.X + spacing_mm
-    return Compound(children=list(placed.values())), placed, transforms
+    return Compound(children=list(placed.values())), placed, transforms, {
+        "auto_scale": False,
+        "bed": None,
+        "bbox_overlaps": [],
+        "fits": None,
+        "order": list(parts),
+        "parts": {
+            part_name: {"translate_mm": transform["translate_mm"]}
+            for part_name, transform in transforms.items()
+        },
+        "scale": 1.0,
+        "spacing_mm": round(float(spacing_mm), 5),
+        "strategy": "serial-x-unbounded-no-profile",
+        "transforms": {
+            part_name: transform["translate_mm"]
+            for part_name, transform in transforms.items()
+        },
+    }
+
+
+def _print_plate(
+    parts: dict[str, object],
+    spacing_mm: float = 5.0,
+    *,
+    profile: dict | None = None,
+):
+    """Arrange parts using rigid translations and a profile-bound shelf pack."""
+    if profile is None:
+        return _serial_print_plate(parts, spacing_mm)
+    bboxes = {}
+    for part_name, shape in parts.items():
+        box = shape.bounding_box()
+        bboxes[part_name] = {
+            "min": [float(box.min.X), float(box.min.Y), float(box.min.Z)],
+            "max": [float(box.max.X), float(box.max.Y), float(box.max.Z)],
+        }
+    try:
+        layout = pack_plate_bboxes(
+            bboxes,
+            profile,
+            spacing_mm=spacing_mm,
+        )
+    except PlateLayoutError as error:
+        raise BuildInvariantError(str(error)) from error
+
+    placed = {}
+    transforms = {}
+    for part_name, shape in parts.items():
+        translate = layout["transforms"][part_name]
+        placed[part_name] = _translate(shape, *translate)
+        transforms[part_name] = {
+            "from": "assembly",
+            "scale": 1.0,
+            "to": "plate-print",
+            "translate_mm": translate,
+        }
+    return Compound(children=list(placed.values())), placed, transforms, layout
 
 
 def observe(
@@ -899,11 +1090,14 @@ def export_assembly(
     intent_path: str,
     source_path: str | None = None,
     max_overlap_mm3: float = 0.01,
+    part_colors: dict[str, str] | None = None,
 ) -> dict:
-    """Export a single-material multi-part assembly.
+    """Export a BRep-master multi-part assembly, optionally colored by part.
 
     Each named part must be one valid solid. The top-level STL is an arranged
-    print plate, while the STEP master keeps the physical assembly children.
+    print plate, while the STEP master and display GLB keep semantic assembly
+    coordinates. When ``part_colors`` is supplied, the same plate-aligned
+    physical parts become a separate-parts 3MF; no export path applies scale.
     """
     if not isinstance(parts, dict) or len(parts) < 2:
         raise BuildInvariantError("export_assembly requires at least two parts")
@@ -929,12 +1123,22 @@ def export_assembly(
             )
         normalized[part_name] = (shape, stats)
 
-    intent_path_resolved, intent = _intent_record(intent_path)
-    if intent_path_resolved is None or intent is None:
+    intent_path_resolved, intent_data = _read_intent(intent_path)
+    if intent_path_resolved is None or intent_data is None:
         raise BuildInvariantError("export_assembly requires an intent contract")
+    intent = {
+        "path": str(intent_path_resolved),
+        "sha256": _digest(intent_path_resolved),
+    }
     manufacturing = _validate_assembly_intent(
         intent_path_resolved, name, set(normalized)
     )
+    normalized_colors, material_regions = _part_color_plan(
+        part_colors,
+        intent_data,
+        set(normalized),
+    )
+    plate_profile = _bound_plate_profile(intent_data, intent_path_resolved)
     _validate_assembly_evidence(set(normalized))
     _validate_interface_evidence(manufacturing)
     output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
@@ -957,6 +1161,17 @@ def export_assembly(
                     f"assembly parts {left!r} and {right!r} overlap by "
                     f"{overlap:.6f} mm^3"
                 )
+
+    # Prove the profile-bound plate layout before writing export artifacts.
+    # Lightweight legacy/test intents without printability evidence retain the
+    # old unbounded serial arrangement, explicitly marked as unproven.
+    print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
+        {part_name: shape for part_name, (shape, _) in normalized.items()},
+        profile=plate_profile,
+    )
+    print_plate_stats = _stats(print_plate)
+    if not print_plate_stats["valid"]:
+        raise BuildInvariantError("print plate geometry is invalid")
 
     artifacts = {}
     children = []
@@ -983,12 +1198,6 @@ def export_assembly(
     assembly_stats = _stats(assembly_shape)
     if not assembly_stats["valid"]:
         raise BuildInvariantError("assembly geometry is invalid")
-    print_plate, _, plate_transforms = _print_plate(
-        {part_name: shape for part_name, (shape, _) in normalized.items()}
-    )
-    print_plate_stats = _stats(print_plate)
-    if not print_plate_stats["valid"]:
-        raise BuildInvariantError("print plate geometry is invalid")
     stl_path = output / f"{name}.stl"
     export_stl(print_plate, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
     artifacts["stl"] = {
@@ -1001,7 +1210,15 @@ def export_assembly(
     export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)
     _export_display_glb(
         (
-            (part_name, shape, _DISPLAY_TINTS[index % len(_DISPLAY_TINTS)])
+            (
+                part_name,
+                shape,
+                (
+                    _rgb_color(normalized_colors[part_name])
+                    if normalized_colors is not None
+                    else _DISPLAY_TINTS[index % len(_DISPLAY_TINTS)]
+                ),
+            )
             for index, (part_name, (shape, _)) in enumerate(normalized.items())
         ),
         display_glb_path,
@@ -1015,7 +1232,63 @@ def export_assembly(
         "sha256": _digest(display_glb_path),
     }
 
+    color_fields = {}
+    if normalized_colors is not None and material_regions is not None:
+        internal_plate_dir = output / ".amagine3d-internal" / name / "plate"
+        internal_plate_dir.mkdir(parents=True, exist_ok=True)
+        internal_plate_meshes = {}
+        entries = []
+        for part_name, shape in plate_parts.items():
+            path = internal_plate_dir / f"{name}-{part_name}.stl"
+            export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+            internal_plate_meshes[part_name] = {
+                "coordinate_frame": "plate-print",
+                "path": str(path.resolve()),
+                "scale": 1.0,
+                "sha256": _digest(path),
+            }
+            entries.append((str(path), normalized_colors[part_name], part_name))
+
+        archive_path = output / f"{name}.3mf"
+        three_mf = _write_part_color_archive(entries, archive_path, name)
+        artifacts["3mf"] = {
+            "coordinate_frame": "plate-print",
+            "path": str(archive_path.resolve()),
+            "scale": 1.0,
+            "sha256": _digest(archive_path),
+        }
+
+        material_plan = {
+            "archive_encodes": ["part_name", "rgb"],
+            "archive_omits": ["filament", "transmission"],
+            "color_scope": "part",
+            "coordinate_frame": "plate-print",
+            "part": name,
+            "regions": material_regions,
+            "requires_manual_slicer_assignment": any(
+                item["filament"] for item in material_regions
+            ),
+            "scale": 1.0,
+            "schema": "evidence-color-material-plan/v1",
+        }
+        material_plan_path = output / f"{name}_material-plan.json"
+        material_plan_path.write_text(
+            json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
+        )
+        artifacts["material_plan"] = {
+            "path": str(material_plan_path.resolve()),
+            "sha256": _digest(material_plan_path),
+        }
+        color_fields = {
+            "internal_part_meshes": {"plate-print": internal_plate_meshes},
+            "material_semantics": material_plan,
+            "part_colors": normalized_colors,
+            "print_package_mode": "separate_parts",
+            "three_mf": three_mf,
+        }
+
     report = {
+        "auto_scale": False,
         "assembly": {
             "max_overlap_mm3": float(max_overlap_mm3),
             "shape": assembly_stats,
@@ -1023,9 +1296,35 @@ def export_assembly(
         "artifacts": artifacts,
         "built_at": datetime.now(timezone.utc).isoformat(),
         "coordinates": {
-            "print": ["stl", *[f"stl:{part_name}" for part_name in normalized]],
+            "print": [
+                "stl",
+                *[f"stl:{part_name}" for part_name in normalized],
+                *(["3mf"] if normalized_colors is not None else []),
+            ],
             "assembly": ["step:assemble"],
             "display": ["glb:display"],
+        },
+        "coordinate_frames": {
+            "assembly-semantic": {
+                "artifacts": ["step:assemble", "glb:display"],
+                "scale": 1.0,
+            },
+            "part-print": {
+                "artifacts": [f"stl:{part_name}" for part_name in normalized],
+                "scale": 1.0,
+                "transforms": {
+                    part_name: record["transform"]
+                    for part_name, record in print_parts.items()
+                },
+            },
+            "plate-print": {
+                "artifacts": [
+                    "stl",
+                    *(["3mf"] if normalized_colors is not None else []),
+                ],
+                "part_transforms": plate_transforms,
+                "scale": 1.0,
+            },
         },
         "events": list(_EVENTS),
         "features": dict(_FEATURES),
@@ -1038,10 +1337,13 @@ def export_assembly(
         "print_parts": print_parts,
         "print_plate": {
             **print_plate_stats,
+            "layout": plate_layout,
             "part_transforms": plate_transforms,
         },
         "schema": "evidence-cad-assembly-build/v3",
+        "scale": 1.0,
         "source": _source_record(source_path),
+        **color_fields,
     }
     report_path = output / f"{name}_report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

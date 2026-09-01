@@ -179,14 +179,21 @@ Amagine3D/
 │   └── app.ts, index.ts             Express startup, static hosting, and runtime wiring
 ├── packages/a3d-runtime/src/          3D-native Agent model/session adapter, skill loading, and write guards
 ├── skills/
-│   ├── text-a3d/                  Single-color CAD generation and QA workflow
-│   └── text-a3d-color/            Multi-color CAD, palette, 3MF export, and QA workflow
+│   └── text-a3d/                  Unified single-material and color-aware CAD workflow
+│       └── color/MODE.md          Internal color-region, palette, and 3MF mode
 ├── bundled-projects/                  Read-only example projects shown in the workbench
 ├── workspace/sessions/<sessionId>/   Generated source, models, reports, and previews
 ├── .amagine-state/                   Agent sessions, uploads, and local runtime state
 ├── scripts/                           Python setup and license checks
 └── tests/                             Server, runtime, artifact, and UI-logic tests
 ```
+
+The Agent runtime exposes only the `text-a3d` skill. It selects
+`single-material` or `color` mode internally from permanent colors on
+manufactured geometry; non-manufactured display content does not trigger a
+color print by itself. Both implementations are colocated under
+`skills/text-a3d/`; the color runtime, examples, and references live under
+`skills/text-a3d/color/` and have no independent skill manifest.
 
 Each Agent session uses its own workspace. CAD scripts run with the server-managed Python environment, while the browser renders generated models with Three.js. Model credentials remain on the server. For more detail, see the [threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
 

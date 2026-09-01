@@ -54,6 +54,15 @@ def resolve_profile(
     outer = float(process["outer_wall_line_width_mm"])
     inner = float(process["inner_wall_line_width_mm"])
     loops = int(process["wall_loops"])
+    polygon = tool["polygon_mm"]
+    x_values = [float(point[0]) for point in polygon]
+    y_values = [float(point[1]) for point in polygon]
+    usable_extents = [
+        max(x_values) - min(x_values),
+        max(y_values) - min(y_values),
+        float(tool["height_mm"]),
+    ]
+    rotation_safe_diagonal = min(usable_extents)
     return {
         "derived": {
             "arachne_min_bead_mm": round(
@@ -63,6 +72,15 @@ def resolve_profile(
                 nozzle * defaults["arachne_min_feature_nozzle_percent"] / 100, 5
             ),
             "process_wall_target_mm": round(outer + inner * max(loops - 1, 0), 5),
+            "rotation_safe_envelope": {
+                "constraint": "sqrt(x_mm^2 + y_mm^2 + z_mm^2) <= max_spatial_diagonal_mm",
+                "max_spatial_diagonal_mm": round(rotation_safe_diagonal, 5),
+                "purpose": "choose inferred dimensions before modeling so arbitrary rigid rotations need no scaling",
+                "requires_excluded_zone_placement_check": bool(
+                    machine["excluded_polygons_mm"]
+                ),
+                "usable_extent_mm": [round(value, 5) for value in usable_extents],
+            },
             "single_line_floor_mm": outer,
         },
         "id": f"bbl-{machine_id}-{process_key}-t{tool_index}-standard",

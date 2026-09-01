@@ -1,27 +1,29 @@
----
-name: text-a3d-color
-description: >
-  Evidence-driven multi-color CAD and manufacturing-region synthesis. Creates
-  a colored print 3MF, clean manufacturing mesh, STEP assembly masters, and
-  display GLB models from explicit color semantics, deterministic palette
-  reduction, strict overlap/coverage checks, archive color readback, pinned
-  Bambu printability evidence, provenance hashes, and mandatory colored-view
-  review. Region meshes are internal intermediates, not printable part
-  deliverables.
-  Takes priority when reference colors identify screens, controls, text/logos,
-  materials, inlays, functional regions, or the object's recognizable palette,
-  even if the user does not mention multi-color, 3MF, or AMS.
----
+# Color manufacturing mode
 
-# Evidence-driven color CAD
+This is an internal mode of the discoverable `text-a3d` skill, not a separate
+skill. Enter this mode when permanent colors on manufactured geometry identify
+controls, text/logos, materials, inlays, printable bezels, functional regions,
+or the object's recognizable palette, even if the user does not mention
+multi-color, 3MF, or AMS. A non-manufactured display module or transient screen
+content does not select this mode by itself.
 
-This skill treats color as manufactured geometry with semantic purpose. A
+`<COLOR_MODE_DIR>` means this document's directory. It contains this mode's
+Python runtime, examples, and references. Resolve it to an absolute path before
+running commands from a nested output directory.
+`<SKILL_DIR>` means its parent `skills/text-a3d/` directory.
+
+For generated Python that combines root BRep/hybrid helpers with color export,
+add only the parent `<SKILL_DIR>` to `sys.path` and import color helpers through
+their namespace, for example `from color.export_3mf import write_color_archive`
+or `from color.cad_helpers import export_regions`. Never add both
+`<SKILL_DIR>` and `<COLOR_MODE_DIR>` as competing top-level import roots; both
+modes intentionally contain some same-named CLI modules.
+
+This mode treats color as manufactured geometry with semantic purpose. A
 valid 3MF object count is insufficient: region topology, stored palette,
 appearance, source evidence, and current-run provenance must agree.
 
-`<SKILL_DIR>` means this directory. Resolve it to an absolute path before
-running commands from a nested output directory. Outputs belong directly in the
-current session working directory.
+Outputs belong directly in the current session working directory.
 
 ## Resources
 
@@ -53,10 +55,11 @@ runtime and use its Python executable instead of an unrelated system Python.
 
 ## 0. Route and interpret color
 
-Use this skill when object-owned color affects identity or separates a screen,
-control, logo/text, material, inlay, or functional region. Do not route here
-for lighting, shadow, reflection, background, or photo noise alone. An explicit
-single-color request routes to `text-a3d`.
+Use this mode when permanent manufactured color affects identity or separates a
+control, printable bezel, logo/text, material, inlay, or functional region. Do
+not route here for lighting, shadow, reflection, background, photo noise, or an
+excluded LED/LCD visual alone. An explicit single-color request selects the
+unified skill's `single-material` mode.
 
 When the user names a specific real, catalog, branded, or fictional object, the
 named object sets the identity target. When adequate reference images,
@@ -66,9 +69,12 @@ regions. When no reference evidence is supplied, choose `reference-inspired` or
 `recognizable-form`, generate a faithful-inspired object from broad known
 landmarks, and clearly report that it is not an exact replica.
 
-Distinguish permanent printed color from transient display content. A physical
-LED/LCD is normally one screen region; model individual lit pixels only for a
-requested static decorative face or mosaic.
+Distinguish permanent printed color from transient display content. A real
+LED/LCD module is normally a non-manufactured `displayComponent`: its shell
+aperture and module keepout are physical cutters, while its glass/content visual
+appears only in the final display GLB. It is not a color region and never enters
+STL/3MF. A printable bezel, opaque dummy screen, or requested static decorative
+face/mosaic may be a manufactured color region.
 
 RGB stored in a 3MF does not prove optical behavior. Record every region as
 `opaque`, `translucent`, or `transparent` in the intent when optical behavior
@@ -79,22 +85,50 @@ object needs real separately printed parts, design printable interfaces first;
 do not turn `NAME-region-REGION.stl` into a user deliverable.
 The default `printability.print_package_mode` is `co_print_body`: all color
 regions belong to one printable body and must be packaged as one top-level 3MF
-mesh build item with per-triangle color properties. Use `separate_parts` only
-for intentional multipart prints with real assembly interfaces.
+mesh build item with per-triangle color properties. Choose the colored export
+path from the physical representation, not from a second color workflow:
+
+- For a BRep-master multipart assembly whose colors exactly follow whole
+  physical-part boundaries, call the root
+  `export_assembly(..., part_colors={...})`. Keep one v4 intent, one assembly
+  report, and one set of physical shapes for STEP, STL, 3MF, and display GLB.
+- For multiple co-printed colors within one physical body, use
+  `color.cad_helpers.export_regions()` and `co_print_body`.
+- For a mesh-master part, mixed mesh/BRep graph, or multipart graph containing
+  within-part regions, use the semantic scene and `hybrid_compile.py`.
+
+Do not obtain a multipart assembly merely by switching color-region proxies to
+`separate_parts`; define the physical parts and their paired interfaces first.
+
+Map every printed part to a declared mating interface unless it is explicitly a
+loose or adhesive-installed item. In particular, generate a button and its
+retained guide from the same `retained_slider` parameters rather than placing an
+unretained colored cap beside the housing.
 
 ## 1. Open the evidence run
 
 Create a marker before new files:
 
 ```bash
-python "<SKILL_DIR>/freshness_check.py" --mark ".<name>.generation-start"
-python "<SKILL_DIR>/bambu_profile.py" --machine <machine-id> --nozzle <0.2|0.4|0.6|0.8> --tool <N> --out "<name>_printer-profile.json"
-python "<SKILL_DIR>/reference_analyze.py" "/absolute/reference.png" --out "<name>_reference.json"
+python "<COLOR_MODE_DIR>/freshness_check.py" --mark ".<name>.generation-start"
+python "<COLOR_MODE_DIR>/bambu_profile.py" --machine <machine-id> --nozzle <0.2|0.4|0.6|0.8> --tool <N> --out "<name>_printer-profile.json"
+python "<COLOR_MODE_DIR>/reference_analyze.py" "/absolute/reference.png" --out "<name>_reference.json"
 ```
 
 Honor a named user or project printer. Otherwise omit `--machine` to resolve
 the conservative A1 mini default and record the assumption. Read the generated
 profile before modeling; never change it later merely to clear QA.
+
+Read `derived.rotation_safe_envelope` before choosing inferred dimensions and
+copy its explicit spatial-diagonal constraint into the primary-envelope
+acceptance.
+
+When overall dimensions are inferred, choose them before geometry construction
+so the semantic envelope's spatial bounding-box diagonal is no greater than the
+smallest usable build extent. This keeps every arbitrary rigid rotation inside
+the machine from the first build. Record those dimensions in the intent and
+generate at `scale: 1`; if the user fixed a larger size, preserve it and record
+only the orientations that fit.
 
 If the user supplied no image, skip `reference_analyze.py`, set
 `reference_files` to `[]`, and record which identity, dimension, and palette
@@ -104,7 +138,7 @@ as reference-inspired or recognizable-form, not exact reference reproduction.
 When source colors exceed available color channels, create a proposed plan:
 
 ```bash
-python "<SKILL_DIR>/palette_plan.py" "<name>_reference.json" --max-colors <N> [--keep "#RRGGBB"] --out "<name>_palette.json"
+python "<COLOR_MODE_DIR>/palette_plan.py" "<name>_reference.json" --max-colors <N> [--keep "#RRGGBB"] --out "<name>_palette.json"
 ```
 
 Write `<name>_intent.json` from
@@ -112,7 +146,7 @@ Write `<name>_intent.json` from
 frequency: rare logo/control colors are not disposable. Validate:
 
 ```bash
-python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
+python "<COLOR_MODE_DIR>/intent_contract.py" "<name>_intent.json"
 ```
 
 The contract must bind the profile hash, fixed object coordinate system, build
@@ -136,6 +170,16 @@ or separately assembled insert for every boundary. Build the complete parent
 form first when regions collectively represent one co-printed body; this
 enables coverage checking, a clean whole-body STL, and support analysis without
 false positives at material interfaces.
+
+Before partitioning color, decide the physical part tree independently. For
+example, `housing`, `speaker-base`, optional `printable-bezel`, and `button-1`
+are printed parts; the screen module is a non-manufactured assembly reference;
+`ivory`, `fabric-gray`, `black`, and `coral` are appearance assignments or
+regions only on printed geometry. A single part may contain several co-printed
+regions, and several parts may share one color. For appearance-first
+Three.js/build123d work, follow
+the parent skill's mutable semantic-scene workflow: compile booleans and paired
+interfaces first, then put PBR materials on the resulting physical meshes.
 
 For replica work, build the semantic object first and choose print orientation
 second. Color boundaries, palette reductions, and support strategy must not
@@ -168,7 +212,7 @@ IDs:
 import sys
 sys.path.insert(0, r"<SKILL_DIR>")
 from build123d import *
-from cad_helpers import parameter, observe, checked_cut, export_regions
+from color.cad_helpers import parameter, observe, checked_cut, export_regions
 
 NAME = "<name>"
 INTENT = "<name>_intent.json"
@@ -185,32 +229,39 @@ observe(parent, "complete-parent", "parent")
 # Derive regions through declared splits/insets; no coincident duplicate skins.
 regions = {
     "housing": (housing, "#E8E4DC"),
-    "screen": (screen, "#171A1D"),
+    "printable-bezel": (printable_bezel, "#171A1D"),
 }
 
 if __name__ == "__main__":
     export_regions(regions, NAME, parent=parent, intent_path=INTENT)
 ```
 
-`export_regions()` chooses one print orientation from the semantic parent shape
-before final export. It evaluates the six bed-facing orientations: identity,
-front/back side lays, left/right side lays, and a top-down 180-degree flip. Each
-candidate records the uniform scale needed to fit the selected profile and is
-scored after that scale is applied, so a lower-support pose is not rejected just
-because it is too large before scaling. Support burden is estimated with a
-support-volume proxy, not only downward face area. Support burden and bed
-contact quality outrank low print height and scale penalty, so a taller
-top-down pose may beat a lower side-lay when it materially reduces supports.
+`export_regions()` chooses one rigid print orientation from the semantic parent
+shape before final export. It evaluates the six bed-facing orientations:
+identity, front/back side lays, left/right side lays, and a top-down 180-degree
+flip. Each candidate records the uniform scale that *would* be needed as repair
+evidence, but export never applies it: a hidden scale would change walls,
+clearances, interfaces, STEP/display agreement, and the requested object. Size
+the canonical model for the printer while setting its driving dimensions; if no
+rigid orientation fits, rebuild those dimensions or report the fit failure.
+Support burden is estimated with a support-volume proxy, not only downward face
+area. Support burden and bed contact quality outrank low print height among the
+rigid candidates that actually fit.
 It then emits `NAME.3mf` as the preferred multi-color print package and
 `NAME.stl` as the clean whole-body manufacturing mesh in selected print
 coordinates. `NAME-assemble.step` and `NAME-display.glb` preserve the semantic
 object orientation for CAD review and visual fidelity. The report keeps the
-original semantic bounds plus rotation/scale/translation evidence under
+original semantic bounds plus rigid rotation/translation evidence and explicit
+unit scale under
 `print_orientation` and `manufacturing.transform`.
 In `co_print_body` mode, the 3MF stores one top-level mesh build item with
-per-triangle colors and region metadata. In `separate_parts` mode, each region
-may remain a top-level build item, but only when the intent says those are real
-separately printed parts.
+per-triangle colors and region metadata. `export_regions()` is for that one-body
+case. For BRep-master colored multipart output whose color boundaries equal the
+physical part boundaries, use root `export_assembly(part_colors=...)`; it emits
+one top-level 3MF item per already-declared physical part. Use the hybrid
+compiler when any part is mesh-master or carries within-part regions. In every
+case, a top-level 3MF item is a physical part with an interface, not a color
+proxy.
 It requires `parent=` and writes hidden internal print-pose region meshes for
 3MF packing plus hidden semantic-pose region meshes for colored visual review;
 neither set is a user deliverable. The STL is the coverage-checked parent
@@ -240,7 +291,7 @@ on an isolated co-printed region because adjacent materials may provide
 support:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" ".amagine3d-internal/<name>/<name>-region-<region>.stl" --topology-only --region <region> --components <N> --out "<name>-region-<region>_mesh-audit.json"
+python "<COLOR_MODE_DIR>/qa_check.py" ".amagine3d-internal/<name>/<name>-region-<region>.stl" --topology-only --region <region> --components <N> --out "<name>-region-<region>_mesh-audit.json"
 ```
 
 Run a lightweight static print-package QA on the 3MF. This checks package
@@ -248,14 +299,14 @@ provenance, package mode, region names/colors, units, top-level build item,
 dimensions, Z0, and bed fit:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>.3mf" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --tol <T> --require-z0 --out "<name>_package-audit.json"
+python "<COLOR_MODE_DIR>/qa_check.py" "<name>.3mf" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --tol <T> --require-z0 --out "<name>_package-audit.json"
 ```
 
 Then run full Bambu manufacturing mesh checks exactly once on the clean whole
 body STL:
 
 ```bash
-python "<SKILL_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --tol <T> --require-z0 --out "<name>_mesh-audit.json"
+python "<COLOR_MODE_DIR>/qa_check.py" "<name>.stl" --profile "<name>_printer-profile.json" --intent "<name>_intent.json" --report "<name>_report.json" --components <N> --tol <T> --require-z0 --out "<name>_mesh-audit.json"
 ```
 
 Read every `fail`, `warning`, and `not_evaluated` result. A region topology
@@ -281,13 +332,13 @@ color columns, or simplifying identity-bearing geometry.
 Then verify that 3MF names and colors match the build report:
 
 ```bash
-python "<SKILL_DIR>/assembly_check.py" "<name>_report.json" "<name>.3mf" --out "<name>_assembly-audit.json"
+python "<COLOR_MODE_DIR>/assembly_check.py" "<name>_report.json" "<name>.3mf" --out "<name>_assembly-audit.json"
 ```
 
 Then verify the STEP assembly master with OCCT:
 
 ```bash
-python "<SKILL_DIR>/step_check.py" "<name>-assemble.step" --intent "<name>_intent.json" --report "<name>_report.json" --out "<name>_assemble-audit.json"
+python "<COLOR_MODE_DIR>/step_check.py" "<name>-assemble.step" --intent "<name>_intent.json" --report "<name>_report.json" --out "<name>_assemble-audit.json"
 ```
 
 `qa_check.py` and `step_check.py` read contract dimensions from `--intent`
@@ -301,7 +352,7 @@ as renderer inputs. Use print-pose meshes and `NAME.3mf` only for package and
 manufacturing checks, not for judging whether the model was built well:
 
 ```bash
-python "<SKILL_DIR>/render_preview.py" --part ".amagine3d-internal/<name>/semantic/<name>-region-<region-a>.stl=#RRGGBB" --part ".amagine3d-internal/<name>/semantic/<name>-region-<region-b>.stl=#RRGGBB" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
+python "<COLOR_MODE_DIR>/render_preview.py" --part ".amagine3d-internal/<name>/semantic/<name>-region-<region-a>.stl=#RRGGBB" --part ".amagine3d-internal/<name>/semantic/<name>-region-<region-b>.stl=#RRGGBB" --out "<name>_views.png" --reference-view <front|side|top|bottom|isometric> --reference-out "<name>_reference-view.png" --report "<name>_render.json"
 ```
 
 Use `read` on both. Judge geometry landmarks, silhouette/depth, region
@@ -322,16 +373,16 @@ Repair the failed evidence class: parent geometry, region boundary, palette
 mapping, mesh topology, bed fit, feature size, broad wall-thickness failure,
 excessive support burden, archive assignment, or visual placement. Bed-fit and
 excessive-height failures should first be repaired by a different whole-package
-orientation when a candidate exists. If a lower-support candidate only misses
-the profile before scaling, prefer the recorded uniform print scale over a
-worse-support pose unless the user's task requires fixed final dimensions.
+rigid orientation when a candidate exists. The recorded fit scale is diagnostic
+only: change inferred driving dimensions in the canonical source and rebuild,
+or report bed-fit failure. Never apply that scale during export.
 Overlap, coverage, or visual failures repair the semantic source model. Feature
 and wall repairs are for
 critical or broad process failures, not isolated cosmetic advisory risk.
 Overhang repairs are required only when support-free output was explicitly
 promised or the support burden is likely to make the print process fail;
 otherwise preserve the semantic shape and declare supports required. Never
-lower the profile limits or scale fixed user dimensions to clear QA. Never
+lower the profile limits or silently scale any artifact to clear QA. Never
 chase warning-free QA by changing object identity, expected part relationships,
 meaningful proportions, appearance landmarks, or semantic color boundaries.
 Every change requires rebuild, all affected internal region topology checks

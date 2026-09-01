@@ -17,8 +17,8 @@ import trimesh
 
 
 ROOT = Path(__file__).resolve().parents[2]
-COLOR = ROOT / "skills" / "text-a3d-color"
 SINGLE = ROOT / "skills" / "text-a3d"
+COLOR = SINGLE / "color"
 
 
 def load_module(name: str, path: Path):
@@ -72,6 +72,10 @@ class IndependentColorProfileTests(unittest.TestCase):
             catalog, machine_name="h2d", nozzle=0.4, tool_index=1
         )
         self.assertEqual(mini["derived"]["process_wall_target_mm"], 0.87)
+        self.assertEqual(
+            mini["derived"]["rotation_safe_envelope"]["max_spatial_diagonal_mm"],
+            180.0,
+        )
         self.assertEqual(h2d["machine"]["selected_tool"]["height_mm"], 325)
 
 class PixelAnalyzerTests(unittest.TestCase):
@@ -758,7 +762,7 @@ class ColorPipelineTests(unittest.TestCase):
             )
             self.assertEqual(assemble.returncode, 0, assemble.stdout + assemble.stderr)
 
-    def test_orientation_candidates_include_top_down_and_scale_evidence(self):
+    def test_orientation_candidates_keep_scale_as_repair_evidence_only(self):
         profile = color_profile.resolve_profile(
             color_profile.load_catalog(),
             machine_name="a1-mini",
@@ -772,17 +776,17 @@ class ColorPipelineTests(unittest.TestCase):
         top_down = by_name["rotate-x-180"]
         self.assertEqual(top_down["bed_contact_semantic_face"], "top")
         self.assertFalse(top_down["uniform_scale_to_fit_profile"]["fits_without_scaling"])
-        self.assertTrue(top_down["fits_profile"])
+        self.assertFalse(top_down["fits_profile"])
         self.assertTrue(top_down["requires_uniform_scale"])
         self.assertAlmostEqual(
             top_down["uniform_scale_to_fit_profile"]["scale"],
             180 / 220,
             places=6,
         )
-        self.assertAlmostEqual(top_down["scale_to_apply"], 180 / 220, places=12)
+        self.assertEqual(top_down["scale_to_apply"], 1.0)
         self.assertEqual(
             top_down["print_dimensions_mm"],
-            [round(40 * 180 / 220, 5), round(20 * 180 / 220, 5), 180.0],
+            [40.0, 20.0, 220.0],
         )
 
     def test_bottom_matched_view_is_available(self):

@@ -272,7 +272,7 @@ test(
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'amagine-color-parameter-'));
     try {
-      const skillRoot = join(PROJECT_ROOT, 'skills', 'text-a3d-color');
+      const skillRoot = join(PROJECT_ROOT, 'skills', 'text-a3d', 'color');
       await writeFile(
         join(root, 'color_bar_intent.json'),
         `${JSON.stringify({

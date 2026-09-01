@@ -8,7 +8,32 @@ import json
 from pathlib import Path
 import sys
 
-from export_3mf import inspect_color_archive
+if __package__:
+    from .export_3mf import inspect_color_archive
+else:
+    from export_3mf import inspect_color_archive
+
+
+COLOR_BUILD_SCHEMA = "evidence-color-build/v5"
+UNIFIED_ASSEMBLY_SCHEMA = "evidence-cad-assembly-build/v3"
+
+
+def _expected_colors(report: dict) -> dict[str, str]:
+    if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA:
+        values = report.get("part_colors", {})
+        return {
+            name: color.upper()
+            for name, color in values.items()
+            if isinstance(name, str) and isinstance(color, str)
+        } if isinstance(values, dict) else {}
+    values = report.get("regions", {})
+    return {
+        name: item["color"].upper()
+        for name, item in values.items()
+        if isinstance(name, str)
+        and isinstance(item, dict)
+        and isinstance(item.get("color"), str)
+    } if isinstance(values, dict) else {}
 
 
 def main() -> int:
@@ -22,20 +47,26 @@ def main() -> int:
     report = json.loads(Path(args.report).read_text(encoding="utf-8"))
     archive = inspect_color_archive(args.three_mf)
     archive_hash = sha256(Path(args.three_mf).read_bytes()).hexdigest()
-    expected = {
-        name: item["color"].upper() for name, item in report.get("regions", {}).items()
-    }
+    expected = _expected_colors(report)
     region_inventory = archive.get("regions") or archive.get("objects", [])
     observed = {
         item["name"]: (item["color"] or "").upper() for item in region_inventory
     }
-    package_mode = report.get("print_package_mode", "co_print_body")
+    package_mode = report.get(
+        "print_package_mode",
+        "separate_parts"
+        if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA
+        else "co_print_body",
+    )
     build_items = archive.get("build_items", [])
     checks = [
         {
             "name": "build_report_schema",
-            "pass": report.get("schema") == "evidence-color-build/v5",
-            "expected": "evidence-color-build/v5",
+            "pass": report.get("schema") in {
+                COLOR_BUILD_SCHEMA,
+                UNIFIED_ASSEMBLY_SCHEMA,
+            },
+            "expected": [COLOR_BUILD_SCHEMA, UNIFIED_ASSEMBLY_SCHEMA],
             "observed": report.get("schema"),
         },
         {
@@ -69,6 +100,31 @@ def main() -> int:
                 "top_level_kinds": [
                     item.get("object_kind")
                     for item in build_items
+                ],
+            },
+        },
+        {
+            "name": "print_package_separate_part_build_items",
+            "pass": package_mode != "separate_parts"
+            or (
+                archive.get("build_item_count") == len(expected)
+                and bool(build_items)
+                and all(
+                    item.get("object_kind") == "mesh" for item in build_items
+                )
+            ),
+            "expected": (
+                {
+                    "build_item_count": len(expected),
+                    "top_level_kind": "mesh",
+                }
+                if package_mode == "separate_parts"
+                else "co-print package"
+            ),
+            "observed": {
+                "build_item_count": archive.get("build_item_count"),
+                "top_level_kinds": [
+                    item.get("object_kind") for item in build_items
                 ],
             },
         },

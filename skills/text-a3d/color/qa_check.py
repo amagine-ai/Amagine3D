@@ -15,7 +15,10 @@ SKILL_DIR = Path(__file__).resolve().parent
 if str(SKILL_DIR) not in sys.path:
     sys.path.insert(0, str(SKILL_DIR))
 
-from export_3mf import inspect_color_archive, load_color_archive_mesh
+if __package__:
+    from .export_3mf import inspect_color_archive, load_color_archive_mesh
+else:
+    from export_3mf import inspect_color_archive, load_color_archive_mesh
 
 
 FACE_AXES = {
@@ -36,6 +39,10 @@ PLACED_OPENING_KINDS = {
     "window",
 }
 PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
+COLOR_INTENT_SCHEMA = "evidence-color-intent/v3"
+COLOR_BUILD_SCHEMA = "evidence-color-build/v5"
+UNIFIED_INTENT_SCHEMA = "evidence-cad-intent/v4"
+UNIFIED_ASSEMBLY_SCHEMA = "evidence-cad-assembly-build/v3"
 
 
 class Audit:
@@ -121,10 +128,30 @@ def _intent_dimensions(intent: dict | None) -> tuple[float, float, float] | None
     return tuple(values)
 
 
-def _report_print_dimensions(report: dict | None) -> tuple[float, float, float] | None:
+def _report_print_record(
+    report: dict | None,
+    artifact_key: str | None,
+) -> dict | None:
     if not isinstance(report, dict):
         return None
-    value = report.get("manufacturing", {}).get("bbox_mm", {}).get("size")
+    if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA:
+        if isinstance(artifact_key, str) and artifact_key.startswith("stl:"):
+            return report.get("print_parts", {}).get(
+                artifact_key.removeprefix("stl:"),
+                {},
+            )
+        if artifact_key in {"3mf", "stl"}:
+            return report.get("print_plate", {})
+        return None
+    return report.get("manufacturing", {})
+
+
+def _report_print_dimensions(
+    report: dict | None,
+    artifact_key: str | None,
+) -> tuple[float, float, float] | None:
+    record = _report_print_record(report, artifact_key)
+    value = record.get("bbox_mm", {}).get("size") if isinstance(record, dict) else None
     if not isinstance(value, list) or len(value) != 3:
         return None
     try:
@@ -136,6 +163,93 @@ def _report_print_dimensions(report: dict | None) -> tuple[float, float, float] 
 
 def _digest(path: str) -> str:
     return sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _report_artifact_key(
+    report: dict,
+    model_path: Path,
+    report_dir: Path,
+) -> str:
+    artifacts = report.get("artifacts", {})
+    if not isinstance(artifacts, dict):
+        raise ValueError("build report artifacts must be an object")
+    allowed = (
+        {"3mf"}
+        if model_path.suffix.lower() == ".3mf"
+        else {
+            key
+            for key in artifacts
+            if key == "stl" or key == "stl:manufacturing" or key.startswith("stl:")
+        }
+    )
+    digest = _digest(str(model_path))
+    matches = [
+        key
+        for key in allowed
+        if isinstance(artifacts.get(key), dict)
+        and artifacts[key].get("sha256") == digest
+    ]
+    resolved = model_path.resolve()
+    path_matches = []
+    for key in matches:
+        raw_path = artifacts[key].get("path")
+        if not isinstance(raw_path, str):
+            continue
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = report_dir / candidate
+        if candidate.resolve() == resolved:
+            path_matches.append(key)
+    if len(path_matches) == 1:
+        return path_matches[0]
+    if len(matches) != 1:
+        kind = (
+            "3MF print package"
+            if model_path.suffix.lower() == ".3mf"
+            else "manufacturing STL"
+        )
+        raise ValueError(f"build report does not bind the supplied {kind}")
+    return matches[0]
+
+
+def _expected_colors(report: dict | None) -> dict[str, str]:
+    if not isinstance(report, dict):
+        return {}
+    if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA:
+        colors = report.get("part_colors", {})
+        return {
+            name: color.upper()
+            for name, color in colors.items()
+            if isinstance(name, str) and isinstance(color, str)
+        } if isinstance(colors, dict) else {}
+    regions = report.get("regions", {})
+    return {
+        name: item["color"].upper()
+        for name, item in regions.items()
+        if isinstance(name, str)
+        and isinstance(item, dict)
+        and isinstance(item.get("color"), str)
+    } if isinstance(regions, dict) else {}
+
+
+def _intent_colors(intent: dict | None) -> dict[str, str]:
+    if not isinstance(intent, dict):
+        return {}
+    return {
+        item["name"]: item["hex"].upper()
+        for item in intent.get("color_regions", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and isinstance(item.get("hex"), str)
+    }
+
+
+def _report_coordinate_frame(report: dict | None, artifact_key: str | None) -> str | None:
+    if not isinstance(report, dict) or artifact_key is None:
+        return None
+    if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA:
+        return "part-print" if artifact_key.startswith("stl:") else "plate-print"
+    return "print"
 
 
 def _load_profile(path: str) -> tuple[dict, str]:
@@ -323,6 +437,8 @@ def region_continuity_observation(intent: dict | None, report: dict | None) -> d
         "skipped": [],
     }
     if not isinstance(intent, dict) or not isinstance(report, dict):
+        return result
+    if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA:
         return result
     report_regions = report.get("regions", {})
     if not isinstance(report_regions, dict):
@@ -631,7 +747,20 @@ def main() -> int:
         profile, profile_hash = _load_profile(args.profile) if args.profile else (None, None)
         intent = _load_json(args.intent) if args.intent else None
         report = _load_json(args.report) if args.report else None
-        expected_dimensions = _report_print_dimensions(report) or _intent_dimensions(intent)
+        report_artifact = None
+        if report is not None and not args.topology_only:
+            report_artifact = _report_artifact_key(
+                report,
+                model_path,
+                Path(args.report).resolve().parent,
+            )
+        report_dimensions = _report_print_dimensions(report, report_artifact)
+        expected_dimensions = (
+            report_dimensions
+            if isinstance(report, dict)
+            and report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA
+            else report_dimensions or _intent_dimensions(intent)
+        )
         if intent is not None:
             if profile is None:
                 raise ValueError("--intent requires --profile")
@@ -645,10 +774,15 @@ def main() -> int:
                 "manufacturing audit requires --profile, --intent, and --report"
             )
         if not args.topology_only:
-            if intent.get("schema") != "evidence-color-intent/v3":
-                raise ValueError("unsupported color intent schema; expected v3")
-            if report.get("schema") != "evidence-color-build/v5":
-                raise ValueError("unsupported color build report schema; expected v5")
+            contract_pair = (intent.get("schema"), report.get("schema"))
+            if contract_pair not in {
+                (COLOR_INTENT_SCHEMA, COLOR_BUILD_SCHEMA),
+                (UNIFIED_INTENT_SCHEMA, UNIFIED_ASSEMBLY_SCHEMA),
+            }:
+                raise ValueError(
+                    "unsupported intent/build schema pair for color QA: "
+                    f"{contract_pair!r}"
+                )
             if report.get("part") != intent.get("part"):
                 raise ValueError("build report part does not match the intent contract")
             if report.get("intent", {}).get("sha256") != _digest(args.intent):
@@ -657,19 +791,19 @@ def main() -> int:
                 raise ValueError(
                     "printability.print_package_mode must be co_print_body or separate_parts"
                 )
-            artifacts = report.get("artifacts", {})
-            if is_print_package:
-                archive = artifacts.get("3mf", {})
-                if archive.get("sha256") != _digest(args.model):
-                    raise ValueError(
-                        "build report is not bound to the supplied 3MF print package"
-                    )
-            else:
-                manufacturing = artifacts.get("stl", artifacts.get("stl:manufacturing", {}))
-                if manufacturing.get("sha256") != _digest(args.model):
-                    raise ValueError(
-                        "build report is not bound to the supplied manufacturing STL"
-                    )
+            if is_print_package and report_artifact != "3mf":
+                raise ValueError("build report does not bind the supplied 3MF print package")
+            if not is_print_package and not str(report_artifact).startswith("stl"):
+                raise ValueError("build report does not bind the supplied manufacturing STL")
+            if (
+                report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA
+                and not _expected_colors(report)
+            ):
+                raise ValueError("unified assembly report has no part_colors")
+            if _intent_colors(intent) != _expected_colors(report):
+                raise ValueError(
+                    "intent color declarations do not match the build report"
+                )
             target = intent.get("printability", {}).get("minimum_wall_target_mm")
             if not isinstance(target, (int, float)) or isinstance(target, bool) or target <= 0:
                 raise ValueError("intent minimum wall target must be positive")
@@ -706,11 +840,7 @@ def main() -> int:
 
     if is_print_package:
         archive = package or inspect_color_archive(args.model)
-        expected_regions = {
-            name: item["color"].upper()
-            for name, item in (report or {}).get("regions", {}).items()
-            if isinstance(item, dict) and isinstance(item.get("color"), str)
-        }
+        expected_regions = _expected_colors(report)
         region_inventory = archive.get("regions") or archive.get("objects", [])
         observed_regions = {
             item["name"]: (item["color"] or "").upper()
@@ -753,6 +883,27 @@ def main() -> int:
                 },
                 {
                     "build_item_count": 1,
+                    "top_level_kind": "mesh",
+                },
+                category="print-package",
+            )
+        elif expected_package_mode == "separate_parts":
+            build_items = archive.get("build_items", [])
+            audit.add(
+                "print_package_separate_part_build_items",
+                int(archive.get("build_item_count", 0)) == len(expected_regions)
+                and bool(build_items)
+                and all(
+                    item.get("object_kind") == "mesh" for item in build_items
+                ),
+                {
+                    "build_item_count": archive.get("build_item_count", 0),
+                    "top_level_kinds": [
+                        item.get("object_kind") for item in build_items
+                    ],
+                },
+                {
+                    "build_item_count": len(expected_regions),
                     "top_level_kind": "mesh",
                 },
                 category="print-package",
@@ -819,12 +970,13 @@ def main() -> int:
                     category="printability",
                     repair={
                         "preferred_actions": [
-                            "Select a lower-support whole-package print orientation and apply the recorded uniform print scale when needed.",
+                            "Select a fitting rigid whole-package print orientation; recorded fit scale is diagnostic only.",
+                            "Revise inferred source dimensions and rebuild when no rigid orientation fits.",
                             "Use a supported larger printer only when dimensions are fixed.",
                         ],
                     },
                 )
-            stl_record = (report or {}).get("manufacturing", {})
+            stl_record = _report_print_record(report, report_artifact) or {}
             stl_size = _bbox_size(stl_record)
             if stl_size is not None:
                 deltas = [abs(float(dims[index]) - stl_size[index]) for index in range(3)]
@@ -857,6 +1009,10 @@ def main() -> int:
                 "sha256": profile_hash,
             } if profile is not None else None),
             "report": str(Path(args.report).resolve()) if args.report else None,
+            "report_artifact": report_artifact,
+            "report_coordinate_frame": _report_coordinate_frame(
+                report, report_artifact
+            ),
             "schema": "evidence-color-print-package-audit/v1",
             "scope": "print-package",
             "status": audit.status,
@@ -913,7 +1069,8 @@ def main() -> int:
                 "Do not flatten or simplify replica geometry to improve bed fit.",
             ],
             "preferred_actions": [
-                "Use the selected whole-package print orientation and recorded uniform print scale.",
+                "Use a fitting rigid print orientation; never apply export-time scale.",
+                "Revise inferred source dimensions and rebuild when no rigid orientation fits.",
                 "Split only where the contract permits a real assembly interface.",
                 "Use a supported larger printer only when dimensions are fixed.",
             ],
@@ -1080,6 +1237,10 @@ def main() -> int:
         } if profile is not None else None),
         "region": args.region,
         "report": str(Path(args.report).resolve()) if args.report else None,
+        "report_artifact": report_artifact,
+        "report_coordinate_frame": _report_coordinate_frame(
+            report, report_artifact
+        ),
         "schema": "evidence-color-mesh-audit/v4",
         "scope": "topology" if args.topology_only else "manufacturing",
         "status": audit.status,

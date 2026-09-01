@@ -21,12 +21,17 @@ REPRESENTATIONS = {"full-3d", "orthographic-solid", "relief", "surface-led"}
 SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
 MANUFACTURING_MODES = {"multipart", "single-part"}
+PART_INSTALLATIONS = {"adhesive", "interface", "loose"}
 INTERFACE_CONNECTIONS = {
+    "collar-socket",
     "dovetail",
     "glue-face",
+    "hinge-pin",
+    "inset-pocket",
     "peg-socket",
     "pin-socket",
     "press-fit",
+    "retained-slider",
     "snap-fit",
     "tab-slot",
     "threaded-insert",
@@ -34,6 +39,8 @@ INTERFACE_CONNECTIONS = {
 ASSEMBLY_AXES = {"+X", "+Y", "+Z", "-X", "-Y", "-Z"}
 INTENT_SCHEMA = "evidence-cad-intent/v4"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
+HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
+MATERIAL_TRANSMISSIONS = {"opaque", "translucent", "transparent"}
 FEATURE_KINDS = {
     "additive",
     "button",
@@ -176,6 +183,7 @@ def validate_manufacturing(
         if "interfaces" in manufacturing:
             errors.append("manufacturing.interfaces is only valid for multipart")
     elif mode == "multipart":
+        interface_exempt_parts: set[str] = set()
         if not isinstance(raw_parts, list) or len(raw_parts) < 2:
             errors.append("manufacturing.parts must declare at least two parts")
         else:
@@ -189,6 +197,14 @@ def validate_manufacturing(
                     errors.append(f"manufacturing.parts[{index}].name is invalid")
                 else:
                     names.append(part_name)
+                    installation = part.get("installation", "interface")
+                    if installation not in PART_INSTALLATIONS:
+                        errors.append(
+                            f"manufacturing.parts[{index}].installation must be "
+                            "interface, adhesive, or loose"
+                        )
+                    elif installation != "interface":
+                        interface_exempt_parts.add(part_name)
                 for key in ("role", "acceptance"):
                     if not isinstance(part.get(key), str) or not part[key].strip():
                         errors.append(f"manufacturing.parts[{index}].{key} is required")
@@ -200,6 +216,7 @@ def validate_manufacturing(
             errors.append("manufacturing.interfaces must declare at least one interface")
         else:
             interface_ids: list[str] = []
+            connected_parts: set[str] = set()
             for index, interface in enumerate(interfaces):
                 if not isinstance(interface, dict):
                     errors.append(
@@ -231,6 +248,8 @@ def validate_manufacturing(
                         "manufacturing.interfaces"
                         f"[{index}].between references unknown parts"
                     )
+                else:
+                    connected_parts.update(between)
                 connection = interface.get("connection")
                 if connection not in INTERFACE_CONNECTIONS:
                     errors.append(
@@ -280,6 +299,78 @@ def validate_manufacturing(
                     )
             if len(interface_ids) != len(set(interface_ids)):
                 errors.append("manufacturing interface ids must be unique")
+            unconnected = sorted(
+                part_names - connected_parts - interface_exempt_parts
+            )
+            if unconnected:
+                errors.append(
+                    "manufacturing.parts require a declared interface or explicit "
+                    "adhesive/loose installation: " + ", ".join(unconnected)
+                )
+    return errors
+
+
+def validate_color_regions(color_regions, manufacturing) -> list[str]:
+    """Validate optional one-color-per-physical-part declarations.
+
+    The unified BRep multipart exporter uses these records as the intent-side
+    source for ``part_colors``.  Region names therefore match physical part
+    names exactly; arbitrary within-part color partitions remain the color
+    mode's ``export_regions`` workflow.
+    """
+    if color_regions is None:
+        return []
+    errors: list[str] = []
+    if not isinstance(manufacturing, dict) or manufacturing.get("mode") != "multipart":
+        errors.append("color_regions in the unified intent require manufacturing.mode multipart")
+        return errors
+    if not isinstance(color_regions, list) or not color_regions:
+        return ["color_regions must be a non-empty list when declared"]
+
+    names: list[str] = []
+    for index, region in enumerate(color_regions):
+        prefix = f"color_regions[{index}]"
+        if not isinstance(region, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        name = region.get("name")
+        if not isinstance(name, str) or not ID_PATTERN.fullmatch(name):
+            errors.append(f"{prefix}.name is invalid")
+        else:
+            names.append(name)
+        color = region.get("hex")
+        if not isinstance(color, str) or not HEX_COLOR_PATTERN.fullmatch(color):
+            errors.append(f"{prefix}.hex must be #RRGGBB")
+        for key in ("evidence", "acceptance"):
+            value = region.get(key)
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                errors.append(f"{prefix}.{key} must be a non-empty string when present")
+        material = region.get("material")
+        if material is not None and not isinstance(material, dict):
+            errors.append(f"{prefix}.material must be an object")
+        elif isinstance(material, dict):
+            transmission = material.get("transmission", "opaque")
+            if transmission not in MATERIAL_TRANSMISSIONS:
+                errors.append(f"{prefix}.material.transmission is invalid")
+            filament = material.get("filament")
+            if filament is not None and (
+                not isinstance(filament, str) or not filament.strip()
+            ):
+                errors.append(
+                    f"{prefix}.material.filament must be a non-empty string"
+                )
+
+    if len(names) != len(set(names)):
+        errors.append("color region names must be unique")
+    declared_parts = {
+        item.get("name")
+        for item in manufacturing.get("parts", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    if declared_parts and set(names) != declared_parts:
+        errors.append("color region names must exactly match multipart part names")
     return errors
 
 
@@ -387,7 +478,9 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         else set()
     )
 
-    errors.extend(validate_manufacturing(data.get("manufacturing"), feature_ids))
+    manufacturing = data.get("manufacturing")
+    errors.extend(validate_manufacturing(manufacturing, feature_ids))
+    errors.extend(validate_color_regions(data.get("color_regions"), manufacturing))
 
     visual = data.get("visual")
     if not isinstance(visual, dict) or not isinstance(visual.get("required"), bool):
@@ -439,6 +532,13 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             errors.append(
                 "printability.critical_features must reference declared feature IDs"
             )
+        if data.get("color_regions") is not None:
+            package_mode = printability.get("print_package_mode", "separate_parts")
+            if package_mode != "separate_parts":
+                errors.append(
+                    "multipart part colors require printability.print_package_mode "
+                    "separate_parts"
+                )
     return errors
 
 

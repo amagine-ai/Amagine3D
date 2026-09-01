@@ -10,23 +10,42 @@ from pathlib import Path
 import re
 import tracemalloc
 
-from cpu_z_buffer import (
-    CONTACT_VIEWS,
-    DEFAULT_MAX_RESOLUTION,
-    DEFAULT_OUTPUT_SIZE,
-    DEFAULT_MAX_TRIANGLES,
-    HARD_MAX_RESOLUTION,
-    HARD_MAX_TRIANGLES,
-    MAX_SUPERSAMPLE,
-    SUPPORTED_VIEWS,
-    MeshInput,
-    RenderLimits,
-    load_mesh,
-    mesh_bounds,
-    render_contact_sheet,
-    render_view,
-    triangle_count,
-)
+if __package__:
+    from .cpu_z_buffer import (
+        CONTACT_VIEWS,
+        DEFAULT_MAX_RESOLUTION,
+        DEFAULT_OUTPUT_SIZE,
+        DEFAULT_MAX_TRIANGLES,
+        HARD_MAX_RESOLUTION,
+        HARD_MAX_TRIANGLES,
+        MAX_SUPERSAMPLE,
+        SUPPORTED_VIEWS,
+        MeshInput,
+        RenderLimits,
+        load_mesh,
+        mesh_bounds,
+        render_contact_sheet,
+        render_view,
+        triangle_count,
+    )
+else:
+    from cpu_z_buffer import (
+        CONTACT_VIEWS,
+        DEFAULT_MAX_RESOLUTION,
+        DEFAULT_OUTPUT_SIZE,
+        DEFAULT_MAX_TRIANGLES,
+        HARD_MAX_RESOLUTION,
+        HARD_MAX_TRIANGLES,
+        MAX_SUPERSAMPLE,
+        SUPPORTED_VIEWS,
+        MeshInput,
+        RenderLimits,
+        load_mesh,
+        mesh_bounds,
+        render_contact_sheet,
+        render_view,
+        triangle_count,
+    )
 
 
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")

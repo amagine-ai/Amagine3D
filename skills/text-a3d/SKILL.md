@@ -1,22 +1,21 @@
 ---
 name: text-a3d
 description: >
-  Evidence-driven single-color CAD synthesis and reconstruction for one-piece
-  parts or same-material multipart assemblies. Creates fresh STEP/STL artifacts
-  from specifications, drawings, or reference images using an independent
-  intent contract, fail-closed build operations, provenance hashes, pinned
-  Bambu printer/nozzle/process profiles, printability repair, mesh audit, and
-  mandatory matched-view review when appearance matters. Use only for
-  single-material output or incidental photographic
-  colors. If object-owned colors distinguish screens, controls, text/logos,
-  materials, inlays, or identity, text-a3d-color takes priority.
+  Unified evidence-driven printable 3D modeling for single-material parts,
+  multipart assemblies, and color-aware 3MF output. Selects an internal
+  single-material or color manufacturing mode from the object's manufactured color
+  requirements, then creates fresh STEP/STL/3MF/display artifacts from
+  specifications, drawings, or reference images with independent intent,
+  fail-closed operations, provenance, pinned printer profiles, manufacturing
+  audits, and matched-view review when appearance matters.
 ---
 
-# Evidence-driven single-color CAD
+# Evidence-driven printable 3D modeling
 
 The deliverable is not merely a watertight mesh. It is a model whose source,
-assumptions, measurable targets, visual evidence, and current-run artifacts
-agree.
+assumptions, measurable targets, visual evidence, manufacturing mode, and
+current-run artifacts agree. This single discoverable skill owns both
+single-material and color-aware generation.
 
 `<SKILL_DIR>` means this directory. Resolve it to an absolute path before
 running commands from a nested output directory. Outputs belong directly in the
@@ -29,12 +28,18 @@ current session working directory.
 - `examples/intent.example.json` is a copyable valid contract
 - `reference_analyze.py` extracts image hash, bounds, palette, and pixel cells
 - `cad_helpers.py` provides fail-closed operations and provenance-rich export
+- `interface_recipes.py` derives paired printable connectors from one parameter set
+- `plate_layout.py` packs multipart BRep bounds on the bound printer using translations only
+- `scene_contract.py` validates the mutable canonical geometry graph separately from intent
+- `hybrid_compile.py` compiles mesh-master nodes and BRep-derived mesh nodes into physical parts
+- `shape_consistency.py` proves final physical GLB nodes and manufacturing STLs have not drifted
 - `qa_check.py` audits geometry, Bambu bed fit, walls, features, and overhangs
 - `assembly_check.py` audits same-material multipart report integrity
 - `step_check.py` audits STEP assembly masters with OCCT
 - `freshness_check.py` proves every deliverable belongs to this run
 - `render_preview.py` emits orthographic views plus a hash-bound render report
 - `compare_silhouette.py` scores comparable orthographic silhouettes
+- `color/MODE.md` is the internal color-aware 3MF and region-manufacturing mode
 - Read `references/evidence-contract.md` whenever evidence or appearance matters
 - Read `references/construction-strategies.md` before writing geometry
 - Read `references/bambu-printability.md` before every generated printable part
@@ -49,16 +54,31 @@ internal view limit, and 500,000 input triangles. `--supersample 2`,
 When running outside Amagine3D's managed session, initialize the repository
 runtime and use its Python executable instead of an unrelated system Python.
 
-## 0. Route before modeling
+## 0. Select the internal manufacturing mode
 
-Do not use this skill when meaningful colors belong to the object. A screen,
-control, logo/text, material boundary, inlay, or identity palette routes to
-`text-a3d-color`, even without the words 3MF or AMS. Lighting, reflections,
-background, and photo variation are incidental. An explicit single-color
-request overrides this preference.
+Use `single-material` mode for an explicit single-color request or when visible
+color differences come only from lighting, reflections, background, or photo
+variation. Continue with the single-material workflow in this document.
+
+Use `color` mode when permanent color on manufactured parts or regions
+distinguishes a control, logo/text, material boundary, inlay, printable bezel,
+functional region, or identity palette, even without the words 3MF or AMS.
+Read `color/MODE.md` completely and use its color-region workflow. A real
+LED/LCD surface, glass appearance, or transient screen content that is excluded
+from manufacturing does not select color mode by itself. Its runtime, examples,
+and references are colocated under `color/`; it is an internal mode, not a
+separately discoverable skill.
+
+Both modes share the same task interpretation, semantic coordinate frame,
+evidence priorities, and visual-fidelity obligations. Mode selection chooses
+the manufacturing/export implementation; it does not introduce a user approval
+gate or prevent the agent from iterating autonomously.
 
 Classify the job as specification, reference reproduction, reference inspired,
 recognizable form, or inspect-only. Inspect-only never claims generation.
+
+The remaining sections describe the `single-material` mode. In `color` mode,
+continue in `color/MODE.md` after applying the shared interpretation above.
 
 When the user names a specific real, catalog, branded, or fictional object, the
 named object sets the identity target. When adequate reference images,
@@ -90,6 +110,11 @@ Read the resolver output and the generated profile. Do not model until the
 machine, tool, wall targets, and support threshold are known. Never switch the
 profile later merely to clear QA.
 
+Before choosing inferred overall dimensions, read
+`derived.rotation_safe_envelope` and copy its explicit spatial-diagonal
+constraint into the intent's primary-envelope acceptance. This makes the first
+parameter set rotation-safe instead of relying on a later fit repair.
+
 For image evidence, run:
 
 ```bash
@@ -111,11 +136,17 @@ python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 The contract must expose inferred dimensions, hidden-side assumptions, the
 object coordinate system, feature kind/face/direction for functional openings,
 profile path and hash, build orientation, minimum wall target, critical feature
-IDs, support policy, replica-fidelity limits, and manufacturing mode. Default to one printable
-manufacturing body when it can preserve the requested object, printable feature
-sizes, strength, and appearance. Do not split solely because the first profile
-is too small; when the user did not fix a physical size, scale the whole model
-to fit before considering multipart. Use `multipart` only when separate printed
+IDs, support policy, replica-fidelity limits, and manufacturing mode. Default to
+one printable manufacturing body when it can preserve the requested object,
+printable feature sizes, strength, and appearance. When the user did not fix a
+physical size, choose the semantic dimensions before construction so the
+envelope's spatial bounding-box diagonal is no greater than the smallest usable
+build extent. This is a simple positive guarantee that every rigid rotation
+remains bed-safe; write the chosen dimensions into the intent and build at unit
+scale. If a fixed-size object cannot meet that guarantee, preserve its fixed
+dimensions and record the allowed orientations instead. Do not split solely
+because the first inferred envelope was too large; revise its driving dimensions
+before construction. Use `multipart` only when separate printed
 parts create a real manufacturing benefit such as cleaner support strategy,
 better strength orientation, post-installed components, functional movement, or
 separable covers/inserts inferred from the object. Do not weaken the contract
@@ -143,6 +174,113 @@ post-modeling manufacturing decision; it may rotate the finished body but may
 not change the source shape. Pixel/icon inputs use analyzer cells; never
 hand-copy their coordinates.
 
+### Appearance-first and hybrid construction
+
+For a freeform enclosure, character-like product, or other appearance-sensitive
+object, choose the representation master from the geometry that carries its
+identity. This is an autonomous iteration method, not a staged approval
+workflow. When the identity depends on a contour that would collapse into a
+generic BRep primitive, author a watertight, unit-scale mesh-master exterior from
+explicit cross-sections/freeform profiles. Generate the inner-cavity cutter,
+ports, pockets, and paired interface solids precisely in build123d, tessellate
+those tools at unit scale, and combine them through the semantic scene. For a
+primarily mechanical enclosure, keep the whole part BRep-master and use Three.js
+only to inspect and shade the tessellated physical result.
+
+Before selecting those profiles, turn the reference into explicit front, side,
+and top silhouette landmarks: widths/depths at named heights, shoulder and base
+transitions, local bulges, asymmetries, and insert-to-shell ratios. A sphere,
+capsule, rounded box, or short ellipse-loft sequence is a blockout, not a final
+reference-sensitive shell, unless its section coordinates come from those
+landmarks and its matched silhouettes pass. Prefer a mesh master when cheeks,
+feet, ears, shoulders, or other local form cannot be expressed by shared BRep
+sections without losing identity.
+
+Keep two documents with different responsibilities:
+
+- `<name>_intent.json` is the immutable target: references, dimensions,
+  landmarks, assumptions, and manufacturing acceptance.
+- `<name>_scene.json` is the mutable implementation: parts, construction
+  recipes, boolean nodes, interface arithmetic, artifact bindings, and one
+  geometry revision shared by every compiler.
+
+Validate the scene after graph changes:
+
+```bash
+python "<SKILL_DIR>/scene_contract.py" "<name>_scene.json"
+```
+
+Parts, color regions, installed-component references, and display decoration
+are orthogonal. A housing, base, printable bezel/lens, and button are physical
+parts; a real LED/LCD module and its active image are normally non-manufactured
+assembly references; ivory, black, and coral are color regions only when they
+belong to printed geometry. An emitted facial expression is display decoration
+unless the user requests it as printable relief/inlay. Never use a color-region
+object or visual screen proxy as a substitute for a physical part tree.
+
+Give each physical part one `representationMaster`:
+
+- `brep` for STEP-first shells, bores, pockets, wall thickness, and fitted
+  interfaces. Three.js edits the shared profiles and parameters, build123d
+  rebuilds the physical BRep, and the final display mesh is tessellated from
+  that physical result.
+- `mesh` for genuinely freeform printable surfaces. The canonical mesh enters
+  manufacturing booleans directly and produces STL/3MF; do not claim a clean
+  parametric STEP for that part.
+
+Every scene node has one role: `solid`, `cutter`, `separate`, or
+`display-only`. Build an enclosure as outer volume minus an inner-cavity cutter.
+Every separate printed insert needs a paired recipient feature: printable
+panel/pocket, button/retained guide, lid/socket, or pin/bore. A visually adjacent
+or floating solid is not an assembly connection.
+
+Model a real screen as one shared datum and four related consequences, not as a
+black printable slab:
+
+- subtract a named front aperture through the shell so the display can be seen;
+- subtract a rear module keepout/seat from the actual module envelope plus
+  assembly clearance, while preserving a printable lip around the aperture;
+- add physical retainers, bosses, clips, or a separately printable bezel/lens
+  only when the design calls for them; and
+- place the Three.js glass/content surface behind the opening as a
+  `display-only` `displayComponent` node whose `physicalFeatureRef` names the
+  aperture cutter.
+
+Derive the aperture, keepout, retainer positions, and visual plane from the same
+screen center, normal, visible area, and module envelope. Do not subtract the
+visual plane itself, and do not use the whole module envelope as the visible
+opening. A `displayComponent` appears in the final display GLB but is excluded
+from STEP, STL, 3MF, physical-part/interface counts, and all manufacturing
+booleans. If the user explicitly requests a printable dummy screen, make that a
+normal physical part instead of silently changing this default.
+
+Apply PBR materials, fabric response, lighting, and expressions after physical
+compilation. `concept.glb` is diagnostic; publish one `NAME-display.glb` whose
+physical nodes come from manufactured geometry and whose explicitly tagged
+display-only nodes show non-manufactured installed components. Never substitute
+an independently polished shell for the compiled physical surface.
+
+For a scene with mesh inputs, compile the manufacturing graph directly:
+
+```bash
+python "<SKILL_DIR>/hybrid_compile.py" "<name>_scene.json" --output-dir "."
+```
+
+`recipe.parameters.sourceMesh` may point to a Three.js-authored watertight
+physical solid, a build123d-tessellated solid/cutter, or a non-volume visual
+mesh on a `display-only` node. All sources use the same millimetre coordinate
+frame, revision, and `scale: 1`. The compiler performs declared physical
+unions/subtractions and emits per-part STL, part-colored 3MF, and one PBR display
+GLB. The display GLB contains the compiled physical nodes plus explicitly
+excluded display-only component visuals; shape consistency selects only the
+named physical nodes. The compiler deliberately does not invent a smooth STEP
+for a mesh-master part; BRep-master parts keep their build123d STEP source.
+
+Iterate appearance by changing the canonical profiles/parameters and advancing
+the geometry revision. Recompile all affected representations from that
+revision. Never hand-edit the final GLB or copy a visually improved Three.js
+surface without updating its canonical recipe or mesh master.
+
 ## 3. Build with observable operations
 
 Write the complete `<name>.py` in this run. Use parameters tied to contract
@@ -164,14 +302,13 @@ WIDTH = parameter(
     affects=("primary-envelope",),
 )
 
-# primary envelope -> observed identity volumes -> cuts -> controls -> finishes
+# primary envelope -> observed identity volumes -> real openings -> controls -> finishes
 body = ...
 observe(body, "primary-envelope", "envelope")
-screen = ...
-observe(screen, "screen-frame", "additive")
-body = body + screen
-screen_tool = ...
-body = checked_cut(body, screen_tool, "screen-recess")
+screen_aperture_tool = ...
+body = checked_cut(body, screen_aperture_tool, "screen-aperture")
+screen_module_keepout_tool = ...
+body = checked_cut(body, screen_module_keepout_tool, "screen-module-keepout")
 body = checked_fillet(
     body, lambda current: ..., 2.0, "outer-softening",
     allow_reduce=False,
@@ -188,18 +325,21 @@ front/back side lays, left/right side lays, and a top-down 180-degree flip.
 Profile fit is a hard gate; among fitting candidates, support burden and bed
 contact quality outrank low print height, so a taller top-down pose may beat a
 lower side-lay when it materially reduces supports. Every candidate records the
-uniform scale needed to fit the selected profile. Do not silently scale during
-export; when dimensions are inferred rather than fixed by the user, use that
-scale as repair evidence, update the contract and driving parameters together,
-then rebuild before rejecting a lower-support pose. It emits `NAME.stl` as the
+uniform scale that would have been needed as diagnostic evidence. Do not scale
+during export. If inferred dimensions somehow miss the profile despite the
+rotation-safe initial envelope, update the intent and driving parameters, then
+rebuild before rejecting a lower-support pose. It emits `NAME.stl` as the
 printable single-part mesh in the selected print coordinates,
 `NAME-display.glb` as the user-visible semantic display model, and
 `NAME-assemble.step` as the OCCT-readable semantic physical master. The report
 stores the semantic bounds plus `print_orientation` and `print.transform`
 rotation/translation evidence.
 
-For same-material multipart assemblies, build each manufacturing part as its
-own valid solid and export the assembly:
+For BRep-master multipart assemblies, build each manufacturing part as its own
+valid solid and export the assembly. Omit `part_colors` for a same-material
+build; when color follows whole physical-part boundaries, pass the complete
+part-to-color map shown below. The same v4 intent must declare matching
+`color_regions`; do not create a second color intent or packaging script.
 
 ```python
 from cad_helpers import parameter, observe, checked_cut, checked_fillet, export_assembly
@@ -213,16 +353,44 @@ if __name__ == "__main__":
     export_assembly({
         "lower-shell": lower_shell,
         "top-lid": top_lid,
-    }, NAME, intent_path=INTENT)
+    }, NAME, intent_path=INTENT, part_colors={
+        "lower-shell": "#E8E4DC",
+        "top-lid": "#171A1D",
+    })
 ```
+
+For multipart and hybrid display/manufacturing builds, use the paired recipes
+in `interface_recipes.py` when the connection matches: `collar_socket()` for a
+locating shell/base joint, `inset_pocket()` for a printable fitted panel, lens,
+or bezel insert (not an active display module),
+`retained_slider()` for a printable button/guide, `pin_socket()` for a basic
+locating pin, and `hinge_pin()` for a removable pin plus a shared coaxial knuckle
+bore. Each recipe returns one retained `male`, its clearance-derived
+`female_cutter`, and evidence from the same parameter set. Apply one rigid
+placement transform to the pair, observe the retained feature, and use the
+matching checked cut on the receiving part. Do not maintain independent
+male/female dimensions when a paired recipe applies.
+
+Before building, map every manufactured part to at least one declared
+`manufacturing.interfaces` connection. The intent validator checks this before
+geometry exists; use `parts[].installation: "adhesive"` or `"loose"` only for
+an explicit exception. A front push button should normally be a
+`retained-slider` pair, not a decorative cylinder placed near the base.
 
 Each exported assembly part must be one valid solid. `export_assembly()` emits
 `NAME-PART.stl` for each part's print placement, `NAME.stl` for the full
 print-bed layout, `NAME-assemble.step` for the physical assembly master, and
-`NAME-display.glb` for display. Do not join separate requested lids/covers
-into the body merely to satisfy single-color output. Pass `part_name=` to every
-observed feature and checked operation in a multipart build; export fails when
-evidence is unowned or a part is unobserved.
+`NAME-display.glb` for display. With `part_colors`, it additionally emits a
+plate-aligned separate-parts 3MF and material plan from those same BRep shapes;
+the application treats that 3MF as the primary print artifact. The bound
+printer profile drives a deterministic two-dimensional bbox layout before any
+file is written; the top-level STL and 3MF reuse exactly those translated
+parts. If the full set cannot occupy one plate at unit scale, revise the part
+tree or deliberately plan multiple plates instead of serializing off-bed or
+overlapping items. Do not join
+separate requested lids/covers into the body merely to satisfy single-color
+output. Pass `part_name=` to every observed feature and checked operation in a
+multipart build; export fails when evidence is unowned or a part is unobserved.
 
 Observe every manufacturing-critical additive feature before union. Checked
 cuts record tool bounds; checked finishes record actual size. These feature IDs
@@ -267,6 +435,23 @@ operation ledger. Read every `fail`, `warning`, and `not_evaluated` check plus
 its structured `repair` object. Mesh success does not prove STEP assembly
 correctness, STEP success does not prove printability, and GLB display success
 does not prove CAD topology.
+
+For an appearance-first or hybrid scene, bind every manufactured part's named
+physical node in the final assembly-display GLB and its semantic-pose STL to the
+same revision with `scale: 1`, then run the independent drift check:
+
+```bash
+python "<SKILL_DIR>/shape_consistency.py" --manifest "<name>_scene.json" --output "<name>_shape-consistency.json"
+```
+
+Run this against semantic/assembly coordinates, not a packed print plate. A
+rigid Y-up/Z-up transform is allowed and recorded; scale, reflection, stale
+revision, dimension drift, or surface-distance drift fails. Concept-only lights
+and cameras are absent from the delivered GLB. Explicit `display-only`
+installed-component nodes may be present, but are omitted from the physical
+node-name selections used for surface comparison. If the check fails, repair
+the canonical graph and recompile rather than altering only the display or only
+the STL.
 Treat printability advisory checks as coarse process-risk guardrails, not as a
 goal to make every warning disappear. Geometry validity, contract dimensions,
 critical feature evidence, and visual/semantic fidelity are higher-priority
@@ -322,10 +507,9 @@ For a truly corresponding orthographic/flat reference, also run
 - silhouette failure: change envelope/profile, not tiny details
 - depth/view failure: change representation or secondary volumes
 - mesh failure: repair topology without relaxing the contract
-- bed overflow: try reported XY rotation or orientation; if a lower-support
-  candidate only misses the profile because inferred dimensions are too large,
-  uniformly scale the semantic design and intent before falling back to a
-  worse-support fitting pose; preserve fixed user dimensions and profile
+- bed overflow: preserve fixed user dimensions; for inferred dimensions, revise
+  the intent and all responsible driving parameters together, then rebuild at
+  unit scale. Do not transform an already-generated body with uniform scaling
 - feature resolution: widen the named feature parameter to the profile floor
 - thin wall: repair only when the affected area is broad, structural, or
   critical; report localized cosmetic thin-wall risk without distorting the
@@ -353,6 +537,10 @@ python "<SKILL_DIR>/freshness_check.py" --after ".<name>.generation-start" "<nam
 
 For multipart assemblies, include every `NAME-PART.stl`, every part mesh audit,
 `NAME.stl`, `NAME_mesh-audit.json`, and `NAME_assembly-audit.json`.
+
+For an appearance-first or hybrid build, also include `<name>_scene.json`, all
+canonical graph/Three.js sources, `<name>_shape-consistency.json`, and the final
+assembly-display GLB. Do not list `concept.glb` as the delivered display model.
 
 For jobs whose contract sets `visual.required` to false, omit the last three
 visual artifacts.

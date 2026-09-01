@@ -18,6 +18,7 @@ import trimesh
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "text-a3d"
+COLOR = SKILL / "color"
 if str(SKILL) not in sys.path:
     sys.path.insert(0, str(SKILL))
 
@@ -50,6 +51,16 @@ COORDINATE_SYSTEM = {
 }
 
 
+def _glb_face_colors(path: Path) -> set[tuple[int, int, int]]:
+    scene = trimesh.load(path, force="scene", process=False)
+    return {
+        tuple(int(value) for value in mesh.visual.face_colors[0][:3])
+        for mesh in scene.geometry.values()
+        if getattr(mesh.visual, "face_colors", None) is not None
+        and len(mesh.visual.face_colors)
+    }
+
+
 class BambuProfileTests(unittest.TestCase):
     def test_resolves_single_and_dual_tool_limits(self):
         catalog = bambu_profile.load_catalog()
@@ -58,6 +69,16 @@ class BambuProfileTests(unittest.TestCase):
         )
         self.assertEqual(mini["machine"]["selected_tool"]["height_mm"], 180)
         self.assertEqual(mini["derived"]["process_wall_target_mm"], 0.87)
+        self.assertEqual(
+            mini["derived"]["rotation_safe_envelope"],
+            {
+                "constraint": "sqrt(x_mm^2 + y_mm^2 + z_mm^2) <= max_spatial_diagonal_mm",
+                "max_spatial_diagonal_mm": 180.0,
+                "purpose": "choose inferred dimensions before modeling so arbitrary rigid rotations need no scaling",
+                "requires_excluded_zone_placement_check": False,
+                "usable_extent_mm": [180.0, 180.0, 180.0],
+            },
+        )
 
         h2d = bambu_profile.resolve_profile(
             catalog, machine_name="Bambu Lab H2D", nozzle=0.4, tool_index=1
@@ -65,6 +86,10 @@ class BambuProfileTests(unittest.TestCase):
         polygon = np.asarray(h2d["machine"]["selected_tool"]["polygon_mm"])
         self.assertEqual(float(np.ptp(polygon[:, 0])), 325.0)
         self.assertEqual(h2d["machine"]["selected_tool"]["height_mm"], 325)
+        self.assertEqual(
+            h2d["derived"]["rotation_safe_envelope"]["max_spatial_diagonal_mm"],
+            320.0,
+        )
 
     def test_default_is_explicitly_marked_as_assumed(self):
         profile = bambu_profile.resolve_profile(
@@ -721,6 +746,9 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertTrue((root / "case.stl").is_file())
             self.assertTrue((root / "case-assemble.step").is_file())
             self.assertTrue((root / "case-display.glb").is_file())
+            self.assertFalse((root / "case.3mf").exists())
+            self.assertFalse((root / "case_material-plan.json").exists())
+            self.assertNotIn("part_colors", report)
 
             audit = assembly_check.audit_report(
                 root / "case_report.json",
@@ -841,6 +869,297 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             )
             self.assertFalse(incomplete_audit["pass"])
             self.assertIn("part_overlaps", incomplete_audit["errors"])
+
+    def test_export_assembly_part_colors_share_intent_geometry_and_print_frames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = (
+                SKILL
+                / "examples"
+                / "bambu-a1-mini-0.4-standard.example.json"
+            )
+            intent_path = root / "case_intent.json"
+            intent = {
+                "schema": "evidence-cad-intent/v4",
+                "part": "case",
+                "task_mode": "specification",
+                "representation": "full-3d",
+                "coordinate_system": COORDINATE_SYSTEM,
+                "dimensions_mm": {
+                    "x": {"value": 20, "source": "user", "confidence": "high"},
+                    "y": {"value": 10, "source": "user", "confidence": "high"},
+                    "z": {"value": 6, "source": "user", "confidence": "high"},
+                },
+                "features": [
+                    {
+                        "id": "base-envelope",
+                        "kind": "envelope",
+                        "evidence": "A lower housing is required.",
+                        "acceptance": "One valid base solid is exported.",
+                    },
+                    {
+                        "id": "lid-envelope",
+                        "kind": "envelope",
+                        "evidence": "A separate lid is required.",
+                        "acceptance": "One valid lid solid is exported.",
+                    },
+                    {
+                        "id": "base-glue-face",
+                        "kind": "interface",
+                        "evidence": "The base has a mating face.",
+                        "acceptance": "The base face aligns with the lid.",
+                    },
+                    {
+                        "id": "lid-glue-face",
+                        "kind": "interface",
+                        "evidence": "The lid has a mating face.",
+                        "acceptance": "The lid face aligns with the base.",
+                    },
+                ],
+                "manufacturing": {
+                    "mode": "multipart",
+                    "parts": [
+                        {"name": "base", "role": "housing", "acceptance": "one base"},
+                        {"name": "lid", "role": "cover", "acceptance": "one lid"},
+                    ],
+                    "interfaces": [
+                        {
+                            "id": "case-glue-face",
+                            "between": ["base", "lid"],
+                            "connection": "glue-face",
+                            "assembly_axis": "+Z",
+                            "clearance_mm": 0.0,
+                            "engagement_mm": 1.0,
+                            "features": ["base-glue-face", "lid-glue-face"],
+                            "acceptance": "The two flat mating faces align.",
+                        }
+                    ],
+                },
+                "color_regions": [
+                    {
+                        "name": "base",
+                        "hex": "#E8E0D4",
+                        "evidence": "The housing is warm ivory.",
+                        "acceptance": "The base is encoded as ivory.",
+                        "material": {
+                            "filament": "Ivory PLA",
+                            "transmission": "opaque",
+                        },
+                    },
+                    {
+                        "name": "lid",
+                        "hex": "#20242A",
+                        "evidence": "The cover is dark graphite.",
+                        "acceptance": "The lid is encoded as graphite.",
+                        "material": {"transmission": "opaque"},
+                    },
+                ],
+                "printability": {
+                    "profile": {
+                        "path": str(profile_path),
+                        "sha256": sha256(profile_path.read_bytes()).hexdigest(),
+                    },
+                    "build_axis": "+Z",
+                    "bed_contact": "z-min",
+                    "support_policy": "support-free",
+                    "minimum_wall_target_mm": 0.9,
+                    "critical_features": ["base-glue-face", "lid-glue-face"],
+                    "print_package_mode": "separate_parts",
+                },
+                "visual": {"required": False, "reference_view": "front", "landmarks": []},
+                "assumptions": [],
+                "reference_files": [],
+            }
+            self.assertEqual(intent_contract.validate(intent, root), [])
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+
+            base = Box(20, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
+            lid = Pos(0, 0, 4) * Box(
+                16, 8, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
+            )
+            cad_helpers.observe(base, "base-envelope", "part", part_name="base")
+            cad_helpers.observe(
+                base, "base-glue-face", "interface", part_name="base"
+            )
+            cad_helpers.observe(lid, "lid-envelope", "part", part_name="lid")
+            cad_helpers.observe(
+                lid, "lid-glue-face", "interface", part_name="lid"
+            )
+            colors = {"base": "#e8e0d4", "lid": "#20242a"}
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = cad_helpers.export_assembly(
+                    {"lid": lid, "base": base},
+                    "case",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                    part_colors=colors,
+                )
+
+            self.assertEqual(report["schema"], "evidence-cad-assembly-build/v3")
+            self.assertFalse(report["auto_scale"])
+            self.assertEqual(report["scale"], 1.0)
+            self.assertEqual(
+                report["part_colors"],
+                {"base": "#E8E0D4", "lid": "#20242A"},
+            )
+            self.assertEqual(report["print_package_mode"], "separate_parts")
+            self.assertEqual(report["coordinate_frames"]["assembly-semantic"]["scale"], 1.0)
+            self.assertEqual(report["coordinate_frames"]["part-print"]["scale"], 1.0)
+            self.assertEqual(report["coordinate_frames"]["plate-print"]["scale"], 1.0)
+            self.assertTrue(all(
+                transform["scale"] == 1.0
+                for transform in report["print_plate"]["part_transforms"].values()
+            ))
+            self.assertTrue((root / "case.3mf").is_file())
+            self.assertTrue((root / "case_material-plan.json").is_file())
+            self.assertEqual(
+                report["three_mf"]["inspection"]["build_item_count"],
+                2,
+            )
+            self.assertEqual(
+                report["three_mf"]["inspection"]["package_mode"],
+                "separate_parts",
+            )
+            self.assertEqual(
+                {
+                    item["name"]: item["color"]
+                    for item in report["three_mf"]["inspection"]["regions"]
+                },
+                {"base": "#E8E0D4", "lid": "#20242A"},
+            )
+            self.assertEqual(
+                _glb_face_colors(root / "case-display.glb"),
+                {(232, 224, 212), (32, 36, 42)},
+            )
+
+            from color.export_3mf import load_color_archive_mesh
+
+            package_mesh, _ = load_color_archive_mesh(str(root / "case.3mf"))
+            plate_mesh = trimesh.load(root / "case.stl", force="mesh", process=False)
+            np.testing.assert_allclose(package_mesh.bounds, plate_mesh.bounds, atol=1e-5)
+            package_mesh.merge_vertices()
+            plate_mesh.merge_vertices()
+            self.assertEqual(len(package_mesh.split(only_watertight=False)), 2)
+            self.assertEqual(len(plate_mesh.split(only_watertight=False)), 2)
+            self.assertAlmostEqual(
+                abs(float(package_mesh.volume)),
+                abs(float(plate_mesh.volume)),
+                places=3,
+            )
+
+            root_audit = assembly_check.audit_report(
+                root / "case_report.json",
+                print_stl=root / "case.stl",
+            )
+            self.assertTrue(root_audit["pass"], root_audit)
+            color_assembly = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "assembly_check.py"),
+                    str(root / "case_report.json"),
+                    str(root / "case.3mf"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                color_assembly.returncode,
+                0,
+                color_assembly.stdout + color_assembly.stderr,
+            )
+
+            package_qa = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "qa_check.py"),
+                    str(root / "case.3mf"),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "case_report.json"),
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                package_qa.returncode,
+                0,
+                package_qa.stdout + package_qa.stderr,
+            )
+            package_payload = json.loads(package_qa.stdout)
+            self.assertEqual(package_payload["report_artifact"], "3mf")
+            self.assertEqual(package_payload["report_coordinate_frame"], "plate-print")
+            package_dimension_x = next(
+                item
+                for item in package_payload["checks"]
+                if item["name"] == "dimension_x"
+            )
+            self.assertEqual(
+                package_dimension_x["expected"]["value"],
+                report["print_plate"]["bbox_mm"]["size"][0],
+            )
+            self.assertNotEqual(package_dimension_x["expected"]["value"], 20.0)
+
+            lid_qa = subprocess.run(
+                [
+                    sys.executable,
+                    str(COLOR / "qa_check.py"),
+                    str(root / "case-lid.stl"),
+                    "--profile",
+                    str(profile_path),
+                    "--intent",
+                    str(intent_path),
+                    "--report",
+                    str(root / "case_report.json"),
+                    "--components",
+                    "1",
+                    "--require-z0",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(lid_qa.returncode, 0, lid_qa.stdout + lid_qa.stderr)
+            lid_payload = json.loads(lid_qa.stdout)
+            self.assertEqual(lid_payload["report_artifact"], "stl:lid")
+            self.assertEqual(lid_payload["report_coordinate_frame"], "part-print")
+            lid_dimension_x = next(
+                item
+                for item in lid_payload["checks"]
+                if item["name"] == "dimension_x"
+            )
+            self.assertEqual(lid_dimension_x["expected"]["value"], 16.0)
+
+            with self.assertRaisesRegex(
+                cad_helpers.BuildInvariantError,
+                "keys must exactly match",
+            ):
+                cad_helpers.export_assembly(
+                    {"lid": lid, "base": base},
+                    "case",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                    part_colors={"base": "#E8E0D4"},
+                )
+            with self.assertRaisesRegex(
+                cad_helpers.BuildInvariantError,
+                "must be #RRGGBB",
+            ):
+                cad_helpers.export_assembly(
+                    {"lid": lid, "base": base},
+                    "case",
+                    str(root),
+                    intent_path=str(intent_path),
+                    source_path=__file__,
+                    part_colors={"base": "#E8E0D4", "lid": "#123"},
+                )
 
     def test_export_assembly_requires_matching_multipart_intent_parts(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -975,18 +1294,61 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_unified_color_regions_bind_exactly_to_multipart_parts(self):
+        example_path = SKILL / "examples" / "intent.example.json"
+        data = json.loads(example_path.read_text(encoding="utf-8"))
+        data["manufacturing"] = {
+            "mode": "multipart",
+            "parts": [
+                {"name": "body", "role": "body", "acceptance": "one body"},
+                {"name": "lid", "role": "lid", "acceptance": "one lid"},
+            ],
+            "interfaces": [
+                {
+                    "id": "body-lid",
+                    "between": ["body", "lid"],
+                    "connection": "glue-face",
+                    "assembly_axis": "+Z",
+                    "clearance_mm": 0.0,
+                    "engagement_mm": 1.0,
+                    "features": ["primary-envelope", "mounting-hole"],
+                    "acceptance": "faces align",
+                }
+            ],
+        }
+        data["color_regions"] = [
+            {"name": "body", "hex": "#EFE8DC"},
+            {"name": "lid", "hex": "#20242A", "material": {"transmission": "opaque"}},
+        ]
+        data["printability"]["print_package_mode"] = "separate_parts"
+        self.assertEqual(intent_contract.validate(data, example_path.parent), [])
+
+        data["color_regions"][1]["name"] = "screen"
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertIn(
+            "color region names must exactly match multipart part names",
+            errors,
+        )
+        data["color_regions"][1]["name"] = "lid"
+        data["printability"]["print_package_mode"] = "co_print_body"
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("separate_parts" in item for item in errors), errors)
+
     def test_hash_bound_example_profiles_use_stable_lf_bytes(self):
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn("*.json text eol=lf", attributes.splitlines())
 
-        for skill_name in ("text-a3d", "text-a3d-color"):
-            examples = ROOT / "skills" / skill_name / "examples"
+        for skill_dir in (
+            ROOT / "skills" / "text-a3d",
+            ROOT / "skills" / "text-a3d" / "color",
+        ):
+            examples = skill_dir / "examples"
             intent = json.loads(
                 (examples / "intent.example.json").read_text(encoding="utf-8")
             )
             reference = intent["printability"]["profile"]
             payload = (examples / reference["path"]).read_bytes()
-            self.assertNotIn(b"\r\n", payload, skill_name)
+            self.assertNotIn(b"\r\n", payload, str(skill_dir))
             self.assertEqual(sha256(payload).hexdigest(), reference["sha256"])
 
     def test_checked_in_example_contract_is_valid(self):
@@ -1049,6 +1411,17 @@ class ContractTests(unittest.TestCase):
             },
         ])
         self.assertEqual(intent_contract.validate(data, example_path.parent), [])
+
+        data["manufacturing"]["parts"].append({
+            "name": "button",
+            "role": "separate tactile control",
+            "acceptance": "one printable retained button",
+        })
+        errors = intent_contract.validate(data, example_path.parent)
+        self.assertTrue(any("button" in error and "declared interface" in error for error in errors), errors)
+        data["manufacturing"]["parts"][-1]["installation"] = "loose"
+        self.assertEqual(intent_contract.validate(data, example_path.parent), [])
+        data["manufacturing"]["parts"].pop()
 
         data["manufacturing"]["interfaces"][0]["between"] = [
             "lower-shell",

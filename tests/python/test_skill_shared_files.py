@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SINGLE = ROOT / "skills" / "text-a3d"
-COLOR = ROOT / "skills" / "text-a3d-color"
+COLOR = SINGLE / "color"
 
 
 class SharedSkillFileTests(unittest.TestCase):
@@ -22,8 +24,26 @@ class SharedSkillFileTests(unittest.TestCase):
                 self.assertEqual(
                     (SINGLE / relative).read_bytes(),
                     (COLOR / relative).read_bytes(),
-                    f"{relative} drifted between the single- and multi-color skills",
+                    f"{relative} drifted between the single-material and color modes",
                 )
+
+    def test_color_runtime_is_a_namespace_not_a_competing_import_root(self):
+        command = (
+            "import sys; "
+            f"sys.path.insert(0, {str(SINGLE)!r}); "
+            "import cad_helpers; "
+            "from color import cad_helpers as color_helpers; "
+            "assert hasattr(cad_helpers, 'export_assembly'); "
+            "assert hasattr(color_helpers, 'export_regions'); "
+            "assert cad_helpers.__file__ != color_helpers.__file__"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", command],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":

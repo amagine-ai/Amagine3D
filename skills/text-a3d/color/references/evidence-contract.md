@@ -105,8 +105,11 @@ second. Preserve rare colors when they encode a logo, control, status, or
 material boundary. Record every deliberate merge.
 
 The contract must distinguish permanent printed color from transient display
-content. A real LED/LCD screen is usually one physical screen region; reproduce
-individual pixels only when the user wants a static decorative face or mosaic.
+content. A real LED/LCD module is normally excluded from manufacturing: its
+aperture, rear keepout/seat, and printable retainers are physical features, but
+its glass/content is a display-only assembly visual and not a color region.
+Reproduce individual pixels as manufactured geometry only when the user wants a
+printable static decorative face, mosaic, or dummy screen.
 
 Use `material.transmission` only when optical behavior changes the geometry or
 visual promise; omitted material defaults to opaque. A region may preserve a

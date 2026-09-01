@@ -85,14 +85,16 @@ test('parses provider/model while preserving slashes in model id', () => {
   assert.throws(() => parseModelSpec('gpt-5.5'), /provider\/model/);
 });
 
-test('PI discovers the copied repository skills', () => {
+test('PI discovers one unified CAD skill with color as an internal mode', () => {
   const result = loadSkillsFromDir({
     dir: resolve(import.meta.dirname, '..', 'skills'),
     source: 'test',
   });
-  assert.deepEqual(
-    result.skills.map((skill) => skill.name).sort(),
-    ['text-a3d', 'text-a3d-color'],
+  assert.deepEqual(result.skills.map((skill) => skill.name), ['text-a3d']);
+  assert.match(result.skills[0]?.description ?? '', /color-aware/u);
+  assert.match(
+    result.skills[0]?.filePath ?? '',
+    /skills[/\\]text-a3d[/\\]SKILL\.md$/u,
   );
   assert.deepEqual(result.diagnostics, []);
 });

@@ -29,6 +29,7 @@ PLACED_OPENING_KINDS = {
     "slot",
     "window",
 }
+ASSEMBLY_BUILD_SCHEMA = "evidence-cad-assembly-build/v3"
 
 
 class Audit:
@@ -127,9 +128,17 @@ def _report_print_dimensions(
     report: dict | None,
     part_name: str | None,
 ) -> tuple[float, float, float] | None:
-    if not isinstance(report, dict) or part_name is not None:
+    if not isinstance(report, dict):
         return None
-    value = report.get("print", {}).get("bbox_mm", {}).get("size")
+    if report.get("schema") == ASSEMBLY_BUILD_SCHEMA:
+        record = (
+            report.get("print_parts", {}).get(part_name, {})
+            if part_name is not None
+            else report.get("print_plate", {})
+        )
+    else:
+        record = report.get("print", {})
+    value = record.get("bbox_mm", {}).get("size") if isinstance(record, dict) else None
     if not isinstance(value, list) or len(value) != 3:
         return None
     try:
@@ -264,7 +273,7 @@ def _report_part_for_stl(
     stl_path: Path,
     report_dir: Path | None = None,
 ) -> str | None:
-    if report is None or report.get("schema") != "evidence-cad-assembly-build/v3":
+    if report is None or report.get("schema") != ASSEMBLY_BUILD_SCHEMA:
         return None
     digest = sha256(stl_path.read_bytes()).hexdigest()
     matches = [
@@ -296,6 +305,14 @@ def _report_part_for_stl(
     if part_name not in report.get("parts", {}):
         raise ValueError("assembly build report references an unknown STL part")
     return part_name
+
+
+def _report_coordinate_frame(report: dict | None, part_name: str | None) -> str | None:
+    if not isinstance(report, dict):
+        return None
+    if report.get("schema") == ASSEMBLY_BUILD_SCHEMA:
+        return "part-print" if part_name is not None else "plate-print"
+    return "part-print" if report.get("print") else None
 
 
 def feature_measurements(
@@ -702,11 +719,6 @@ def main() -> int:
             report,
             report_part,
         ) or _intent_dimensions(intent)
-        if (
-            isinstance(report, dict)
-            and report.get("schema") == "evidence-cad-assembly-build/v3"
-        ):
-            expected_dimensions = None
         if intent is not None:
             if profile is None:
                 raise ValueError("--intent requires the resolved --profile")
@@ -1086,6 +1098,7 @@ def main() -> int:
         ),
         "report": str(Path(args.report).resolve()) if args.report else None,
         "report_part": report_part,
+        "report_coordinate_frame": _report_coordinate_frame(report, report_part),
         "schema": "evidence-mesh-audit/v3",
         "status": audit.status,
         "stl": str(Path(args.stl).resolve()),

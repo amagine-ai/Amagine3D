@@ -8,8 +8,8 @@ Use one of these interface patterns deliberately:
 
 - **parent split** for bands or large material zones; pass `parent=` to
   `export_regions()` so volume coverage is audited
-- **inset** for screens, labels, and flush panels; cut the footprint from the
-  receiving region and give the insert a controlled depth
+- **inset** for printable dummy screens, labels, bezels, and flush panels; cut
+  the footprint from the receiving region and give the insert a controlled depth
 - **raised overlay** for readable text or icons; keep sufficient printable
   stroke width and avoid coincident faces
 - **mechanical insert** only for real separately printed parts; design it with
@@ -29,8 +29,8 @@ solid. Do not represent surface bands, stripes, trim, logos, runes, or labels
 as full-depth blocks that cut the core into separated pieces. Prefer:
 
 - **outer shell** for circumferential grip bands, rings, collars, and stripes
-- **shallow inset** for contrasting filled recesses, screens, labels, and
-  engraved marks
+- **shallow inset** for contrasting filled recesses, printable dummy screens,
+  labels, bezels, and engraved marks
 - **raised overlay** for readable text, icons, logos, and surface emblems
 - **shallow filled groove** when a multi-color insert should sit inside a
   single-material-visible recess
@@ -59,8 +59,9 @@ Minimize purge cost after appearance is correct:
 3. face insets or separately assembled inserts
 4. dense per-layer mosaics only when identity requires them
 
-Do not merge screen, control, logo, or material colors merely to reduce purge
-without recording the compromise.
+Do not merge printable bezel/dummy-screen, control, logo, or material colors
+merely to reduce purge without recording the compromise. A real excluded
+display visual is not part of the purge plan.
 
 ## Closed-loop verification
 

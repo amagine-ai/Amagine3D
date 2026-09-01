@@ -176,14 +176,19 @@ Amagine3D/
 │   └── app.ts, index.ts             Express 启动、静态托管与运行时组装
 ├── packages/a3d-runtime/src/          3D-native Agent 模型/会话适配、Skill 加载与写入限制
 ├── skills/
-│   ├── text-a3d/                  单色 CAD 生成与质量检查流程
-│   └── text-a3d-color/            多色 CAD、配色、3MF 导出与质量检查流程
+│   └── text-a3d/                  统一的单材料与彩色 CAD 工作流
+│       └── color/MODE.md          内部颜色分区、配色与 3MF 模式
 ├── bundled-projects/                  工作台内置的只读示例项目
 ├── workspace/sessions/<sessionId>/   生成的源码、模型、报告和预览图
 ├── .amagine-state/                   Agent 会话、上传文件和本地运行状态
 ├── scripts/                           Python 环境安装与许可证检查
 └── tests/                             服务端、运行时、产物与 UI 逻辑测试
 ```
+
+Agent 运行时只暴露 `text-a3d` 一个 Skill，并依据制造几何上的永久颜色需求在内部
+选择 `single-material` 或 `color` 模式；不参与制造的显示内容本身不会触发彩色打印。
+两套实现都位于 `skills/text-a3d/` 下；彩色模式的 runtime、examples 与 references
+集中在 `skills/text-a3d/color/`，且不包含独立 Skill 清单。
 
 每个 Agent 会话使用独立工作区。CAD 脚本由服务端管理的 Python 环境执行，浏览器通过 Three.js 渲染生成模型，模型凭据仅保留在服务端。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
 

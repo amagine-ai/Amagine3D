@@ -35,6 +35,15 @@ object. Model in dependency order:
 4. small controls/details
 5. finishes
 
+For a real LED/LCD or another purchased installed component, derive physical
+enclosure consequences before visual decoration: a visible aperture, a rear
+keepout/seat with clearance, and any printable retention features. Use one
+screen datum and component envelope for all of them. Put the glass/content mesh
+behind the aperture as `display-only`; include it in the display GLB and exclude
+it from STEP/STL/3MF. The visual mesh is not a cutting tool, and the full module
+keepout is not the visible opening. A printable bezel or dummy screen is a
+separate physical case and needs its own recipient geometry.
+
 For replica or exact-match requests, build the object first and the print
 placement second. A support-free bed pose is not permission to flatten the
 source model, delete underside volume, or make a relief while declaring
