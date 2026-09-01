@@ -30,6 +30,16 @@ class InterfacePair:
     evidence: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SelfTappingScrewPair:
+    """One aligned cover bore, receiver pilot, and printable screw boss."""
+
+    clearance_cutter: Any
+    pilot_cutter: Any
+    receiver_boss: Any
+    evidence: dict[str, Any]
+
+
 def _positive(name: str, value: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise InterfaceRecipeError(f"{name} must be numeric")
@@ -316,6 +326,173 @@ def pin_socket(
                 "axial_clearance_mm": axial,
                 "socket_diameter_mm": socket_diameter,
                 "socket_depth_mm": socket_depth,
+            },
+        },
+    )
+
+
+def self_tapping_screw_pair(
+    *,
+    interface_id: str,
+    axis_id: str,
+    cover_thickness_mm: float,
+    screw_family: str | None = None,
+    nominal_diameter_mm: float = 3.0,
+    clearance_diameter_mm: float = 3.4,
+    pilot_diameter_mm: float = 2.6,
+    boss_outer_diameter_mm: float = 7.5,
+    engagement_mm: float = 6.0,
+    pilot_tip_clearance_mm: float = 0.8,
+    closed_end_mm: float = 1.2,
+    minimum_boss_wall_mm: float = 1.8,
+    boss_root_overlap_mm: float = 0.4,
+    head_recess_diameter_mm: float | None = None,
+    head_recess_depth_mm: float | None = None,
+    minimum_cover_land_mm: float = 0.8,
+    cutter_overshoot_mm: float = 1.0,
+) -> SelfTappingScrewPair:
+    """Create one coaxial plastic self-tapping screw connection.
+
+    The local mating plane is Z=0.  The cover occupies negative Z and the
+    receiving boss grows toward positive Z.  Callers apply one rigid transform
+    to all three returned shapes, so the clearance hole and blind pilot cannot
+    acquire independent centers or axes.
+
+    The M3 defaults are printable starting dimensions, not a material-agnostic
+    standard.  Calibrate the pilot diameter for the selected screw, filament,
+    printer, and process when those are known.
+    """
+
+    cover_thickness = _positive("cover_thickness_mm", cover_thickness_mm)
+    nominal = _positive("nominal_diameter_mm", nominal_diameter_mm)
+    clearance = _positive("clearance_diameter_mm", clearance_diameter_mm)
+    pilot = _positive("pilot_diameter_mm", pilot_diameter_mm)
+    boss_outer = _positive("boss_outer_diameter_mm", boss_outer_diameter_mm)
+    engagement = _positive("engagement_mm", engagement_mm)
+    tip_clearance = _non_negative(
+        "pilot_tip_clearance_mm", pilot_tip_clearance_mm
+    )
+    closed_end = _positive("closed_end_mm", closed_end_mm)
+    minimum_wall = _positive("minimum_boss_wall_mm", minimum_boss_wall_mm)
+    root_overlap = _non_negative("boss_root_overlap_mm", boss_root_overlap_mm)
+    minimum_cover_land = _positive(
+        "minimum_cover_land_mm", minimum_cover_land_mm
+    )
+    overshoot = _non_negative("cutter_overshoot_mm", cutter_overshoot_mm)
+    if not isinstance(interface_id, str) or not interface_id.strip():
+        raise InterfaceRecipeError("interface_id must be a non-empty string")
+    if not isinstance(axis_id, str) or not axis_id.strip():
+        raise InterfaceRecipeError("axis_id must be a non-empty string")
+    if screw_family is None:
+        screw_family = f"M{nominal:g} plastic thread-forming/self-tapping"
+    elif not isinstance(screw_family, str) or not screw_family.strip():
+        raise InterfaceRecipeError("screw_family must be a non-empty string")
+    if not pilot < nominal < clearance:
+        raise InterfaceRecipeError(
+            "self-tapping diameters must satisfy pilot < nominal < clearance"
+        )
+    boss_wall = (boss_outer - pilot) / 2
+    if boss_wall < minimum_wall:
+        raise InterfaceRecipeError(
+            "boss_outer_diameter_mm leaves less than minimum_boss_wall_mm "
+            "around the pilot"
+        )
+
+    has_recess_diameter = head_recess_diameter_mm is not None
+    has_recess_depth = head_recess_depth_mm is not None
+    if has_recess_diameter != has_recess_depth:
+        raise InterfaceRecipeError(
+            "head recess diameter and depth must be supplied together"
+        )
+    recess_diameter = None
+    recess_depth = None
+    if has_recess_diameter and has_recess_depth:
+        recess_diameter = _positive(
+            "head_recess_diameter_mm", head_recess_diameter_mm
+        )
+        recess_depth = _positive("head_recess_depth_mm", head_recess_depth_mm)
+        if recess_diameter <= clearance:
+            raise InterfaceRecipeError(
+                "head recess diameter must exceed the clearance diameter"
+            )
+        if recess_depth + minimum_cover_land > cover_thickness:
+            raise InterfaceRecipeError(
+                "head recess leaves less than minimum_cover_land_mm"
+            )
+
+    clearance_cutter = Pos(0, 0, -cover_thickness - overshoot) * Cylinder(
+        clearance / 2,
+        cover_thickness + 2 * overshoot,
+        align=(Align.CENTER, Align.CENTER, Align.MIN),
+    )
+    if recess_diameter is not None and recess_depth is not None:
+        head_recess = Pos(0, 0, -cover_thickness - overshoot) * Cylinder(
+            recess_diameter / 2,
+            recess_depth + overshoot,
+            align=(Align.CENTER, Align.CENTER, Align.MIN),
+        )
+        clearance_cutter = clearance_cutter + head_recess
+
+    pilot_depth = engagement + tip_clearance
+    pilot_cutter = Pos(0, 0, -overshoot) * Cylinder(
+        pilot / 2,
+        pilot_depth + overshoot,
+        align=(Align.CENTER, Align.CENTER, Align.MIN),
+    )
+    boss_height = pilot_depth + closed_end
+    receiver_boss = Pos(0, 0, -root_overlap) * Cylinder(
+        boss_outer / 2,
+        boss_height + root_overlap,
+        align=(Align.CENTER, Align.CENTER, Align.MIN),
+    )
+    under_head_cover_stack = cover_thickness - (recess_depth or 0.0)
+
+    return SelfTappingScrewPair(
+        clearance_cutter=clearance_cutter,
+        pilot_cutter=pilot_cutter,
+        receiver_boss=receiver_boss,
+        evidence={
+            "id": interface_id,
+            "type": "self-tapping-screw",
+            "assembly_axis": "+Z",
+            "axis": {
+                "id": axis_id,
+                "origin_mm": [0.0, 0.0, 0.0],
+                "direction": [0.0, 0.0, 1.0],
+            },
+            "screw": {
+                "family": screw_family,
+                "nominal_diameter_mm": nominal,
+                "manufacturing": "purchased-hardware-excluded",
+                "under_head_cover_stack_mm": under_head_cover_stack,
+                "minimum_under_head_length_mm": (
+                    under_head_cover_stack + engagement
+                ),
+                "maximum_under_head_length_mm": (
+                    under_head_cover_stack + pilot_depth
+                ),
+            },
+            "cover": {
+                "thickness_mm": cover_thickness,
+                "clearance_diameter_mm": clearance,
+                "head_recess_diameter_mm": recess_diameter,
+                "head_recess_depth_mm": recess_depth,
+                "minimum_cover_land_mm": minimum_cover_land,
+            },
+            "receiver": {
+                "pilot_diameter_mm": pilot,
+                "pilot_depth_mm": pilot_depth,
+                "thread_engagement_mm": engagement,
+                "tip_clearance_mm": tip_clearance,
+                "boss_outer_diameter_mm": boss_outer,
+                "boss_height_mm": boss_height,
+                "boss_wall_mm": boss_wall,
+                "closed_end_mm": closed_end,
+                "root_overlap_mm": root_overlap,
+            },
+            "calibration": {
+                "pilot_to_nominal_ratio": pilot / nominal,
+                "required_when_material_or_screw_changes": True,
             },
         },
     )

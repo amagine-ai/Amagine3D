@@ -118,6 +118,158 @@ def _scene(root: Path) -> dict:
     }
 
 
+def _self_tapping_scene(root: Path) -> dict:
+    nodes = [
+        {
+            "id": "housing-shell",
+            "partId": "housing",
+            "featureId": "housing-shell",
+            "role": "solid",
+            "operation": "union",
+            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "housing.stl"}},
+        },
+        {
+            "id": "base-shell",
+            "partId": "base",
+            "featureId": "base-shell",
+            "role": "solid",
+            "operation": "union",
+            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "base.stl"}},
+        },
+        {
+            "id": "base-collar",
+            "partId": "base",
+            "featureId": "base-collar",
+            "role": "solid",
+            "operation": "union",
+            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "collar.stl"}},
+        },
+        {
+            "id": "housing-socket",
+            "partId": "housing",
+            "featureId": "housing-socket",
+            "role": "cutter",
+            "operation": "subtract",
+            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "socket.stl"}},
+        },
+    ]
+    fasteners = []
+    for side, x in (("left", -24.0), ("right", 24.0)):
+        axis_id = f"side-{side}"
+        clearance_feature = f"base-clearance-{side}"
+        pilot_feature = f"housing-pilot-{side}"
+        boss_feature = f"housing-boss-{side}"
+        nodes.extend([
+            {
+                "id": clearance_feature,
+                "partId": "base",
+                "featureId": clearance_feature,
+                "role": "cutter",
+                "operation": "subtract",
+                "recipe": {
+                    "kind": "selfTappingScrewPair",
+                    "parameters": {
+                        "interfaceId": "housing-base-service-joint",
+                        "fastenerId": axis_id,
+                        "output": "clearance-cutter",
+                    },
+                },
+            },
+            {
+                "id": pilot_feature,
+                "partId": "housing",
+                "featureId": pilot_feature,
+                "role": "cutter",
+                "operation": "subtract",
+                "recipe": {
+                    "kind": "selfTappingScrewPair",
+                    "parameters": {
+                        "interfaceId": "housing-base-service-joint",
+                        "fastenerId": axis_id,
+                        "output": "pilot-cutter",
+                    },
+                },
+            },
+            {
+                "id": boss_feature,
+                "partId": "housing",
+                "featureId": boss_feature,
+                "role": "solid",
+                "operation": "union",
+                "recipe": {
+                    "kind": "selfTappingScrewPair",
+                    "parameters": {
+                        "interfaceId": "housing-base-service-joint",
+                        "fastenerId": axis_id,
+                        "output": "receiver-boss",
+                    },
+                },
+            },
+        ])
+        fasteners.append({
+            "id": axis_id,
+            "axis": {"originMm": [x, 0.0, 4.0], "direction": [0.0, 1.0, 0.0]},
+            "screwFamily": "M3 plastic thread-forming/self-tapping",
+            "nominalDiameterMm": 3.0,
+            "cutterOvershootMm": 1.0,
+            "cover": {
+                "partId": "base",
+                "featureId": clearance_feature,
+                "diameterMm": 3.4,
+                "thicknessMm": 2.4,
+            },
+            "receiver": {
+                "partId": "housing",
+                "featureId": pilot_feature,
+                "bossFeatureId": boss_feature,
+                "diameterMm": 2.6,
+                "bossOuterDiameterMm": 7.5,
+                "engagementMm": 6.0,
+                "closedEndMm": 1.2,
+                "minimumBossWallMm": 1.8,
+                "rootOverlapMm": 0.4,
+                "tipClearanceMm": 0.8,
+            },
+        })
+    return {
+        "schema": "evidence-semantic-scene/v1",
+        "revision": "rev-fastener-001",
+        "intentRef": _intent_ref(root),
+        "units": "mm",
+        "coordinateSystem": {"handedness": "right", "up": "Z"},
+        "parts": [
+            {"id": "housing", "representationMaster": "mesh"},
+            {"id": "base", "representationMaster": "brep"},
+        ],
+        "nodes": nodes,
+        "interfaces": [
+            {
+                "id": "housing-base-service-joint",
+                "kind": "self-tapping-screw",
+                "locatorInterfaceIds": ["housing-base-locator"],
+                "fasteners": fasteners,
+            },
+            {
+                "id": "housing-base-locator",
+                "kind": "collar-socket",
+                "male": {
+                    "partId": "base",
+                    "featureId": "base-collar",
+                    "dimensionsMm": {"diameter": 70.0},
+                },
+                "female": {
+                    "partId": "housing",
+                    "featureId": "housing-socket",
+                    "dimensionsMm": {"diameter": 70.8},
+                    "derivedDimensionsMm": {
+                        "diameter": {"from": "male.diameter", "offsetMm": 0.8}
+                    },
+                },
+            },
+        ],
+    }
+
+
 class SemanticSceneContractTests(unittest.TestCase):
     def test_validates_mutable_graph_separate_from_intent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -185,6 +337,232 @@ class SemanticSceneContractTests(unittest.TestCase):
             }
             errors = scene_contract.validate(data, root)
             self.assertTrue(any("axis 0 must have unit scale" in item for item in errors))
+
+    def test_self_tapping_scene_uses_one_axis_for_each_hole_pair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            self.assertEqual(scene_contract.validate(data, root), [])
+
+    def test_self_tapping_scene_can_reference_multiple_locator_pairs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            data["nodes"].extend([
+                {
+                    "id": "base-pin-right",
+                    "partId": "base",
+                    "featureId": "base-pin-right",
+                    "role": "solid",
+                    "operation": "union",
+                    "recipe": {
+                        "kind": "sourceMesh",
+                        "parameters": {"sourceMesh": "pin-right.stl"},
+                    },
+                },
+                {
+                    "id": "housing-pin-socket-right",
+                    "partId": "housing",
+                    "featureId": "housing-pin-socket-right",
+                    "role": "cutter",
+                    "operation": "subtract",
+                    "recipe": {
+                        "kind": "sourceMesh",
+                        "parameters": {"sourceMesh": "pin-socket-right.stl"},
+                    },
+                },
+            ])
+            data["interfaces"].append({
+                "id": "housing-base-locator-right",
+                "kind": "pin-socket",
+                "male": {
+                    "partId": "base",
+                    "featureId": "base-pin-right",
+                    "dimensionsMm": {"diameter": 3.0},
+                },
+                "female": {
+                    "partId": "housing",
+                    "featureId": "housing-pin-socket-right",
+                    "dimensionsMm": {"diameter": 3.35},
+                    "derivedDimensionsMm": {
+                        "diameter": {"from": "male.diameter", "offsetMm": 0.35}
+                    },
+                },
+            })
+            data["interfaces"][0]["locatorInterfaceIds"].append(
+                "housing-base-locator-right"
+            )
+            self.assertEqual(scene_contract.validate(data, root), [])
+
+            data["interfaces"][0]["locatorInterfaceIds"].append("missing-locator")
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("references an unknown interface" in item for item in errors),
+                errors,
+            )
+
+    def test_self_tapping_scene_rejects_axis_and_feature_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            fastener = data["interfaces"][0]["fasteners"][0]
+            fastener["axis"]["direction"] = [0.0, 2.0, 0.0]
+            fastener["cover"]["originMm"] = [-23.9, 0.0, 4.0]
+            pilot_node = next(
+                node
+                for node in data["nodes"]
+                if node["featureId"] == fastener["receiver"]["featureId"]
+            )
+            pilot_node["recipe"]["parameters"]["fastenerId"] = "side-right"
+            errors = scene_contract.validate(data, root)
+            text = "\n".join(errors)
+            self.assertIn("must be a unit vector", text)
+            self.assertIn("instead of declaring an independent axis", text)
+            self.assertIn("must bind the shared recipe output", text)
+
+    def test_self_tapping_locator_cannot_reuse_a_screw_feature(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            locator = data["interfaces"][1]
+            locator["female"]["featureId"] = "housing-pilot-right"
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("must be independent from clearance" in item for item in errors),
+                errors,
+            )
+
+    def test_self_tapping_scene_rejects_independent_source_meshes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            clearance = next(
+                node
+                for node in data["nodes"]
+                if node["featureId"] == "base-clearance-left"
+            )
+            clearance["recipe"] = {
+                "kind": "sourceMesh",
+                "parameters": {
+                    "axisId": "side-left",
+                    "sourceMesh": "misaligned-clearance.stl",
+                },
+            }
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("must use recipe.kind selfTappingScrewPair" in item for item in errors),
+                errors,
+            )
+
+    def test_self_tapping_scene_rejects_unbound_or_duplicate_recipe_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            existing = next(
+                node
+                for node in data["nodes"]
+                if node["featureId"] == "housing-boss-left"
+            )
+            duplicate = json.loads(json.dumps(existing))
+            duplicate["id"] = "unbound-extra-boss"
+            duplicate["featureId"] = "unbound-extra-boss"
+            data["nodes"].append(duplicate)
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("must have exactly one node" in item for item in errors),
+                errors,
+            )
+
+            duplicate["recipe"]["parameters"]["fastenerId"] = "undeclared-axis"
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("declares an unbound selfTappingScrewPair output" in item for item in errors),
+                errors,
+            )
+
+    def test_self_tapping_scene_dimensions_and_features_match_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _self_tapping_scene(root)
+            intent_path = root / data["intentRef"]["path"]
+            intent_fasteners = []
+            for side in ("left", "right"):
+                intent_fasteners.append({
+                    "id": f"side-{side}",
+                    "clearance_feature": f"base-clearance-{side}",
+                    "pilot_feature": f"housing-pilot-{side}",
+                    "boss_feature": f"housing-boss-{side}",
+                })
+            intent = {
+                "schema": "evidence-cad-intent/v4",
+                "part": "device",
+                "manufacturing": {
+                    "mode": "multipart",
+                    "interfaces": [
+                        {
+                            "id": "housing-base-service-joint",
+                            "connection": "self-tapping-screw",
+                            "engagement_mm": 6.0,
+                            "fastening": {
+                                "screw_family": "M3 plastic thread-forming/self-tapping",
+                                "nominal_diameter_mm": 3.0,
+                                "pilot_diameter_mm": 2.6,
+                                "clearance_diameter_mm": 3.4,
+                                "boss_outer_diameter_mm": 7.5,
+                                "closed_end_mm": 1.2,
+                                "locator_pairs": [
+                                    {
+                                        "id": "housing-base-locator",
+                                        "male_feature": "base-collar",
+                                        "female_feature": "housing-socket",
+                                    }
+                                ],
+                                "fasteners": intent_fasteners,
+                            },
+                        }
+                    ],
+                },
+            }
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+            self.assertEqual(scene_contract.validate(data, root), [])
+
+            locator_pairs = intent["manufacturing"]["interfaces"][0]["fastening"][
+                "locator_pairs"
+            ]
+            locator_pairs.append(json.loads(json.dumps(locator_pairs[0])))
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("locator_pairs ids must be unique" in item for item in errors),
+                errors,
+            )
+            locator_pairs.pop()
+
+            intent["manufacturing"]["interfaces"][0]["fastening"][
+                "locator_pairs"
+            ][0]["male_feature"] = "housing-socket"
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("male_feature must match immutable intent" in item for item in errors),
+                errors,
+            )
+
+            intent["manufacturing"]["interfaces"][0]["fastening"][
+                "locator_pairs"
+            ][0]["male_feature"] = "base-collar"
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+
+            data["interfaces"][0]["fasteners"][0]["receiver"]["diameterMm"] = 2.7
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("pilot_diameter_mm must match immutable intent" in item for item in errors),
+                errors,
+            )
 
 
 class ShapeConsistencyTests(unittest.TestCase):

@@ -122,6 +122,71 @@ class InterfaceRecipeTests(unittest.TestCase):
         self.assertAlmostEqual(pair.evidence["fit"]["bore_diameter_mm"], 3.2)
         self.assertEqual(pair.evidence["mobility"]["type"], "rotational")
 
+    def test_self_tapping_pair_keeps_cover_pilot_and_boss_coaxial(self) -> None:
+        pair = recipes.self_tapping_screw_pair(
+            interface_id="housing-base-fastener",
+            axis_id="side-left",
+            cover_thickness_mm=2.4,
+            head_recess_diameter_mm=6.2,
+            head_recess_depth_mm=1.0,
+        )
+        for shape in (
+            pair.clearance_cutter,
+            pair.pilot_cutter,
+            pair.receiver_boss,
+        ):
+            self.assertTrue(is_valid(shape))
+            box = shape.bounding_box()
+            self.assertAlmostEqual((box.min.X + box.max.X) / 2, 0.0, places=6)
+            self.assertAlmostEqual((box.min.Y + box.max.Y) / 2, 0.0, places=6)
+        evidence = pair.evidence
+        self.assertEqual(evidence["axis"]["id"], "side-left")
+        self.assertEqual(evidence["axis"]["direction"], [0.0, 0.0, 1.0])
+        self.assertAlmostEqual(evidence["cover"]["clearance_diameter_mm"], 3.4)
+        self.assertAlmostEqual(evidence["receiver"]["pilot_diameter_mm"], 2.6)
+        self.assertAlmostEqual(evidence["receiver"]["boss_wall_mm"], 2.45)
+        self.assertEqual(
+            evidence["screw"]["manufacturing"],
+            "purchased-hardware-excluded",
+        )
+        self.assertEqual(
+            evidence["screw"]["family"],
+            "M3 plastic thread-forming/self-tapping",
+        )
+        self.assertAlmostEqual(
+            evidence["screw"]["minimum_under_head_length_mm"],
+            7.4,
+        )
+        self.assertAlmostEqual(
+            evidence["screw"]["maximum_under_head_length_mm"],
+            8.2,
+        )
+
+    def test_self_tapping_pair_rejects_inverted_hole_sizes(self) -> None:
+        with self.assertRaisesRegex(
+            recipes.InterfaceRecipeError,
+            "pilot < nominal < clearance",
+        ):
+            recipes.self_tapping_screw_pair(
+                interface_id="housing-base-fastener",
+                axis_id="side-left",
+                cover_thickness_mm=2.4,
+                pilot_diameter_mm=3.4,
+                clearance_diameter_mm=3.2,
+            )
+
+    def test_self_tapping_pair_rejects_an_underbuilt_boss(self) -> None:
+        with self.assertRaisesRegex(
+            recipes.InterfaceRecipeError,
+            "minimum_boss_wall_mm",
+        ):
+            recipes.self_tapping_screw_pair(
+                interface_id="housing-base-fastener",
+                axis_id="side-left",
+                cover_thickness_mm=2.4,
+                boss_outer_diameter_mm=5.0,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

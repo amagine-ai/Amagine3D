@@ -32,6 +32,7 @@ INTERFACE_CONNECTIONS = {
     "pin-socket",
     "press-fit",
     "retained-slider",
+    "self-tapping-screw",
     "snap-fit",
     "tab-slot",
     "threaded-insert",
@@ -165,6 +166,166 @@ def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> 
     return profile
 
 
+def _validate_self_tapping_fastening(
+    interface: dict,
+    index: int,
+) -> list[str]:
+    """Validate intent-side targets for a located plastic screw joint."""
+
+    prefix = f"manufacturing.interfaces[{index}].fastening"
+    fastening = interface.get("fastening")
+    if not isinstance(fastening, dict):
+        return [f"{prefix} is required for connection self-tapping-screw"]
+    errors: list[str] = []
+    screw_family = fastening.get("screw_family")
+    if not isinstance(screw_family, str) or not screw_family.strip():
+        errors.append(f"{prefix}.screw_family is required")
+    nominal = fastening.get("nominal_diameter_mm")
+    pilot = fastening.get("pilot_diameter_mm")
+    clearance = fastening.get("clearance_diameter_mm")
+    boss_outer = fastening.get("boss_outer_diameter_mm")
+    closed_end = fastening.get("closed_end_mm")
+    for key, value in (
+        ("nominal_diameter_mm", nominal),
+        ("pilot_diameter_mm", pilot),
+        ("clearance_diameter_mm", clearance),
+        ("boss_outer_diameter_mm", boss_outer),
+        ("closed_end_mm", closed_end),
+    ):
+        if not _positive_number(value):
+            errors.append(f"{prefix}.{key} must be positive")
+    if all(_positive_number(value) for value in (pilot, nominal, clearance)):
+        if not float(pilot) < float(nominal) < float(clearance):
+            errors.append(
+                f"{prefix} diameters must satisfy pilot < nominal < clearance"
+            )
+    if _positive_number(boss_outer) and _positive_number(pilot):
+        if float(boss_outer) <= float(pilot):
+            errors.append(
+                f"{prefix}.boss_outer_diameter_mm must exceed pilot_diameter_mm"
+            )
+    head_diameter = fastening.get("head_recess_diameter_mm")
+    head_depth = fastening.get("head_recess_depth_mm")
+    minimum_land = fastening.get("minimum_cover_land_mm")
+    if (head_diameter is None) != (head_depth is None):
+        errors.append(
+            f"{prefix} head recess diameter and depth must be declared together"
+        )
+    elif head_diameter is not None:
+        if not _positive_number(head_diameter) or (
+            _positive_number(clearance)
+            and float(head_diameter) <= float(clearance)
+        ):
+            errors.append(
+                f"{prefix}.head_recess_diameter_mm must exceed clearance_diameter_mm"
+            )
+        if not _positive_number(head_depth):
+            errors.append(f"{prefix}.head_recess_depth_mm must be positive")
+        if not _positive_number(minimum_land):
+            errors.append(f"{prefix}.minimum_cover_land_mm must be positive")
+    elif minimum_land is not None:
+        errors.append(
+            f"{prefix}.minimum_cover_land_mm requires a head recess"
+        )
+
+    interface_features = {
+        item
+        for item in interface.get("features", [])
+        if isinstance(item, str)
+    }
+    locator_pairs = fastening.get("locator_pairs")
+    locator_ids: list[str] = []
+    locator_features: list[str] = []
+    if not isinstance(locator_pairs, list) or not locator_pairs:
+        errors.append(f"{prefix}.locator_pairs must declare at least one locating pair")
+    else:
+        for locator_index, locator in enumerate(locator_pairs):
+            locator_prefix = f"{prefix}.locator_pairs[{locator_index}]"
+            if not isinstance(locator, dict):
+                errors.append(f"{locator_prefix} must be an object")
+                continue
+            locator_id = locator.get("id")
+            if not isinstance(locator_id, str) or not ID_PATTERN.fullmatch(locator_id):
+                errors.append(f"{locator_prefix}.id is invalid")
+            else:
+                locator_ids.append(locator_id)
+            pair_features: list[str] = []
+            for key in ("male_feature", "female_feature"):
+                feature_id = locator.get(key)
+                if not isinstance(feature_id, str) or not ID_PATTERN.fullmatch(feature_id):
+                    errors.append(f"{locator_prefix}.{key} is invalid")
+                else:
+                    pair_features.append(feature_id)
+                    locator_features.append(feature_id)
+            if len(pair_features) == 2 and pair_features[0] == pair_features[1]:
+                errors.append(
+                    f"{locator_prefix} must name distinct male and female features"
+                )
+        if len(locator_ids) != len(set(locator_ids)):
+            errors.append(f"{prefix}.locator_pairs ids must be unique")
+        if len(locator_features) != len(set(locator_features)):
+            errors.append(f"{prefix}.locator_pairs cannot reuse locating features")
+        if not set(locator_features).issubset(interface_features):
+            errors.append(
+                f"{prefix}.locator_pairs features must be included in interface features"
+            )
+
+    fasteners = fastening.get("fasteners")
+    if not isinstance(fasteners, list) or not fasteners:
+        errors.append(f"{prefix}.fasteners must declare at least one screw axis")
+        return errors
+
+    fastener_ids: list[str] = []
+    mapped_features: list[str] = []
+    required_feature_keys = (
+        "clearance_feature",
+        "pilot_feature",
+        "boss_feature",
+    )
+    for fastener_index, fastener in enumerate(fasteners):
+        fastener_prefix = f"{prefix}.fasteners[{fastener_index}]"
+        if not isinstance(fastener, dict):
+            errors.append(f"{fastener_prefix} must be an object")
+            continue
+        fastener_id = fastener.get("id")
+        if not isinstance(fastener_id, str) or not ID_PATTERN.fullmatch(fastener_id):
+            errors.append(f"{fastener_prefix}.id is invalid")
+        else:
+            fastener_ids.append(fastener_id)
+        local_features: list[str] = []
+        for key in required_feature_keys:
+            feature_id = fastener.get(key)
+            if not isinstance(feature_id, str) or not ID_PATTERN.fullmatch(feature_id):
+                errors.append(f"{fastener_prefix}.{key} is invalid")
+            else:
+                local_features.append(feature_id)
+                mapped_features.append(feature_id)
+        if "head_recess_feature" in fastener:
+            errors.append(
+                f"{fastener_prefix}.head_recess_feature is invalid; the head recess "
+                "is part of the shared clearance cutter"
+            )
+        if len(local_features) != len(set(local_features)):
+            errors.append(f"{fastener_prefix} feature IDs must be distinct")
+        if not set(local_features).issubset(interface_features):
+            errors.append(
+                f"{fastener_prefix} features must be included in interface features"
+            )
+    if len(fastener_ids) != len(set(fastener_ids)):
+        errors.append(f"{prefix}.fasteners ids must be unique")
+    if len(mapped_features) != len(set(mapped_features)):
+        errors.append(
+            f"{prefix}.fasteners cannot reuse a hole or boss feature across axes"
+        )
+    shared_features = sorted(set(locator_features).intersection(mapped_features))
+    if shared_features:
+        errors.append(
+            f"{prefix} locator and screw features must be independent: "
+            + ", ".join(shared_features)
+        )
+    return errors
+
+
 def validate_manufacturing(
     manufacturing,
     feature_ids: set[str] | None = None,
@@ -254,6 +415,13 @@ def validate_manufacturing(
                 if connection not in INTERFACE_CONNECTIONS:
                     errors.append(
                         f"manufacturing.interfaces[{index}].connection is invalid"
+                    )
+                if connection == "self-tapping-screw":
+                    errors.extend(_validate_self_tapping_fastening(interface, index))
+                elif "fastening" in interface:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].fastening is only valid "
+                        "for connection self-tapping-screw"
                     )
                 assembly_axis = interface.get("assembly_axis")
                 if assembly_axis not in ASSEMBLY_AXES:
