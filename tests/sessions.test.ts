@@ -520,3 +520,40 @@ test('marks the build report display GLB as featured', async () => {
     await rm(root, { force: true, recursive: true });
   }
 });
+
+test('marks the physical GLB from a hybrid scene build as featured', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-hybrid-featured-'));
+  try {
+    const selectedRoot = sessionWorkspaceRoot(root, SESSION_ID)!;
+    await mkdir(selectedRoot, { recursive: true });
+    const sourcePath = join(selectedRoot, 'companion_scene.json');
+    const stlPath = join(selectedRoot, 'companion.stl');
+    const threeMfPath = join(selectedRoot, 'companion.3mf');
+    const displayGlbPath = join(selectedRoot, 'companion-display.glb');
+    await writeFile(sourcePath, '{}');
+    await writeFile(stlPath, 'solid companion\nendsolid companion\n');
+    await writeFile(threeMfPath, '3mf');
+    await writeFile(displayGlbPath, 'physical display glb');
+    await writeFile(
+      join(selectedRoot, 'companion_report.json'),
+      JSON.stringify({
+        artifacts: {
+          'glb:display': { path: displayGlbPath },
+          '3mf': { path: threeMfPath },
+          stl: { path: stlPath },
+        },
+        part: 'companion',
+        schema: 'evidence-hybrid-mesh-build/v1',
+        source: { path: sourcePath },
+      }),
+    );
+
+    const collection = await userSessionArtifacts(root, SESSION_ID);
+    assert.equal(
+      collection?.artifacts.find(({ featured }) => featured)?.path,
+      'companion-display.glb',
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

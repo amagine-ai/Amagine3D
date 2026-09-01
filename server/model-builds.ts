@@ -1,11 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { ArtifactSummary } from '../src/types.ts';
 
 const ASSEMBLY_BUILD_REPORT_SCHEMA = 'evidence-cad-assembly-build/v3';
+const HYBRID_BUILD_REPORT_SCHEMA = 'evidence-hybrid-mesh-build/v1';
 const BUILD_REPORT_SCHEMAS = new Set([
   ASSEMBLY_BUILD_REPORT_SCHEMA,
+  HYBRID_BUILD_REPORT_SCHEMA,
   'evidence-cad-build/v4',
   'evidence-color-build/v5',
 ]);
@@ -77,8 +79,12 @@ function reportArtifactPaths(
   return [...new Set(paths)];
 }
 
-function primaryArtifactKey(schema: string): string {
-  return schema === 'evidence-color-build/v5' ? '3mf' : 'stl';
+function primaryArtifactKey(schema: string, report: RawBuildReport): string {
+  return schema === 'evidence-color-build/v5' ||
+    schema === HYBRID_BUILD_REPORT_SCHEMA ||
+    (schema === ASSEMBLY_BUILD_REPORT_SCHEMA && Boolean(report.artifacts?.['3mf']))
+    ? '3mf'
+    : 'stl';
 }
 
 export async function discoverModelBuilds(
@@ -110,7 +116,7 @@ export async function discoverModelBuilds(
       report.source?.path,
       'source',
     );
-    const primaryKey = primaryArtifactKey(schema);
+    const primaryKey = primaryArtifactKey(schema, report);
     const primaryPreviewPath = artifactPathForReference(
       workspaceRoot,
       artifacts,
@@ -130,7 +136,7 @@ export async function discoverModelBuilds(
       modelId:
         typeof report.part === 'string' && report.part.trim()
           ? report.part
-          : basename(sourcePath, '.py'),
+          : basename(sourcePath, extname(sourcePath)),
       primaryPreviewPath,
       reportPath: artifact.path,
       sourcePath,

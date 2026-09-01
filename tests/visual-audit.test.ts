@@ -184,6 +184,51 @@ test('visual audit requires preview render followed by preview read', () => {
   );
 });
 
+test('Three.js geometry mutations invalidate stale previews but read-only shape QA does not', () => {
+  const reviewed = [
+    assistantTool('bash', {
+      command:
+        'python skills/text-a3d/render_preview.py model.stl --out model_views.png',
+    }),
+    bashResult(),
+    assistantTool('read', { path: '/workspace/model_views.png' }),
+    imageReadResult(),
+  ];
+  assert.equal(
+    auditCadVisualValidation([
+      ...reviewed,
+      assistantTool('bash', { command: 'node generate_scene.mjs' }, 'call-node'),
+      bashResult('call-node'),
+    ]).pass,
+    false,
+  );
+  assert.equal(
+    auditCadVisualValidation([
+      ...reviewed,
+      assistantTool('write', {
+        content: '{}',
+        path: '/workspace/companion_scene.json',
+      }),
+    ]).pass,
+    false,
+  );
+  assert.equal(
+    auditCadVisualValidation([
+      ...reviewed,
+      assistantTool(
+        'bash',
+        {
+          command:
+            'python skills/text-a3d/shape_consistency.py --manifest scene.json',
+        },
+        'call-shape',
+      ),
+      bashResult('call-shape'),
+    ]).pass,
+    true,
+  );
+});
+
 test('visual repair instruction names missing evidence and attempt budget', () => {
   const instruction = visualValidationRepairInstruction(
     {

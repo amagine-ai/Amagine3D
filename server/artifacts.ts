@@ -11,7 +11,7 @@ import type {
 const MODEL_EXTENSIONS = new Set(['.3mf', '.glb', '.step', '.stl', '.stp']);
 const IMAGE_EXTENSIONS = new Set(['.gif', '.jpeg', '.jpg', '.png', '.webp']);
 const REPORT_EXTENSIONS = new Set(['.json', '.md', '.txt']);
-const SOURCE_EXTENSIONS = new Set(['.py']);
+const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.py']);
 const IGNORED_DIRECTORIES = new Set([
   '.git',
   '.amagine-state',
@@ -28,6 +28,16 @@ function kindForExtension(extension: string): ArtifactKind {
   if (REPORT_EXTENSIONS.has(extension)) return 'report';
   if (SOURCE_EXTENSIONS.has(extension)) return 'source';
   return 'other';
+}
+
+function kindForArtifact(name: string, extension: string): ArtifactKind {
+  if (
+    extension === '.json' &&
+    /(?:^|[._-])(?:semantic[._-])?scene\.json$/iu.test(name)
+  ) {
+    return 'source';
+  }
+  return kindForExtension(extension);
 }
 
 function previewFormat(extension: string): PreviewFormat | undefined {
@@ -67,7 +77,7 @@ export async function scanArtifacts(
       }
       if (!entry.isFile()) continue;
       const extension = extname(entry.name).toLowerCase();
-      const kind = kindForExtension(extension);
+      const kind = kindForArtifact(entry.name, extension);
       if (kind === 'other') continue;
       const metadata = await stat(absolutePath);
       const path = toPosixPath(relative(workspaceRoot, absolutePath));
@@ -136,6 +146,9 @@ export function artifactContentType(path: string): string {
       return 'image/jpeg';
     case '.json':
       return 'application/json; charset=utf-8';
+    case '.js':
+    case '.mjs':
+      return 'text/javascript; charset=utf-8';
     case '.md':
       return 'text/markdown; charset=utf-8';
     case '.png':

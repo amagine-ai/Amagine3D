@@ -16,6 +16,8 @@ const NON_MUTATING_CAD_SCRIPTS = new Set([
   'qa_check.py',
   'reference_analyze.py',
   'render_preview.py',
+  'scene_contract.py',
+  'shape_consistency.py',
 ]);
 
 interface ToolCallBlock {
@@ -82,18 +84,24 @@ function isCadMutation(call: ToolCallBlock): boolean {
     const path = args.path;
     return (
       typeof path === 'string' &&
-      /\.(?:py|stl|step|stp|3mf)$/i.test(path)
+      (/\.(?:py|mjs|js|stl|step|stp|3mf|glb|gltf)$/i.test(path) ||
+        /(?:canonical|model[-_]?graph|semantic[-_]?scene|intent).*\.json$/i.test(path) ||
+        /(?:^|[._/-])scene\.json$/i.test(path))
     );
   }
   if (call.name !== 'bash') return false;
   const command = args.command;
   if (typeof command !== 'string') return false;
-  const script = /(?:^|[;&|]\s*)python(?:3(?:\.\d+)?)?\s+["']?([^\s"']+\.py)(?:["']|\s|$)/i.exec(
+  const pythonScript = /(?:^|[;&|]\s*)python(?:3(?:\.\d+)?)?\s+["']?([^\s"']+\.py)(?:["']|\s|$)/i.exec(
     command,
   )?.[1];
-  if (!script) return false;
-  const filename = script.split(/[/\\]/u).at(-1)?.toLowerCase();
-  return Boolean(filename && !NON_MUTATING_CAD_SCRIPTS.has(filename));
+  if (pythonScript) {
+    const filename = pythonScript.split(/[/\\]/u).at(-1)?.toLowerCase();
+    return Boolean(filename && !NON_MUTATING_CAD_SCRIPTS.has(filename));
+  }
+  return /(?:^|[;&|]\s*)node\s+["']?[^\s"']+\.(?:mjs|js)(?:["']|\s|$)/i.test(
+    command,
+  );
 }
 
 function isPreviewRead(call: ToolCallBlock): boolean {
