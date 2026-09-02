@@ -59,6 +59,20 @@ are returned together when available. Complete subprocess output stays in
 unique staged path. A complete validated report is atomically published, so a
 deterministic report may be byte-identical to the prior attempt without being
 misclassified as stale.
+
+Checked source operations, Hybrid part/cutter/overlap checks, and applicable
+artifact QA collect independent failures into one result. The driver continues
+only while the required upstream artifact remains structurally trustworthy; an
+issue with `blockedBy` explicitly identifies a dependency boundary instead of
+guessing a downstream diagnosis. The Agent should review the whole issue set,
+group shared causes, make one coordinated source repair, and then rerun.
+
+Every attempt atomically refreshes `<name>_repair-state.json`. Its compact
+`failed`, `blocked`, `passedStages`, and `delta` fields preserve factual repair
+memory across attempts sharing the same immutable intent. The returned
+`repairDelta` classifies issue identities as `new`, `newlyUnblocked`,
+`remaining`, `resolved`, or `regressed`. This ledger does not choose actions,
+advance states, or split work between Agents.
 Preview images use immutable compile-run filenames. The canonical render
 evidence is published atomically only after both images exist and are
 hash-bound; interrupted publication removes this run's orphan images and

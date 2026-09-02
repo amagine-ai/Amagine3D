@@ -318,11 +318,20 @@ each part's `representationMaster`, runs every
 applicable audit, creates the package and fresh display render, and returns a
 compact `evidence-cad-compile-result/v1` result. A failed result identifies the
 stage, stable error code, affected part/node/interface when known, observed and
-expected measurements, and a constructive repair hint. Independent failures
-from one checker are aggregated into the same result. Preserve the intent and
-intended geometry while repairing the source or scene, then call `cad_compile`
-again. Read full audit files only when the compact diagnostic is insufficient;
-do not inspect compiler implementation during ordinary modeling.
+expected measurements, and a constructive repair hint. Independent source,
+backend, and applicable QA failures are aggregated until a missing or invalid
+upstream artifact makes further checks unsafe. Review the complete issue set,
+group issues with a shared root cause, and make one coordinated source change
+before calling `cad_compile` again. Preserve the intent and intended geometry.
+Read full audit files only when the compact diagnostic is insufficient; do not
+inspect compiler implementation during ordinary modeling.
+
+Each attempt also writes a compact `<name>_repair-state.json` ledger and returns
+`repairDelta`. The ledger records failed and blocked issue identities, stages
+that passed, and which issues are new, newly unblocked, remaining, resolved, or
+regressed for the same immutable intent. It is factual cross-run memory for the
+same Agent loop, not a workflow state machine. Treat `blockedBy` as a dependency
+boundary and do not invent a downstream repair until the named evidence exists.
 
 Every compile attempt owns a UUID and every backend emits one atomically
 published `<name>_report.json` using

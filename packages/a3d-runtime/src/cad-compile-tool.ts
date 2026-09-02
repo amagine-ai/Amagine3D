@@ -839,7 +839,7 @@ export function createCadCompileTool(
       'Use cad_compile instead of manually chaining text-a3d compiler and QA scripts.',
       'Before calling cad_compile, run a separate contract-only authoring step that creates and validates the immutable intent. Never put write_intent in the CAD build source or run the full build source manually to bootstrap intent; the build source may generate the scene inside cad_compile.',
       'A pass result still requires reading the returned fresh preview before delivery.',
-      'On a failed result, repair the reported semantic or geometry issue and call cad_compile again.',
+      'On a failed result, review the complete issue set and repair shared root causes in one coordinated source change before calling cad_compile again. Use repairDelta and repairState to avoid regressing checks that already passed; blockedBy marks checks that require valid upstream evidence, not extra failures to guess around.',
     ],
     parameters: cadCompileParameters,
     executionMode: 'sequential',
