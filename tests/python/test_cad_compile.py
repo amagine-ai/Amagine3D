@@ -305,6 +305,41 @@ class _PassingRunner:
         return CommandResult(returncode=0, elapsed_ms=1, output_tail="")
 
 
+class _DeferredSourceDiagnosticRunner(_PassingRunner):
+    def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
+        command = super().run(
+            stage,
+            argv,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            env_extra=env_extra,
+        )
+        if stage != "source":
+            return command
+        return CommandResult(
+            returncode=1,
+            elapsed_ms=command.elapsed_ms,
+            output_tail=json.dumps(
+                {
+                    "schema": "evidence-cad-source-diagnostics/v1",
+                    "pass": False,
+                    "issues": [
+                        {
+                            "check": "checked-cut",
+                            "code": "SOURCE.CUT_MISSED_OWNER",
+                            "expected": {"minimumRemovedMm3": ">0"},
+                            "featureId": "part/opening",
+                            "message": "opening cutter does not intersect its owner",
+                            "observed": {"removedMm3": 0.0},
+                            "partId": "part",
+                            "severity": "error",
+                        }
+                    ],
+                }
+            ),
+        )
+
+
 class _ZeroReturncodeTimeoutRunner(_PassingRunner):
     def __init__(
         self,
@@ -611,6 +646,112 @@ class _InvalidBuildAuditRunner(_PassingRunner):
 
 
 class CadCompileTests(unittest.TestCase):
+    def test_repair_state_tracks_unblocked_resolved_and_regressed_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            intent = root / "part_intent.json"
+            source = root / "build.py"
+            intent.write_text('{"part":"part"}\n', encoding="utf-8")
+            source.write_text("# repair ledger fixture\n", encoding="utf-8")
+            result_path = root / "part_compile-result.json"
+
+            def compile_result(run_id: str, issues: list[dict]) -> dict:
+                return {
+                    "finishedAt": f"2026-09-02T00:00:0{run_id[-1]}+00:00",
+                    "inputs": {"intent": str(intent), "source": str(source)},
+                    "issues": issues,
+                    "model": "part",
+                    "runId": run_id,
+                    "stages": [{"name": "source", "status": "pass"}],
+                }
+
+            issue = {
+                "check": "checked-cut",
+                "code": "SOURCE.CUT_MISSED_OWNER",
+                "featureId": "part/opening",
+                "part": "part",
+                "severity": "error",
+                "stage": "source",
+            }
+            blocked = {**issue, "blockedBy": "OWNER_UNAVAILABLE", "status": "blocked"}
+
+            state_path = cad_compile._write_repair_state(
+                compile_result("run-1", [blocked]),
+                result_path=result_path,
+            )
+            first = json.loads(state_path.read_text(encoding="utf-8"))
+            issue_id = first["blocked"][0]["id"]
+            self.assertEqual(first["delta"]["new"], [])
+
+            second_result = compile_result("run-2", [issue])
+            cad_compile._write_repair_state(second_result, result_path=result_path)
+            self.assertEqual(second_result["repairDelta"]["newlyUnblocked"], [issue_id])
+
+            third_result = compile_result("run-3", [])
+            cad_compile._write_repair_state(third_result, result_path=result_path)
+            self.assertEqual(third_result["repairDelta"]["resolved"], [issue_id])
+
+            fourth_result = compile_result("run-4", [issue])
+            cad_compile._write_repair_state(fourth_result, result_path=result_path)
+            self.assertEqual(fourth_result["repairDelta"]["regressed"], [issue_id])
+
+    def test_structured_source_failure_continues_independent_audits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(
+                root,
+                part="part",
+                feature_owners={"part-body": "part"},
+                dimensions_mm=(40, 30, 20),
+            )
+            _localize_profile(intent, root)
+            scene = _write_scene(root, intent)
+            source = root / "build.py"
+            source.write_text("# fake source is handled by the injected runner\n")
+            report_path, report = _minimal_report(
+                root,
+                intent_path=intent,
+                scene_path=scene,
+                source_path=source,
+            )
+            holder = {}
+
+            def factory(log_path):
+                runner = _DeferredSourceDiagnosticRunner(
+                    log_path,
+                    report_path,
+                    report,
+                )
+                holder["runner"] = runner
+                return runner
+
+            result = compile_cad(
+                CompileOptions(
+                    workspace=root,
+                    marker=marker,
+                    intent=intent,
+                    scene=scene,
+                    source=source,
+                    output_dir=Path("."),
+                ),
+                runner_factory=factory,
+            )
+
+            self.assertFalse(result["pass"], result)
+            self.assertEqual(
+                holder["runner"].calls,
+                ["source", "build-check", "mesh-qa:part", "step-qa:part"],
+            )
+            issue = next(
+                issue
+                for issue in result["issues"]
+                if issue["code"] == "SOURCE.CUT_MISSED_OWNER"
+            )
+            self.assertEqual(issue["part"], "part")
+            self.assertEqual(issue["featureId"], "part/opening")
+            self.assertNotIn("renderEvidence", result["artifacts"])
+
     def test_backend_selection_uses_part_representation_masters(self) -> None:
         self.assertEqual(
             select_backend({"parts": [{"representationMaster": "brep"}]}),

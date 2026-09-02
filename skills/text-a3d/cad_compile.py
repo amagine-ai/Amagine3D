@@ -39,6 +39,8 @@ from source_preflight import audit as audit_source
 
 RESULT_SCHEMA = "evidence-cad-compile-result/v1"
 BUILD_SCHEMA = "evidence-a3d-build/v1"
+REPAIR_STATE_SCHEMA = "evidence-cad-repair-state/v1"
+SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
 MODEL_NAME = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
 MAX_ISSUES = 40
 MAX_MESSAGE_CHARS = 700
@@ -552,11 +554,14 @@ def _issue(
     detail_fields = {
         "actual",
         "artifact",
+        "blockedBy",
         "bounds",
         "componentCount",
         "components",
+        "coordinateFrame",
         "endpoint",
         "expected",
+        "featureBounds",
         "featureId",
         "features",
         "field",
@@ -564,6 +569,10 @@ def _issue(
         "nodeId",
         "observed",
         "offenderId",
+        "ownerBounds",
+        "ownerPartId",
+        "scope",
+        "status",
         "target",
     }
     for key, value in (details or {}).items():
@@ -633,6 +642,24 @@ def _json_from_tail(output: str) -> dict[str, Any] | None:
         if isinstance(value, dict):
             return value
     return None
+
+
+def _is_deferred_source_failure(
+    command: CommandResult,
+    report_path: Path,
+) -> bool:
+    """Allow a checked-operation diagnostic candidate to reach later audits."""
+
+    if command.timed_out or command.returncode in {None, 0} or not report_path.is_file():
+        return False
+    payload = _json_from_tail(command.output_tail)
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("schema") == SOURCE_DIAGNOSTICS_SCHEMA
+        and payload.get("pass") is False
+        and isinstance(payload.get("issues"), list)
+        and payload["issues"]
+    )
 
 
 def _record_structured_issues(
@@ -1166,6 +1193,163 @@ def _compile_deadline_exceeded(result: dict[str, Any]) -> bool:
     )
 
 
+def _issue_identity(issue: dict[str, Any]) -> str:
+    """Return a stable identity for comparing one diagnostic across attempts."""
+
+    identity_fields = (
+        "code",
+        "stage",
+        "check",
+        "part",
+        "featureId",
+        "nodeId",
+        "interfaceId",
+        "offenderId",
+        "target",
+    )
+    identity = {
+        field: issue[field]
+        for field in identity_fields
+        if issue.get(field) is not None
+    }
+    if not any(field in identity for field in identity_fields[2:]):
+        identity["message"] = issue.get("message")
+    payload = json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return sha256(payload).hexdigest()[:16]
+
+
+def _repair_issue_record(issue: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "code",
+        "stage",
+        "check",
+        "part",
+        "featureId",
+        "nodeId",
+        "interfaceId",
+        "blockedBy",
+    )
+    return {
+        "id": _issue_identity(issue),
+        **{
+            field: issue[field]
+            for field in fields
+            if issue.get(field) is not None
+        },
+    }
+
+
+def _read_previous_repair_state(
+    path: Path,
+    *,
+    intent_hash: str | None,
+) -> dict[str, Any] | None:
+    try:
+        previous = _load_json(path, "repair state")
+    except (OSError, ValueError):
+        return None
+    if (
+        previous.get("schema") != REPAIR_STATE_SCHEMA
+        or previous.get("intentHash") != intent_hash
+    ):
+        return None
+    return previous
+
+
+def _write_repair_state(
+    result: dict[str, Any],
+    *,
+    result_path: Path,
+) -> Path:
+    """Persist a compact factual ledger without imposing a workflow state machine."""
+
+    intent_path = Path(str(result.get("inputs", {}).get("intent", "")))
+    source_path = Path(str(result.get("inputs", {}).get("source", "")))
+    intent_hash = _digest(intent_path) if intent_path.is_file() else None
+    source_hash = _digest(source_path) if source_path.is_file() else None
+    state_path = result_path.with_name(
+        f"{result.get('model', 'cad')}_repair-state.json"
+    )
+    previous = _read_previous_repair_state(
+        state_path,
+        intent_hash=intent_hash,
+    )
+
+    error_issues = [
+        issue
+        for issue in result.get("issues", [])
+        if isinstance(issue, dict) and issue.get("severity") == "error"
+    ]
+    blocked = [
+        _repair_issue_record(issue)
+        for issue in error_issues
+        if issue.get("blockedBy") is not None or issue.get("status") == "blocked"
+    ]
+    failed = [
+        _repair_issue_record(issue)
+        for issue in error_issues
+        if issue.get("blockedBy") is None and issue.get("status") != "blocked"
+    ]
+    current_failed = {item["id"] for item in failed}
+    current_blocked = {item["id"] for item in blocked}
+    previous_failed = {
+        item.get("id")
+        for item in (previous or {}).get("failed", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    previous_blocked = {
+        item.get("id")
+        for item in (previous or {}).get("blocked", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    known_resolved = {
+        item
+        for item in (previous or {}).get("knownResolvedIssueIds", [])
+        if isinstance(item, str)
+    }
+    resolved = previous_failed - current_failed - current_blocked
+    known_resolved.update(resolved)
+    delta = {
+        "new": sorted(
+            current_failed
+            - previous_failed
+            - previous_blocked
+            - known_resolved
+        ),
+        "newlyUnblocked": sorted(current_failed & previous_blocked),
+        "regressed": sorted(current_failed & known_resolved),
+        "remaining": sorted(current_failed & previous_failed),
+        "resolved": sorted(resolved),
+    }
+    state = {
+        "blocked": blocked,
+        "delta": delta,
+        "failed": failed,
+        "intentHash": intent_hash,
+        "knownResolvedIssueIds": sorted(known_resolved),
+        "passedStages": sorted(
+            stage.get("name")
+            for stage in result.get("stages", [])
+            if isinstance(stage, dict)
+            and stage.get("status") == "pass"
+            and isinstance(stage.get("name"), str)
+        ),
+        "previousRunId": (previous or {}).get("runId"),
+        "runId": result.get("runId"),
+        "schema": REPAIR_STATE_SCHEMA,
+        "sourceHash": source_hash,
+        "updatedAt": result.get("finishedAt"),
+    }
+    _write_json(state_path, state)
+    result["repairDelta"] = delta
+    return state_path
+
+
 def _finish(
     result: dict[str, Any],
     *,
@@ -1185,6 +1369,17 @@ def _finish(
     result["deliveryReady"] = False
     if log_path.is_file():
         result["artifacts"]["log"] = _artifact(log_path)
+    try:
+        repair_state_path = _write_repair_state(result, result_path=result_path)
+        result["artifacts"]["repairState"] = _artifact(repair_state_path)
+    except Exception as error:
+        _issue(
+            result,
+            code="INTERNAL.REPAIR_STATE_UNAVAILABLE",
+            stage="repair-state",
+            severity="warning",
+            message=error,
+        )
     _write_json(result_path, result)
     compact = {
         "artifacts": {
@@ -1199,6 +1394,7 @@ def _finish(
                 "log",
                 "preview",
                 "referencePreview",
+                "repairState",
                 "renderEvidence",
                 "sourcePreflight",
             }
@@ -1211,6 +1407,7 @@ def _finish(
         "omittedErrorCount": result["omittedErrorCount"],
         "omittedIssueCount": result["omittedIssueCount"],
         "pass": result["pass"],
+        "repairDelta": result.get("repairDelta", {}),
         "result": {"path": str(result_path)},
         "runId": result.get("runId"),
         "schema": RESULT_SCHEMA,
@@ -1410,7 +1607,8 @@ def compile_cad(
             timeout_code="SOURCE.TIMEOUT",
             internal_code="INTERNAL.SOURCE_RUNNER_ERROR",
         )
-        return _finish(result, result_path=result_path, log_path=log_path)
+        if not _is_deferred_source_failure(source_command, report_path):
+            return _finish(result, result_path=result_path, log_path=log_path)
     if not intent_path.is_file() or _digest(intent_path) != intent_digest:
         _issue(
             result,
@@ -1611,11 +1809,6 @@ def compile_cad(
             failure_code="QA.ASSEMBLY_FAILED",
             expected_schema="evidence-assembly-audit/v1",
         )
-        if any(
-            issue["severity"] == "error" and issue["stage"] == "assembly-qa"
-            for issue in result["issues"]
-        ):
-            return _finish(result, result_path=result_path, log_path=log_path)
 
     mesh_script = Path(__file__).resolve().with_name("qa_check.py")
     mesh_targets: list[tuple[str, Path, int]] = []
