@@ -5,11 +5,13 @@ from hashlib import sha256
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -146,6 +148,32 @@ class ColorPipelineTests(unittest.TestCase):
             sys.path.insert(0, str(COLOR))
         self.cad_helpers = load_module(
             "color_cad_helpers_test", COLOR / "cad_helpers.py"
+        )
+
+    def test_checked_operations_collect_independent_failures_during_compile(self):
+        body = Box(10, 10, 10)
+        first = Pos(100, 0, 0) * Box(1, 1, 1)
+        second = Pos(200, 0, 0) * Box(1, 1, 1)
+
+        with mock.patch.dict(
+            os.environ,
+            {"AMAGINE3D_SOURCE_PHASE": "compile"},
+            clear=False,
+        ):
+            after_first = self.cad_helpers.checked_cut(body, first, "first-miss")
+            after_second = self.cad_helpers.checked_cut(
+                after_first,
+                second,
+                "second-miss",
+            )
+
+        self.assertAlmostEqual(float(after_second.volume), float(body.volume))
+        self.assertEqual(
+            [
+                issue["featureId"]
+                for issue in self.cad_helpers._DEFERRED_ISSUES
+            ],
+            ["first-miss", "second-miss"],
         )
 
     def test_overlap_volume_handles_disjoint_solid_color_regions(self):

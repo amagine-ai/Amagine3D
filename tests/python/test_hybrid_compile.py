@@ -526,6 +526,78 @@ def _write_scene(root: Path, scene: dict) -> Path:
 
 
 class HybridCompileTests(unittest.TestCase):
+    def test_compile_collects_all_independent_missed_cutters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scene, _ = _fixture(root)
+            source = root / "source"
+
+            for name, offset in (("miss-a", 40.0), ("miss-b", -40.0)):
+                cutter = trimesh.creation.cylinder(radius=2, height=14, sections=32)
+                cutter.apply_translation([offset, 0, 0])
+                cutter.export(source / f"{name}.stl")
+
+            existing_cutter = next(
+                node for node in scene["nodes"] if node["id"] == "housing-hole"
+            )
+            existing_cutter["recipe"]["parameters"]["sourceMesh"]["path"] = (
+                "source/miss-a.stl"
+            )
+            scene["nodes"].append(
+                {
+                    "id": "housing-second-hole",
+                    "partId": "housing",
+                    "featureId": "housing/second-hole",
+                    "role": "cutter",
+                    "operation": "subtract",
+                    "recipe": {
+                        "kind": "sourceMesh",
+                        "parameters": {
+                            "sourceMesh": {
+                                "path": "source/miss-b.stl",
+                                "scale": 1.0,
+                            }
+                        },
+                    },
+                }
+            )
+            _, intent = _read_bound_intent(scene, root)
+            intent["features"].append(
+                {
+                    "id": "housing/second-hole",
+                    "part": "housing",
+                    "kind": "detail",
+                    "evidence": "fixture requires a second housing cutter",
+                    "acceptance": "scene binds the second cutter to housing",
+                }
+            )
+            intent["printability"]["critical_features"].append(
+                "housing/second-hole"
+            )
+            _rewrite_bound_intent(scene, root, intent)
+
+            with self.assertRaises(hybrid_compile.CompileDiagnosticsError) as raised:
+                hybrid_compile.compile_scene(
+                    scene,
+                    base_dir=root,
+                    output_dir=root / "artifacts",
+                    source_scene=_write_scene(root, scene),
+                    consistency_samples=64,
+                )
+
+            issues = raised.exception.issues
+            missed = [
+                issue
+                for issue in issues
+                if issue["code"] == "BACKEND.CUTTER_MISSED_OWNER"
+            ]
+            self.assertEqual(
+                {issue["featureId"] for issue in missed},
+                {"housing/through-hole", "housing/second-hole"},
+            )
+            self.assertEqual(len(missed), 2)
+            self.assertTrue(all(issue["partId"] == "housing" for issue in missed))
+
     def test_volumetric_color_regions_round_trip_materials_and_build_item(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

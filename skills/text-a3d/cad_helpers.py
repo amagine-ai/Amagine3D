@@ -103,6 +103,8 @@ class BuildInvariantError(RuntimeError):
 _EVENTS: list[dict] = []
 _FEATURES: dict[str, dict] = {}
 _PARAMETERS: dict[str, dict] = {}
+_DEFERRED_ISSUES: list[dict] = []
+_SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
 _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -113,6 +115,43 @@ _DISPLAY_TINTS = (
     (124, 158, 130),
     (168, 132, 148),
 )
+
+
+def _collect_source_diagnostics() -> bool:
+    return os.environ.get("AMAGINE3D_SOURCE_PHASE") == "compile"
+
+
+def _defer_source_issue(issue: dict, message: str) -> bool:
+    if not _collect_source_diagnostics():
+        raise BuildInvariantError(message)
+    _DEFERRED_ISSUES.append(
+        {
+            "severity": "error",
+            **issue,
+            "message": message,
+        }
+    )
+    return True
+
+
+def _raise_deferred_source_issues() -> None:
+    if not _DEFERRED_ISSUES:
+        return
+    issues = list(_DEFERRED_ISSUES)
+    _DEFERRED_ISSUES.clear()
+    print(
+        json.dumps(
+            {
+                "issues": issues,
+                "pass": False,
+                "schema": _SOURCE_DIAGNOSTICS_SCHEMA,
+            },
+            indent=2,
+        )
+    )
+    raise BuildInvariantError(
+        f"{len(issues)} checked source operations require repair"
+    )
 
 
 def _export_display_glb(
@@ -767,7 +806,27 @@ def checked_cut(
     try:
         result = body - tool
     except Exception as error:
-        raise BuildInvariantError(f"cut {feature_id!r} failed: {error}") from error
+        message = f"cut {feature_id!r} failed: {error}"
+        if _collect_source_diagnostics():
+            _defer_source_issue(
+                {
+                    "blockedBy": "BOOLEAN_OPERATION_FAILED",
+                    "check": "checked-cut",
+                    "code": "SOURCE.CHECKED_CUT_FAILED",
+                    "expected": {"minimumRemovedMm3": float(min_removed_mm3)},
+                    "featureId": feature_id,
+                    "observed": {
+                        "body": _stats(body),
+                        "error": str(error),
+                        "tool": tool_stats,
+                    },
+                    **({"partId": part_name} if part_name is not None else {}),
+                    "status": "blocked",
+                },
+                message,
+            )
+            return body
+        raise BuildInvariantError(message) from error
     removed = before - float(result.volume)
     _EVENTS.append({
         "id": feature_id,
@@ -777,11 +836,38 @@ def checked_cut(
         **({"part": part_name} if part_name is not None else {}),
     })
     if removed < min_removed_mm3:
-        raise BuildInvariantError(
+        message = (
             f"cut {feature_id!r} removed {removed:.6f} mm^3; tool likely missed"
         )
+        if _defer_source_issue(
+            {
+                "check": "checked-cut",
+                "code": "SOURCE.CUT_MISSED_OWNER",
+                "expected": {"minimumRemovedMm3": float(min_removed_mm3)},
+                "featureId": feature_id,
+                "observed": {
+                    "removedMm3": round(removed, 6),
+                    "tool": tool_stats,
+                },
+                **({"partId": part_name} if part_name is not None else {}),
+            },
+            message,
+        ):
+            return result
     if not _valid(result):
-        raise BuildInvariantError(f"cut {feature_id!r} produced an invalid solid")
+        message = f"cut {feature_id!r} produced an invalid solid"
+        if _defer_source_issue(
+            {
+                "check": "checked-cut",
+                "code": "SOURCE.CUT_INVALID_RESULT",
+                "expected": {"validSolid": True},
+                "featureId": feature_id,
+                "observed": _stats(result),
+                **({"partId": part_name} if part_name is not None else {}),
+            },
+            message,
+        ):
+            return body
     return result
 
 
@@ -796,7 +882,19 @@ def _finish(
 ):
     edges = list(selector(shape) if callable(selector) else selector)
     if not edges:
-        raise BuildInvariantError(f"{kind} {feature_id!r} selected no edges")
+        message = f"{kind} {feature_id!r} selected no edges"
+        if _defer_source_issue(
+            {
+                "check": f"checked-{kind}",
+                "code": f"SOURCE.CHECKED_{kind.upper()}_FAILED",
+                "expected": {"selectedEdgeCount": ">=1"},
+                "featureId": feature_id,
+                "observed": {"selectedEdgeCount": 0},
+                **({"partId": part_name} if part_name is not None else {}),
+            },
+            message,
+        ):
+            return shape
     factors = (1.0, 0.75, 0.5, 0.25) if allow_reduce else (1.0,)
     errors: list[str] = []
     for factor in factors:
@@ -820,9 +918,23 @@ def _finish(
             return result
         except Exception as error:
             errors.append(f"{actual:g}: {error}")
-    raise BuildInvariantError(
-        f"{kind} {feature_id!r} failed at requested sizes ({'; '.join(errors)})"
+    message = (
+        f"{kind} {feature_id!r} failed at requested sizes "
+        f"({'; '.join(errors)})"
     )
+    if _defer_source_issue(
+        {
+            "check": f"checked-{kind}",
+            "code": f"SOURCE.CHECKED_{kind.upper()}_FAILED",
+            "expected": {"requestedMm": float(requested)},
+            "featureId": feature_id,
+            "observed": {"attempts": errors},
+            **({"partId": part_name} if part_name is not None else {}),
+        },
+        message,
+    ):
+        return shape
+    raise AssertionError("unreachable")
 
 
 def checked_fillet(
@@ -1090,6 +1202,7 @@ def export_part(
             + "; ".join(manifest_errors)
         )
     write_json_atomic(report_path, report)
+    _raise_deferred_source_issues()
     print(json.dumps(report, indent=2))
     return report
 
@@ -1153,21 +1266,47 @@ def export_assembly(
     names = list(normalized)
     for index, left in enumerate(names):
         for right in names[index + 1:]:
+            pair_id = "&".join(sorted((left, right)))
             try:
                 overlap = _intersection_volume(
                     normalized[left][0], normalized[right][0]
                 )
             except Exception as error:
-                raise BuildInvariantError(
+                message = (
                     f"could not compare overlap for {left!r} and {right!r}: {error}"
-                ) from error
-            pair_id = "&".join(sorted((left, right)))
+                )
+                if _collect_source_diagnostics():
+                    _defer_source_issue(
+                        {
+                            "blockedBy": "OVERLAP_BOOLEAN_FAILED",
+                            "check": "assembly-overlap",
+                            "code": "SOURCE.OVERLAP_NOT_EVALUATED",
+                            "expected": {"maximumMm3": float(max_overlap_mm3)},
+                            "offenderId": pair_id,
+                            "observed": {"error": str(error)},
+                            "status": "blocked",
+                        },
+                        message,
+                    )
+                    continue
+                raise BuildInvariantError(message) from error
             overlaps[pair_id] = round(overlap, 6)
             if overlap > max_overlap_mm3:
-                raise BuildInvariantError(
+                message = (
                     f"assembly parts {left!r} and {right!r} overlap by "
                     f"{overlap:.6f} mm^3"
                 )
+                if _defer_source_issue(
+                    {
+                        "check": "assembly-overlap",
+                        "code": "SOURCE.PART_OVERLAP",
+                        "expected": {"maximumMm3": float(max_overlap_mm3)},
+                        "offenderId": pair_id,
+                        "observed": {"overlapMm3": round(overlap, 6)},
+                    },
+                    message,
+                ):
+                    continue
 
     # Prove the profile-bound plate layout before writing export artifacts.
     print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
@@ -1474,5 +1613,6 @@ def export_assembly(
         )
     report_path = output / f"{name}_report.json"
     write_json_atomic(report_path, report)
+    _raise_deferred_source_issues()
     print(json.dumps(report, indent=2))
     return report

@@ -93,6 +93,54 @@ class CompileError(RuntimeError):
     """An actionable semantic-scene compilation failure."""
 
 
+class CompileDiagnosticsError(CompileError):
+    """Raised after every independent hybrid geometry issue is collected."""
+
+    def __init__(self, issues: list[dict[str, Any]]) -> None:
+        self.issues = issues
+        messages = [
+            str(issue.get("message", issue.get("code", "hybrid geometry issue")))
+            for issue in issues
+        ]
+        message = messages[0] if len(messages) == 1 else (
+            f"{len(messages)} independent hybrid geometry issues: "
+            + "; ".join(messages)
+        )
+        super().__init__(message)
+
+
+def _compile_issue(
+    *,
+    code: str,
+    check: str,
+    message: str,
+    part_id: str | None = None,
+    node_id: str | None = None,
+    feature_id: str | None = None,
+    offender_id: str | None = None,
+    observed: Any = None,
+    expected: Any = None,
+    blocked_by: Any = None,
+) -> dict[str, Any]:
+    return {
+        "check": check,
+        "code": code,
+        "message": message,
+        "severity": "error",
+        **({"partId": part_id} if part_id is not None else {}),
+        **({"nodeId": node_id} if node_id is not None else {}),
+        **({"featureId": feature_id} if feature_id is not None else {}),
+        **({"offenderId": offender_id} if offender_id is not None else {}),
+        **({"observed": observed} if observed is not None else {}),
+        **({"expected": expected} if expected is not None else {}),
+        **(
+            {"blockedBy": blocked_by, "status": "blocked"}
+            if blocked_by is not None
+            else {}
+        ),
+    }
+
+
 def _json_write(path: Path, payload: dict[str, Any]) -> None:
     write_json_atomic(path, payload)
 
@@ -595,6 +643,12 @@ def _intersection_volume(
     probe: trimesh.Trimesh,
     context: str,
 ) -> float:
+    body_bounds = np.asarray(body.bounds, dtype=float)
+    probe_bounds = np.asarray(probe.bounds, dtype=float)
+    if np.any(body_bounds[1] <= probe_bounds[0]) or np.any(
+        probe_bounds[1] <= body_bounds[0]
+    ):
+        return 0.0
     try:
         result = trimesh.boolean.intersection(
             [body, probe],
@@ -2068,13 +2122,109 @@ def compile_scene(
     part_records: dict[str, dict[str, Any]] = {}
     part_removed_volume: dict[str, float] = {}
     warnings: list[str] = []
+    diagnostic_issues: list[dict[str, Any]] = []
+    nodes_by_id = {
+        node["id"]: node
+        for node in scene["nodes"]
+        if isinstance(node, dict) and isinstance(node.get("id"), str)
+    }
     for part_id, part in parts.items():
-        body = _union(positive[part_id], part_id)
-        body, removed = _difference(body, cutters[part_id], part_id)
+        try:
+            body = _union(positive[part_id], part_id)
+        except CompileError as error:
+            diagnostic_issues.append(
+                _compile_issue(
+                    code="BACKEND.PART_UNION_FAILED",
+                    check="part-union",
+                    message=str(error),
+                    part_id=part_id,
+                    blocked_by=positive_node_ids[part_id],
+                    observed={"positiveNodeIds": positive_node_ids[part_id]},
+                    expected={"bodyCount": 1},
+                )
+            )
+            continue
+
+        missed_cutters = 0
+        for node_id, cutter in zip(cutter_node_ids[part_id], cutters[part_id]):
+            node = nodes_by_id.get(node_id, {})
+            try:
+                intersection = _intersection_volume(
+                    body,
+                    cutter,
+                    f"part {part_id} cutter {node_id}",
+                )
+            except CompileError as error:
+                diagnostic_issues.append(
+                    _compile_issue(
+                        code="BACKEND.CUTTER_NOT_EVALUATED",
+                        check="cutter-owner-intersection",
+                        message=str(error),
+                        part_id=part_id,
+                        node_id=node_id,
+                        feature_id=node.get("featureId"),
+                        blocked_by="INTERSECTION_BOOLEAN_FAILED",
+                        observed={"error": str(error)},
+                        expected={"minimumIntersectionMm3": ">0"},
+                    )
+                )
+                continue
+            if intersection <= 1e-9:
+                missed_cutters += 1
+                diagnostic_issues.append(
+                    _compile_issue(
+                        code="BACKEND.CUTTER_MISSED_OWNER",
+                        check="cutter-owner-intersection",
+                        message=(
+                            f"part {part_id} cutter {node_id} does not intersect "
+                            "its declared owner"
+                        ),
+                        part_id=part_id,
+                        node_id=node_id,
+                        feature_id=node.get("featureId"),
+                        observed={
+                            "intersectionMm3": round(intersection, 9),
+                            "toolBoundsMm": {
+                                "min": _vector(cutter.bounds[0]),
+                                "max": _vector(cutter.bounds[1]),
+                            },
+                        },
+                        expected={"minimumIntersectionMm3": ">0"},
+                    )
+                )
+
+        if cutters[part_id] and missed_cutters == len(cutters[part_id]):
+            removed = 0.0
+        else:
+            try:
+                body, removed = _difference(body, cutters[part_id], part_id)
+            except CompileError as error:
+                diagnostic_issues.append(
+                    _compile_issue(
+                        code="BACKEND.PART_DIFFERENCE_FAILED",
+                        check="part-difference",
+                        message=str(error),
+                        part_id=part_id,
+                        blocked_by=cutter_node_ids[part_id],
+                        observed={"cutterNodeIds": cutter_node_ids[part_id]},
+                        expected={"validSolid": True},
+                    )
+                )
+                continue
         body_count = len(body.split(only_watertight=False))
         if body_count != 1:
-            raise CompileError(
-                f"part {part_id} must compile to one fused physical body; got {body_count}"
+            diagnostic_issues.append(
+                _compile_issue(
+                    code="BACKEND.PART_BODY_COUNT",
+                    check="part-body-count",
+                    message=(
+                        f"part {part_id} must compile to one fused physical body; "
+                        f"got {body_count}"
+                    ),
+                    part_id=part_id,
+                    observed={"bodyCount": body_count},
+                    expected={"bodyCount": 1},
+                )
             )
         appearance = _material_appearance(materials[part_material_ids[part_id]])
         compiled.append((part_id, body, appearance))
@@ -2083,6 +2233,49 @@ def compile_scene(
             warnings.append(
                 f"part {part_id}: mesh artifacts are verified derivatives of its OCCT-imported STEP master"
             )
+
+    maximum_overlap_mm3 = 0.01
+    assembly_overlaps_mm3: dict[str, float] = {}
+    for index, (left_id, left_mesh, _) in enumerate(compiled):
+        for right_id, right_mesh, _ in compiled[index + 1 :]:
+            pair_id = "&".join(sorted((left_id, right_id)))
+            try:
+                overlap = _intersection_volume(
+                    left_mesh,
+                    right_mesh,
+                    f"assembly parts {left_id}&{right_id}",
+                )
+            except CompileError as error:
+                diagnostic_issues.append(
+                    _compile_issue(
+                        code="BACKEND.OVERLAP_NOT_EVALUATED",
+                        check="assembly-overlap",
+                        message=str(error),
+                        offender_id=pair_id,
+                        blocked_by="INTERSECTION_BOOLEAN_FAILED",
+                        observed={"error": str(error)},
+                        expected={"maximumMm3": maximum_overlap_mm3},
+                    )
+                )
+                continue
+            assembly_overlaps_mm3[pair_id] = round(overlap, 9)
+            if overlap > maximum_overlap_mm3:
+                diagnostic_issues.append(
+                    _compile_issue(
+                        code="BACKEND.PART_OVERLAP",
+                        check="assembly-overlap",
+                        message=(
+                            f"assembly parts {left_id!r} and {right_id!r} overlap by "
+                            f"{overlap:.9g} mm3 (maximum {maximum_overlap_mm3:.9g} mm3)"
+                        ),
+                        offender_id=pair_id,
+                        observed={"overlapMm3": round(overlap, 9)},
+                        expected={"maximumMm3": maximum_overlap_mm3},
+                    )
+                )
+
+    if diagnostic_issues:
+        raise CompileDiagnosticsError(diagnostic_issues)
 
     step_consistency = _compare_master_steps(
         scene=scene,
@@ -2093,23 +2286,6 @@ def compile_scene(
     )
     step_consistency_file = output_dir / f"{model_name}_step-consistency.json"
     _json_write(step_consistency_file, step_consistency)
-
-    maximum_overlap_mm3 = 0.01
-    assembly_overlaps_mm3: dict[str, float] = {}
-    for index, (left_id, left_mesh, _) in enumerate(compiled):
-        for right_id, right_mesh, _ in compiled[index + 1 :]:
-            overlap = _intersection_volume(
-                left_mesh,
-                right_mesh,
-                f"assembly parts {left_id}&{right_id}",
-            )
-            pair_id = "&".join(sorted((left_id, right_id)))
-            assembly_overlaps_mm3[pair_id] = round(overlap, 9)
-            if overlap > maximum_overlap_mm3:
-                raise CompileError(
-                    f"assembly parts {left_id!r} and {right_id!r} overlap by "
-                    f"{overlap:.9g} mm3 (maximum {maximum_overlap_mm3:.9g} mm3)"
-                )
 
     fastener_geometry_checks = _verify_self_tapping_geometry(
         scene,
@@ -2470,6 +2646,19 @@ def main(argv: list[str] | None = None) -> int:
             source_scene=scene_path,
             consistency_samples=args.consistency_samples,
         )
+    except CompileDiagnosticsError as error:
+        print(
+            json.dumps(
+                {
+                    "error": str(error),
+                    "issues": error.issues,
+                    "pass": False,
+                    "schema": REPORT_SCHEMA,
+                },
+                indent=2,
+            )
+        )
+        return 2
     except Exception as error:
         print(
             json.dumps(

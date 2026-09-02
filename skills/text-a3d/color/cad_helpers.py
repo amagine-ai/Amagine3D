@@ -103,8 +103,45 @@ class RegionInvariantError(RuntimeError):
 _FEATURES: dict[str, dict] = {}
 _EVENTS: list[dict] = []
 _PARAMETERS: dict[str, dict] = {}
+_DEFERRED_ISSUES: list[dict] = []
+_SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
 _REGION_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _collect_source_diagnostics() -> bool:
+    return os.environ.get("AMAGINE3D_SOURCE_PHASE") == "compile"
+
+
+def _defer_source_issue(issue: dict, message: str) -> bool:
+    if not _collect_source_diagnostics():
+        raise RegionInvariantError(message)
+    _DEFERRED_ISSUES.append(
+        {"severity": "error", **issue, "message": message}
+    )
+    return True
+
+
+def _raise_deferred_source_issues() -> None:
+    if not _DEFERRED_ISSUES:
+        return
+    issues = list(_DEFERRED_ISSUES)
+    _DEFERRED_ISSUES.clear()
+    print(
+        json.dumps(
+            {
+                "issues": issues,
+                "pass": False,
+                "schema": _SOURCE_DIAGNOSTICS_SCHEMA,
+            },
+            indent=2,
+        )
+    )
+    raise RegionInvariantError(
+        f"{len(issues)} checked source operations require repair"
+    )
+
+
 _PARAMETER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
 
@@ -553,7 +590,26 @@ def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
     try:
         result = body - tool
     except Exception as error:
-        raise RegionInvariantError(f"cut {feature_id!r} failed: {error}") from error
+        message = f"cut {feature_id!r} failed: {error}"
+        if _collect_source_diagnostics():
+            _defer_source_issue(
+                {
+                    "blockedBy": "BOOLEAN_OPERATION_FAILED",
+                    "check": "checked-cut",
+                    "code": "SOURCE.CHECKED_CUT_FAILED",
+                    "expected": {"minimumRemovedMm3": float(min_removed_mm3)},
+                    "featureId": feature_id,
+                    "observed": {
+                        "body": _shape_record(body),
+                        "error": str(error),
+                        "tool": tool_stats,
+                    },
+                    "status": "blocked",
+                },
+                message,
+            )
+            return body
+        raise RegionInvariantError(message) from error
     removed = before - float(result.volume)
     _EVENTS.append({
         "id": feature_id,
@@ -562,16 +618,52 @@ def checked_cut(body, tool, feature_id: str, min_removed_mm3: float = 0.001):
         "tool": tool_stats,
     })
     if removed < min_removed_mm3:
-        raise RegionInvariantError(f"cut {feature_id!r} missed the parent solid")
+        message = f"cut {feature_id!r} missed the parent solid"
+        if _defer_source_issue(
+            {
+                "check": "checked-cut",
+                "code": "SOURCE.CUT_MISSED_OWNER",
+                "expected": {"minimumRemovedMm3": float(min_removed_mm3)},
+                "featureId": feature_id,
+                "observed": {
+                    "removedMm3": round(removed, 6),
+                    "tool": tool_stats,
+                },
+            },
+            message,
+        ):
+            return result
     if not _valid(result):
-        raise RegionInvariantError(f"cut {feature_id!r} produced invalid geometry")
+        message = f"cut {feature_id!r} produced invalid geometry"
+        if _defer_source_issue(
+            {
+                "check": "checked-cut",
+                "code": "SOURCE.CUT_INVALID_RESULT",
+                "expected": {"validSolid": True},
+                "featureId": feature_id,
+                "observed": _shape_record(result),
+            },
+            message,
+        ):
+            return body
     return result
 
 
 def _checked_finish(shape, selector, size_mm: float, feature_id: str, kind: str):
     edges = list(selector(shape) if callable(selector) else selector)
     if not edges:
-        raise RegionInvariantError(f"{kind} {feature_id!r} selected no edges")
+        message = f"{kind} {feature_id!r} selected no edges"
+        if _defer_source_issue(
+            {
+                "check": f"checked-{kind}",
+                "code": f"SOURCE.CHECKED_{kind.upper()}_FAILED",
+                "expected": {"selectedEdgeCount": ">=1"},
+                "featureId": feature_id,
+                "observed": {"selectedEdgeCount": 0},
+            },
+            message,
+        ):
+            return shape
     try:
         result = (
             fillet(edges, radius=size_mm)
@@ -579,9 +671,35 @@ def _checked_finish(shape, selector, size_mm: float, feature_id: str, kind: str)
             else chamfer(edges, length=size_mm)
         )
     except Exception as error:
-        raise RegionInvariantError(f"{kind} {feature_id!r} failed: {error}") from error
+        message = f"{kind} {feature_id!r} failed: {error}"
+        if _collect_source_diagnostics():
+            _defer_source_issue(
+                {
+                    "blockedBy": "FINISH_OPERATION_FAILED",
+                    "check": f"checked-{kind}",
+                    "code": f"SOURCE.CHECKED_{kind.upper()}_FAILED",
+                    "expected": {"requestedMm": float(size_mm)},
+                    "featureId": feature_id,
+                    "observed": {"error": str(error)},
+                    "status": "blocked",
+                },
+                message,
+            )
+            return shape
+        raise RegionInvariantError(message) from error
     if not _valid(result):
-        raise RegionInvariantError(f"{kind} {feature_id!r} produced invalid geometry")
+        message = f"{kind} {feature_id!r} produced invalid geometry"
+        if _defer_source_issue(
+            {
+                "check": f"checked-{kind}",
+                "code": f"SOURCE.CHECKED_{kind.upper()}_FAILED",
+                "expected": {"validSolid": True},
+                "featureId": feature_id,
+                "observed": _shape_record(result),
+            },
+            message,
+        ):
+            return shape
     _EVENTS.append({
         "actual_mm": round(size_mm, 6),
         "degraded": False,
@@ -1134,5 +1252,6 @@ def export_regions(
         )
     report_path = output / f"{name}_report.json"
     write_json_atomic(report_path, report)
+    _raise_deferred_source_issues()
     print(json.dumps(report, indent=2))
     return report
