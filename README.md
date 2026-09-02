@@ -200,6 +200,9 @@ internal compilers handle mixed geometry, permanent color regions, material
 planning, and 3MF packaging. Display-only content never enters manufacturing
 geometry. Color backend utilities live under `skills/text-a3d/color/` and have
 no independent intent contract or skill manifest.
+`cad_capabilities`, `reference_analyze`, and `cad_compile` are peer tools in
+the same open Agent loop; they provide versioned evidence and a unified build
+boundary without turning modeling into a fixed server-side state machine.
 
 Each Agent session uses its own workspace. CAD scripts run with the server-managed Python environment, while the browser renders generated models with Three.js. Model credentials remain on the server. For more detail, see the [threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
 

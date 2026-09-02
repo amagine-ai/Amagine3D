@@ -2,7 +2,7 @@
 
 Color is a geometry and assembly decision, not a renderer decoration.
 
-The root `evidence-cad-intent/v4` document is the authority for region IDs,
+The root `evidence-cad-intent/v5` document is the authority for region IDs,
 owners, colors, and any explicitly selected filament or optical transmission.
 Region IDs are globally unique. `part` names the owning physical part; it does
 not imply that a multipart model has only one region per part. Hybrid scenes

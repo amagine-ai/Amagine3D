@@ -30,19 +30,44 @@ and validates the resulting scene.
   mixed scene, the source must first generate and bind every required genuine
   BRep master STEP plus mesh input.
 
-The marker must predate the profile, intent, source, scene, and generated
-artifacts. The driver then runs unified build validation, per-part and plate STL QA,
-multipart assembly QA when applicable, STEP QA for every genuine STEP, 3MF
-color/package QA when applicable, a fresh hash-bound GLB render, and one final
-freshness audit over the complete automated evidence bundle.
+The external marker must predate the immutable intent and build source. The
+driver creates a separate UUID-bound attempt marker immediately before the
+attempt's outputs. It then runs unified build validation, generic multipart
+interface/assembly geometry checks when applicable, per-part and plate STL QA,
+STEP QA for every genuine STEP, 3MF color/package QA when applicable, a fresh
+hash-bound GLB render, and one final freshness audit over outputs of that
+attempt. Input files are verified by their report SHA-256 bindings rather than
+being required to receive new timestamps.
+
+The driver has one 5,400-second (90-minute) aggregate compile deadline. Every
+source, backend, QA, render, and freshness subprocess receives the smaller of
+its stage limit and the aggregate time remaining. Exhaustion fails closed with
+`COMPILE.DEADLINE_EXCEEDED` and stops launching further checks. This is a
+fail-fast boundary that leaves roughly 30 minutes in a two-hour task for Agent
+repair and visual review; it is not a performance optimization, repair loop,
+or server-side workflow state.
 
 ## Result semantics
 
 The command prints and persists `evidence-cad-compile-result/v1`. Errors use
 stable stage-level codes such as `CONTRACT.SCENE_INVALID`,
 `BACKEND.COMPILE_FAILED`, `BUILD.REPORT_INVALID`, and `QA.MESH_FAILED`.
-Checker-specific names remain in `issue.check`; complete subprocess output stays
-in `<name>_compile.log`, while each validator writes its full evidence report.
+Checker-specific names remain in `issue.check`; structured details such as
+part/node/interface IDs, component counts, bounds, and observed/expected values
+are returned together when available. Complete subprocess output stays in
+`<name>_compile.log`, while each validator writes its full evidence report to a
+unique staged path. A complete validated report is atomically published, so a
+deterministic report may be byte-identical to the prior attempt without being
+misclassified as stale.
+Preview images use immutable compile-run filenames. The canonical render
+evidence is published atomically only after both images exist and are
+hash-bound; interrupted publication removes this run's orphan images and
+preserves the previous evidence. Freshness evidence is accepted only when it
+names this attempt marker and exactly covers every requested artifact with
+fresh, existing files whose mtime, byte size, and SHA-256 still exactly match
+the checker evidence. The canonical compile log is excluded from this set
+because the freshness subprocess writes its own stdout into that log; its final
+hash is instead recorded in the compile result after the subprocess exits.
 Unexpected untyped compiler failures use `INTERNAL.COMPILER_ERROR` instead of
 guessing a geometry diagnosis from traceback wording.
 
@@ -57,6 +82,8 @@ rather than pretending a Python process can perform image review.
 ## Integration constraints
 
 - Register the driver as one PI tool, not a server-side state machine.
+- Register `cad_capabilities` and `reference_analyze` as optional peer tools in
+  the same Agent loop, not mandatory preprocessing states.
 - Resolve every supplied path under the current session workspace before
   spawning it, use the managed `.venv` Python, and propagate `AbortSignal` to
   the complete child process group.

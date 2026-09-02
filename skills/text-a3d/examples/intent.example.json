@@ -1,5 +1,5 @@
 {
-  "schema": "evidence-cad-intent/v4",
+  "schema": "evidence-cad-intent/v5",
   "part": "example-bracket",
   "task_mode": "specification",
   "representation": "full-3d",

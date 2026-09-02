@@ -8,7 +8,7 @@ targets merely to match a generated artifact.
 
 ```json
 {
-  "schema": "evidence-cad-intent/v4",
+  "schema": "evidence-cad-intent/v5",
   "part": "part-name",
   "task_mode": "reference-reproduction",
   "representation": "full-3d",
@@ -163,7 +163,7 @@ Multipart contracts must declare every printed part and assembly interface:
       "between": ["lower-shell", "top-lid"],
       "connection": "tab-slot",
       "assembly_axis": "+Z",
-      "clearance_mm": 0.3,
+      "clearances_mm": {"width": 0.3},
       "engagement_mm": 2.0,
       "features": ["lid-tab", "lid-slot"],
       "acceptance": "2 mm printable tab enters the lid slot with 0.3 mm clearance"
@@ -172,6 +172,17 @@ Multipart contracts must declare every printed part and assembly interface:
 }
 ```
 
+When an interface capability includes a clearance proof, `clearances_mm` is a
+non-empty mapping from each derived scene dimension to its exact
+female-minus-male size delta. Declare different entries when transverse and
+axial fits differ; for example, `{"diameter": 0.4, "length": 0.2}` describes a
+0.4 mm diametral delta and a 0.2 mm axial delta. Because radial helper inputs
+are per-side gaps, the matching `diameter` delta is twice the radial input. The
+scene must derive exactly the same field set with the same values. Capabilities
+without a clearance check, such as `glue-face`, omit `clearances_mm` (or use an
+empty object) and declare no derived clearance fields. Self-tapping screw
+interfaces instead use their explicit `fastening` diameters and depths.
+
 Every `features[]` record in a multipart intent must include a `part` equal to
 one `manufacturing.parts[].name`. Interface feature owners must be one of the
 two parts named by that interface's `between` field. In a single-part intent,
@@ -179,7 +190,7 @@ two parts named by that interface's `between` field. In a single-part intent,
 
 ## Color regions
 
-The same v4 intent owns color and material evidence. Do not create a separate
+The same v5 intent owns color and material evidence. Do not create a separate
 color-intent document. Every `color_regions[]` record requires `name`, owning
 `part`, `hex`, `purpose`, `boundary`, and `evidence`; optional material data may
 declare `transmission` and a user-selected `filament`. Also record the
@@ -247,7 +258,7 @@ read `installed-displays.md` for the physical aperture/keepout/retention and
 display-only scene rules.
 
 The scene is not allowed to broaden the immutable request. Its `intentRef` is
-hash checked and the referenced document must pass the complete root v4 intent
+hash checked and the referenced document must pass the complete root v5 intent
 validator. Scene `parts[].id` is an exact set match against the single top-level
 intent part or multipart `manufacturing.parts[].name` records. Every physical
 node `featureId` must exist in `intent.features[]`, and its `partId` must equal
@@ -257,7 +268,7 @@ same part as the display node. Build input binding repeats these checks and
 also requires the exported part set to match both documents exactly.
 
 For a BRep multipart assembly whose colors follow physical part boundaries,
-keep color in the same `evidence-cad-intent/v4` document. This exporter is the
+keep color in the same `evidence-cad-intent/v5` document. This exporter is the
 deliberately narrower whole-part case: add exactly one `color_regions` record
 per `manufacturing.parts[].name`, with both `name` and `part` equal to the
 physical part name, plus `hex` and optional `material.filament` /
@@ -314,7 +325,8 @@ build; a material-plan record cannot make itself authoritative.
   an acceptance criterion.
 - Critical functional features must be backed by named `observe()` or
   checked-operation evidence. Natural-language acceptance alone is not proof.
-- For pixel art, use `reference_analyze.py` cells and colors directly. Do not
+- For pixel art, use the structured `reference_analyze` tool's hash-bound cells
+  and colors directly. Do not invoke its Python backend through a shell or
   redraw coordinates from memory.
 - If a required target remains unknowable and changes function or identity,
   ask. Otherwise choose a reversible assumption and record it.

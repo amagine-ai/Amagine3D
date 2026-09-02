@@ -91,6 +91,17 @@ left = self_tapping_screw_pair(
     interface_id="housing-base-service-joint",
     axis_id="side-left",
     cover_thickness_mm=2.4,
+    screw_family="M3 plastic thread-forming/self-tapping",
+    nominal_diameter_mm=3.0,
+    clearance_diameter_mm=3.4,
+    pilot_diameter_mm=2.6,
+    boss_outer_diameter_mm=7.5,
+    engagement_mm=6.0,
+    pilot_tip_clearance_mm=0.8,
+    closed_end_mm=1.2,
+    minimum_boss_wall_mm=1.8,
+    minimum_root_embed_mm=0.4,
+    cutter_overshoot_mm=1.0,
 )
 
 # Apply the SAME rigid placement to the whole group.
@@ -127,7 +138,6 @@ interface:
   "between": ["housing", "base"],
   "connection": "self-tapping-screw",
   "assembly_axis": "+Z",
-  "clearance_mm": 0.4,
   "engagement_mm": 6.0,
   "features": [
     "base-collar", "housing-socket",
@@ -141,6 +151,11 @@ interface:
     "clearance_diameter_mm": 3.4,
     "boss_outer_diameter_mm": 7.5,
     "closed_end_mm": 1.2,
+    "cutter_overshoot_mm": 1.0,
+    "cover_thickness_mm": 2.4,
+    "pilot_tip_clearance_mm": 0.8,
+    "minimum_boss_wall_mm": 1.8,
+    "minimum_root_embed_mm": 0.4,
     "locator_pairs": [
       {
         "id": "housing-base-locator",
@@ -172,8 +187,9 @@ In the mutable semantic scene, model every locator as its own `collar-socket` or
 The self-tapping joint names one or more of those interfaces through
 `locatorInterfaceIds`; this supports either one perimeter collar or multiple
 well-spaced pin/socket pairs without flattening their pairing. Add one
-`fasteners[]` item per screw. That item owns the only `axis.originMm`,
-`axis.direction`, screw dimensions, cover thickness, and boss/pilot dimensions.
+`fasteners[]` item per screw. That item owns the only `axis.originMm` and
+`axis.direction`; every consumed screw, cutter, cover, pilot, boss-wall, and
+root-embed dimension must exactly mirror the immutable `fastening` target.
 Its cover cutter, receiver pilot, and receiver boss nodes use
 `recipe.kind: "selfTappingScrewPair"` and select the `clearance-cutter`,
 `pilot-cutter`, or `receiver-boss` output of that same
@@ -182,8 +198,9 @@ meshes or declare their own transforms. `hybrid_compile.py` constructs the
 three build123d outputs once and applies one rigid placement to the entire
 group, so matching labels cannot conceal misaligned geometry. Scene validation
 also cross-checks locator pair IDs and ordered male/female features, fastener
-IDs, mapped feature IDs, screw family, and critical diameters against the
-immutable intent.
+IDs, mapped feature IDs, screw family, and every geometry-controlling dimension
+against the immutable intent. A scene-only cutter overshoot, cover thickness,
+tip clearance, boss-wall minimum, or root-embed minimum is invalid.
 
 ## Acceptance evidence
 
@@ -202,11 +219,15 @@ Before delivery, prove all of the following:
   feature is reused across two axes; and
 - the locating interface fits independently of the screws.
 
-For hybrid compilation, require the report's `fastenerGeometryChecks` to pass.
-The compiler rejects a disconnected boss and probes the final cover/receiver
-meshes with physical witness volumes. A full clearance-cylinder witness and
-pilot-cylinder witness must have zero material overlap; annular witnesses prove
-the cover land and minimum boss wall; and a solid cylinder proves the blind
-end. This catches a blocked hole even when a small center pinhole makes its axis
-look open. Every part must remain one fused body. A failed probe is a build
-failure, and manufacturing artifacts are written only after the probes pass.
+For both BRep and hybrid compilation, require the shared interface-geometry
+proof to pass. Hash-bound feature/event evidence must show that the clearance
+cutter, pilot cutter, and receiver boss volumes were generated from the exact
+scene controls, including cover thickness and cutter overshoot. The compiler
+also probes the final cover/receiver meshes with physical witness volumes. A
+full clearance-cylinder witness and pilot-cylinder witness must have zero
+material overlap; annular witnesses prove the minimum boss wall and, only when
+a head recess target is declared, its minimum residual floor; and a solid
+cylinder proves the blind end. This catches a blocked hole even when a small
+center pinhole makes its axis look open. Every part must remain one fused body.
+A failed recipe or physical probe is a build failure, and manufacturing
+artifacts are written only after the probes pass.

@@ -2,7 +2,7 @@
 
 This directory is an internal backend of `text-a3d`. It is not a separate
 Agent workflow and does not own another intent contract. Use the root
-`evidence-cad-intent/v4`, semantic scene, profile, build report, repair loop,
+`evidence-cad-intent/v5`, semantic scene, profile, build report, repair loop,
 visual gate, and delivery rules.
 
 Read this file only when permanent printed color or material belongs to physical
