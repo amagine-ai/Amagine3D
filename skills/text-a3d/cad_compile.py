@@ -25,9 +25,13 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+from uuid import uuid4
 
+from capability_manifest import build_manifest as build_capability_manifest
+from freshness_check import stable_file_snapshot
 from intent_contract import validate as validate_intent
 from scene_contract import validate as validate_scene
 from source_preflight import audit as audit_source
@@ -39,6 +43,7 @@ MODEL_NAME = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
 MAX_ISSUES = 40
 MAX_MESSAGE_CHARS = 700
 MAX_LOG_TAIL_BYTES = 32_000
+DEFAULT_COMPILE_TIMEOUT_SECONDS = 5_400.0
 
 
 class ConfigurationError(ValueError):
@@ -53,9 +58,9 @@ class CompileOptions:
     scene: Path
     source: Path
     output_dir: Path
-    report: Path | None = None
     result: Path | None = None
     log: Path | None = None
+    compile_timeout_seconds: float = DEFAULT_COMPILE_TIMEOUT_SECONDS
     source_timeout_seconds: float = 1_800.0
     backend_timeout_seconds: float = 1_800.0
     check_timeout_seconds: float = 600.0
@@ -68,6 +73,24 @@ class CommandResult:
     elapsed_ms: int
     output_tail: str
     timed_out: bool = False
+    deadline_exhausted: bool = False
+
+
+@dataclass(frozen=True)
+class _CompileDeadline:
+    expires_at: float
+    clock: Callable[[], float]
+
+    @classmethod
+    def start(
+        cls,
+        timeout_seconds: float,
+        clock: Callable[[], float],
+    ) -> _CompileDeadline:
+        return cls(expires_at=clock() + timeout_seconds, clock=clock)
+
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.expires_at - self.clock())
 
 
 def _utc_now() -> str:
@@ -395,6 +418,47 @@ class CommandRunner:
         return result
 
 
+def _run_with_deadline(
+    runner: Any,
+    deadline: _CompileDeadline,
+    stage: str,
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    env_extra: dict[str, str] | None = None,
+) -> CommandResult:
+    """Clamp one subprocess to the remaining whole-compile budget."""
+
+    remaining = deadline.remaining_seconds()
+    if remaining <= 0:
+        return CommandResult(
+            returncode=None,
+            elapsed_ms=0,
+            output_tail="compile aggregate deadline was exhausted before this stage",
+            timed_out=True,
+            deadline_exhausted=True,
+        )
+    effective_timeout = min(timeout_seconds, remaining)
+    aggregate_limited = effective_timeout < timeout_seconds
+    command = runner.run(
+        stage,
+        argv,
+        cwd=cwd,
+        timeout_seconds=effective_timeout,
+        env_extra=env_extra,
+    )
+    if not (command.timed_out and aggregate_limited):
+        return command
+    return CommandResult(
+        returncode=command.returncode,
+        elapsed_ms=command.elapsed_ms,
+        output_tail=command.output_tail,
+        timed_out=True,
+        deadline_exhausted=True,
+    )
+
+
 def _short_message(value: Any) -> str:
     message = str(value).strip() or "unspecified failure"
     if len(message) <= MAX_MESSAGE_CHARS:
@@ -428,6 +492,12 @@ def _repair_hint(code: str) -> str:
             "Regenerate evidence through the owning exporter/compiler; do not "
             "hand-edit reports, hashes, geometry facts, or transforms."
         )
+    if code.startswith("INTERFACE."):
+        return (
+            "Repair the named interface from its intent clearance, engagement, "
+            "axis, feature ownership, and actual geometry evidence; do not insert "
+            "product-specific fallback dimensions."
+        )
     if code.startswith("QA."):
         return (
             "Review the named physical part/check at its modeling source; preserve "
@@ -445,6 +515,11 @@ def _repair_hint(code: str) -> str:
         )
     if code.startswith("CONFIG."):
         return "Correct the declared session-local path or option and rerun the same build."
+    if code.startswith("COMPILE."):
+        return (
+            "Use the reported stage evidence to remove avoidable retries or split an "
+            "oversized build; do not weaken geometry or QA to fit the time budget."
+        )
     return (
         "Inspect the full compile log and repair the infrastructure failure; do "
         "not alter geometry merely to hide an internal error."
@@ -461,6 +536,7 @@ def _issue(
     check: str | None = None,
     part: str | None = None,
     repair_hint: str | None = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
     issue = {
         "code": code,
@@ -473,6 +549,26 @@ def _issue(
         issue["check"] = check
     if part:
         issue["part"] = part
+    detail_fields = {
+        "actual",
+        "artifact",
+        "bounds",
+        "componentCount",
+        "components",
+        "endpoint",
+        "expected",
+        "featureId",
+        "features",
+        "field",
+        "interfaceId",
+        "nodeId",
+        "observed",
+        "offenderId",
+        "target",
+    }
+    for key, value in (details or {}).items():
+        if key in detail_fields:
+            issue[key] = value
     if len(result["issues"]) < MAX_ISSUES:
         result["issues"].append(issue)
     else:
@@ -495,6 +591,11 @@ def _stage_record(
                 "timeout"
                 if command.timed_out
                 else "pass" if command.returncode == 0 else "fail"
+            ),
+            **(
+                {"timeoutScope": "compile"}
+                if command.deadline_exhausted
+                else {}
             ),
         }
     )
@@ -520,12 +621,6 @@ def _validation_artifact(
     return payload
 
 
-def _report_changed(path: Path, previous_digest: str | None) -> bool:
-    if not path.is_file():
-        return False
-    return previous_digest is None or _digest(path) != previous_digest
-
-
 def _json_from_tail(output: str) -> dict[str, Any] | None:
     decoder = json.JSONDecoder()
     for index, character in enumerate(output):
@@ -540,6 +635,124 @@ def _json_from_tail(output: str) -> dict[str, Any] | None:
     return None
 
 
+def _record_structured_issues(
+    result: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    stage: str,
+    default_code: str,
+    default_part: str | None = None,
+) -> tuple[int, int]:
+    raw_issues = payload.get("issues")
+    if not isinstance(raw_issues, list):
+        return 0, 0
+    recorded = 0
+    error_count = 0
+    for raw in raw_issues:
+        if not isinstance(raw, dict):
+            continue
+        severity = raw.get("severity")
+        if severity not in {"error", "warning"}:
+            severity = "error"
+        code = raw.get("code")
+        if not isinstance(code, str) or not code.strip():
+            code = default_code
+        check = raw.get("check")
+        typed_check = check if isinstance(check, str) and check else None
+        typed_part = raw.get("part")
+        if not isinstance(typed_part, str) or not typed_part:
+            typed_part = raw.get("partId")
+        if not isinstance(typed_part, str) or not typed_part:
+            typed_part = default_part
+        message = raw.get("message")
+        if not isinstance(message, str) or not message.strip():
+            message = typed_check or code
+        repair_hint = raw.get("repairHint")
+        _issue(
+            result,
+            code=code,
+            stage=stage,
+            message=message,
+            severity=severity,
+            check=typed_check,
+            part=typed_part,
+            repair_hint=(
+                repair_hint
+                if isinstance(repair_hint, str) and repair_hint.strip()
+                else None
+            ),
+            details=raw,
+        )
+        recorded += 1
+        error_count += int(severity == "error")
+    return recorded, error_count
+
+
+def _check_details(payload: dict[str, Any], name: str) -> dict[str, Any]:
+    checks = payload.get("checks")
+    if not isinstance(checks, list):
+        return {}
+    for record in checks:
+        if not isinstance(record, dict):
+            continue
+        identity = record.get("name", record.get("check", record.get("code")))
+        if identity == name:
+            return record
+    return {}
+
+
+def _valid_staged_file(path: Path) -> bool:
+    return (
+        path.is_file()
+        and not path.is_symlink()
+        and path.stat().st_nlink == 1
+    )
+
+
+def _replace_file(source: Path, destination: Path) -> None:
+    source.replace(destination)
+
+
+def _publish_render_bundle(
+    *,
+    staged_preview: Path,
+    staged_reference: Path,
+    preview_path: Path,
+    reference_preview_path: Path,
+    render_audit_path: Path,
+    render_evidence: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """Publish immutable run images, then atomically move the evidence pointer."""
+
+    if preview_path.exists() or reference_preview_path.exists():
+        raise FileExistsError("run-scoped render artifacts already exist")
+    try:
+        _replace_file(staged_preview, preview_path)
+        _replace_file(staged_reference, reference_preview_path)
+        published = {
+            **render_evidence,
+            "runId": run_id,
+            "preview": {
+                **render_evidence["preview"],
+                "path": str(preview_path),
+            },
+            "matched_view": {
+                **render_evidence["matched_view"],
+                "path": str(reference_preview_path),
+            },
+        }
+        _write_json(render_audit_path, published)
+        return published
+    except Exception:
+        # Both destinations are unique to this run ID, so only this failed
+        # publication can own them.  Never leave half-published images for UI
+        # discovery while the previous canonical evidence remains authoritative.
+        preview_path.unlink(missing_ok=True)
+        reference_preview_path.unlink(missing_ok=True)
+        raise
+
+
 def _record_command_failure(
     result: dict[str, Any],
     command: CommandResult,
@@ -550,6 +763,15 @@ def _record_command_failure(
     internal_code: str,
     part: str | None = None,
 ) -> None:
+    if command.deadline_exhausted:
+        _issue(
+            result,
+            code="COMPILE.DEADLINE_EXCEEDED",
+            stage=stage,
+            message="the aggregate compile deadline was exhausted",
+            part=part,
+        )
+        return
     if command.timed_out:
         _issue(
             result,
@@ -560,6 +782,16 @@ def _record_command_failure(
         )
         return
     parsed = _json_from_tail(command.output_tail)
+    if isinstance(parsed, dict):
+        _, structured_errors = _record_structured_issues(
+            result,
+            parsed,
+            stage=stage,
+            default_code=failure_code,
+            default_part=part,
+        )
+        if structured_errors:
+            return
     parsed_error = parsed.get("error") if isinstance(parsed, dict) else None
     if command.returncode is None or (
         command.returncode == 2 and not isinstance(parsed_error, str)
@@ -585,6 +817,7 @@ def _record_command_failure(
 def _run_json_check(
     result: dict[str, Any],
     runner: CommandRunner,
+    deadline: _CompileDeadline,
     *,
     name: str,
     argv: list[str],
@@ -593,73 +826,172 @@ def _run_json_check(
     output_path: Path,
     artifact_name: str,
     failure_code: str,
+    expected_schema: str,
     part: str | None = None,
 ) -> None:
-    previous_digest = _digest(output_path) if output_path.is_file() else None
-    command = runner.run(
-        name,
-        argv,
-        cwd=cwd,
-        timeout_seconds=timeout_seconds,
-    )
-    _stage_record(result, name, command)
-    if command.timed_out:
-        _record_command_failure(
-            result,
-            command,
-            stage=name,
-            failure_code=failure_code,
-            timeout_code="QA.TIMEOUT",
-            internal_code="INTERNAL.QA_ERROR",
-            part=part,
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] | None = None
+    with tempfile.TemporaryDirectory(
+        dir=output_path.parent,
+        prefix=f".{output_path.stem}-{name.replace(':', '-')}-",
+    ) as staging_directory:
+        staged_path = Path(staging_directory) / output_path.name
+        command = _run_with_deadline(
+            runner,
+            deadline,
+            name,
+            [*argv, "--out", str(staged_path)],
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
         )
-        return
-    if output_path.is_file() and _report_changed(output_path, previous_digest):
+        _stage_record(result, name, command)
+        if command.timed_out:
+            _record_command_failure(
+                result,
+                stage=name,
+                command=command,
+                failure_code=failure_code,
+                timeout_code="QA.TIMEOUT",
+                internal_code="INTERNAL.QA_ERROR",
+                part=part,
+            )
+            return
+        if _valid_staged_file(staged_path):
+            try:
+                payload = _load_json(staged_path, f"{name} output")
+            except ValueError as error:
+                _issue(
+                    result,
+                    code="INTERNAL.QA_ERROR",
+                    stage=name,
+                    message=error,
+                    part=part,
+                )
+                return
+            if payload.get("schema") != expected_schema:
+                _issue(
+                    result,
+                    code="INTERNAL.QA_ERROR",
+                    stage=name,
+                    message=(
+                        f"checker emitted unsupported evidence schema "
+                        f"{payload.get('schema')!r}; expected {expected_schema!r}"
+                    ),
+                    part=part,
+                    details={
+                        "actual": payload.get("schema"),
+                        "expected": expected_schema,
+                    },
+                )
+                return
+            staged_path.replace(output_path)
+    if payload is not None:
         result["artifacts"][artifact_name] = _artifact(output_path)
-        try:
-            payload = _load_json(output_path, f"{name} output")
-        except ValueError as error:
-            payload = None
+        recorded, structured_errors = _record_structured_issues(
+            result,
+            payload,
+            stage=name,
+            default_code=failure_code,
+            default_part=part,
+        )
+        errors = payload.get("errors")
+        issues = payload.get("issues")
+        malformed_error_fields = (
+            errors is not None and not isinstance(errors, list)
+        ) or (
+            issues is not None and not isinstance(issues, list)
+        )
+        contradictory_success = (
+            command.returncode == 0
+            and payload.get("pass") is True
+            and (
+                malformed_error_fields
+                or (isinstance(errors, list) and bool(errors))
+                or (
+                    isinstance(issues, list)
+                    and any(
+                        isinstance(issue, dict)
+                        and issue.get("severity") == "error"
+                        for issue in issues
+                    )
+                )
+            )
+        )
+        if contradictory_success:
             _issue(
                 result,
                 code="INTERNAL.QA_ERROR",
                 stage=name,
-                message=error,
+                message=(
+                    "checker reported pass=true with malformed or non-empty "
+                    "error evidence"
+                ),
                 part=part,
+                details={
+                    "actual": {
+                        "errors": errors,
+                        "issues": issues,
+                        "pass": payload.get("pass"),
+                        "returnCode": command.returncode,
+                    },
+                    "expected": {
+                        "errors": [],
+                        "issuesWithSeverityError": 0,
+                        "pass": True,
+                        "returnCode": 0,
+                    },
+                },
             )
-        if isinstance(payload, dict):
-            checks = payload.get("errors")
-            if command.returncode != 0 or payload.get("pass") is not True:
-                if isinstance(checks, list) and checks:
-                    for check in checks:
-                        _issue(
-                            result,
-                            code=failure_code,
-                            stage=name,
-                            message=f"automated check failed: {check}",
-                            check=str(check),
-                            part=part,
-                        )
-                else:
+        if (command.returncode != 0 or payload.get("pass") is not True) and not structured_errors:
+            if isinstance(errors, list) and errors:
+                for error in errors:
+                    if isinstance(error, dict):
+                        message = error.get("message", error.get("check", error))
+                        check = error.get("check")
+                        details = error
+                    else:
+                        message = error
+                        check = str(error)
+                        details = _check_details(payload, check)
                     _issue(
                         result,
                         code=failure_code,
                         stage=name,
-                        message=payload.get("error", "automated check did not pass"),
+                        message=f"automated check failed: {message}",
+                        check=check if isinstance(check, str) else None,
                         part=part,
+                        details=details,
                     )
-            warnings = payload.get("warnings")
-            if isinstance(warnings, list):
-                for warning in warnings:
-                    _issue(
-                        result,
-                        code="QA.WARNING",
-                        stage=name,
-                        severity="warning",
-                        message=f"automated check warning: {warning}",
-                        check=str(warning),
-                        part=part,
-                    )
+            else:
+                _issue(
+                    result,
+                    code=failure_code,
+                    stage=name,
+                    message=payload.get("error", "automated check did not pass"),
+                    part=part,
+                )
+        warnings = payload.get("warnings")
+        structured_warnings = recorded - structured_errors
+        if isinstance(warnings, list) and not structured_warnings:
+            for warning in warnings:
+                if isinstance(warning, dict):
+                    message = warning.get("message", warning.get("check", warning))
+                    check = warning.get("check")
+                    details = warning
+                else:
+                    message = warning
+                    check = str(warning)
+                    details = _check_details(payload, check)
+                _issue(
+                    result,
+                    code="QA.WARNING",
+                    stage=name,
+                    severity="warning",
+                    message=f"automated check warning: {message}",
+                    check=check if isinstance(check, str) else None,
+                    part=part,
+                    details=details,
+                )
         return
     if command.returncode != 0:
         _record_command_failure(
@@ -697,29 +1029,17 @@ def _binding_matches(reference: Any, path: Path, base_dir: Path) -> bool:
 
 def _freshness_candidates(
     *,
-    intent_path: Path,
-    scene_path: Path,
-    source_path: Path,
+    report_path: Path,
     report: dict[str, Any],
     report_dir: Path,
     result_artifacts: dict[str, Any],
-    log_path: Path,
 ) -> list[Path]:
-    candidates = {intent_path, scene_path, source_path, log_path}
-    inputs = report.get("inputs")
-    if isinstance(inputs, dict):
-        for name, reference in inputs.items():
-            if name == "geometry" and isinstance(reference, dict):
-                for item in reference.values():
-                    try:
-                        candidates.add(_resolve_reference(item, report_dir, "geometry"))
-                    except ValueError:
-                        pass
-            else:
-                try:
-                    candidates.add(_resolve_reference(reference, report_dir, name))
-                except ValueError:
-                    pass
+    # Freshness applies to outputs of this compile attempt, not immutable inputs.
+    # Hash bindings validate intent/source/profile/geometry inputs independently.
+    # The canonical compile log is intentionally excluded: freshness_check's
+    # stdout is appended to that same file by CommandRunner, so sampling it
+    # would mutate it before the evidence can be validated.
+    candidates = {report_path}
     artifacts = report.get("artifacts")
     if isinstance(artifacts, dict):
         for name, reference in artifacts.items():
@@ -733,6 +1053,117 @@ def _freshness_candidates(
         except ValueError:
             pass
     return sorted(candidates, key=lambda path: str(path))
+
+
+def _current_file_binding(path: Path) -> dict[str, Any] | None:
+    snapshot = stable_file_snapshot(path)
+    if snapshot.get("exists") is not True or snapshot.get("stable") is not True:
+        return None
+    return {
+        "mtime_ns": snapshot["mtime_ns"],
+        "sha256": snapshot["sha256"],
+        "size": snapshot["size"],
+    }
+
+
+def _validate_freshness_evidence(
+    payload: Any,
+    *,
+    marker_path: Path,
+    candidates: list[Path],
+) -> list[str]:
+    """Bind freshness stdout to this attempt and its exact artifact set."""
+
+    if not isinstance(payload, dict):
+        return ["freshness checker did not return a JSON object"]
+    errors: list[str] = []
+    marker = payload.get("marker")
+    marker_resolved: Path | None = None
+    if isinstance(marker, str) and marker.strip():
+        marker_resolved = Path(marker).resolve()
+    if marker_resolved != marker_path.resolve():
+        errors.append("freshness marker does not match the current compile attempt")
+    marker_binding = _current_file_binding(marker_path)
+    if marker_binding is None:
+        errors.append("current compile freshness marker is missing")
+    actual_marker_mtime = (
+        marker_binding.get("mtime_ns") if marker_binding is not None else None
+    )
+    marker_mtime = payload.get("marker_mtime_ns")
+    if (
+        actual_marker_mtime is None
+        or not isinstance(marker_mtime, int)
+        or isinstance(marker_mtime, bool)
+        or marker_mtime != actual_marker_mtime
+    ):
+        errors.append("freshness marker timestamp is not bound to the current marker")
+    if marker_binding is not None and (
+        payload.get("marker_size") != marker_binding["size"]
+        or payload.get("marker_sha256") != marker_binding["sha256"]
+    ):
+        errors.append("freshness marker size or SHA-256 does not match the current marker")
+    if payload.get("pass") is not True:
+        errors.append("freshness checker did not report pass=true")
+
+    expected = {path.resolve() for path in candidates}
+    observed: set[Path] = set()
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        errors.append("freshness artifacts must be a list")
+        artifacts = []
+    for index, item in enumerate(artifacts):
+        if not isinstance(item, dict):
+            errors.append(f"freshness artifact {index} must be an object")
+            continue
+        raw_path = item.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            errors.append(f"freshness artifact {index} has no path")
+            continue
+        path = Path(raw_path).resolve()
+        if path in observed:
+            errors.append(f"freshness artifact is duplicated: {path}")
+            continue
+        observed.add(path)
+        if path not in expected:
+            errors.append(f"freshness artifact was not requested: {path}")
+            continue
+        current = _current_file_binding(path)
+        evidence_mtime = item.get("mtime_ns")
+        evidence_size = item.get("size")
+        evidence_sha = item.get("sha256")
+        evidence_binding_valid = (
+            actual_marker_mtime is not None
+            and current is not None
+            and isinstance(evidence_mtime, int)
+            and not isinstance(evidence_mtime, bool)
+            and isinstance(evidence_size, int)
+            and not isinstance(evidence_size, bool)
+            and isinstance(evidence_sha, str)
+            and item.get("stable") is True
+            and evidence_mtime >= actual_marker_mtime
+            and evidence_mtime == current["mtime_ns"]
+            and evidence_size == current["size"]
+            and evidence_sha == current["sha256"]
+        )
+        if (
+            item.get("exists") is not True
+            or item.get("fresh") is not True
+            or not evidence_binding_valid
+        ):
+            errors.append(
+                f"freshness artifact is missing, stale, unstable, or changed: {path}"
+            )
+    missing = sorted(str(path) for path in expected - observed)
+    if missing:
+        errors.append(f"freshness evidence omitted requested artifacts: {missing}")
+    return errors
+
+
+def _compile_deadline_exceeded(result: dict[str, Any]) -> bool:
+    return any(
+        issue.get("code") == "COMPILE.DEADLINE_EXCEEDED"
+        for issue in result.get("issues", [])
+    )
 
 
 def _finish(
@@ -763,14 +1194,17 @@ def _finish(
             in {
                 "buildAudit",
                 "buildReport",
+                "capabilities",
                 "freshnessAudit",
                 "log",
                 "preview",
+                "referencePreview",
                 "renderEvidence",
                 "sourcePreflight",
             }
         },
         "backend": result.get("backend"),
+        "capabilityFingerprint": result.get("capabilityFingerprint"),
         "deliveryReady": False,
         "issues": result["issues"],
         "model": result.get("model"),
@@ -778,6 +1212,7 @@ def _finish(
         "omittedIssueCount": result["omittedIssueCount"],
         "pass": result["pass"],
         "result": {"path": str(result_path)},
+        "runId": result.get("runId"),
         "schema": RESULT_SCHEMA,
         "status": result["status"],
         "visualReviewRequired": True,
@@ -789,6 +1224,7 @@ def compile_cad(
     options: CompileOptions,
     *,
     runner_factory: Any = CommandRunner,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Execute one evidence build and return its compact result."""
 
@@ -796,12 +1232,14 @@ def compile_cad(
     if not workspace.is_dir():
         raise ConfigurationError(f"workspace is not a directory: {workspace}")
     for label, timeout in (
+        ("compile timeout", options.compile_timeout_seconds),
         ("source timeout", options.source_timeout_seconds),
         ("backend timeout", options.backend_timeout_seconds),
         ("check timeout", options.check_timeout_seconds),
     ):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ConfigurationError(f"{label} must be finite and positive")
+    deadline = _CompileDeadline.start(options.compile_timeout_seconds, monotonic)
     if options.consistency_samples < 32:
         raise ConfigurationError("consistency samples must be at least 32")
     intent_path = _workspace_path(
@@ -847,9 +1285,18 @@ def compile_cad(
     )
     report_path = _output_path(
         output_dir,
-        options.report or Path(f"{model}_report.json"),
+        Path(f"{model}_report.json"),
         "build report",
     )
+    marker_mtime_ns = marker_path.stat().st_mtime_ns
+    for label, input_path in (("intent", intent_path), ("source", source_path)):
+        if marker_mtime_ns > input_path.stat().st_mtime_ns:
+            raise ConfigurationError(
+                f"generation marker must predate the {label} input"
+            )
+    run_id = str(uuid4())
+    attempt_marker_path = output_dir / f".{model}-compile-{run_id}.start"
+    attempt_marker_path.write_text(f"compileRunId={run_id}\n", encoding="utf-8")
     runner = runner_factory(log_path)
     result: dict[str, Any] = {
         "artifacts": {},
@@ -858,6 +1305,7 @@ def compile_cad(
         "inputs": {
             "intent": str(intent_path),
             "marker": str(marker_path),
+            "attemptMarker": str(attempt_marker_path),
             "scene": str(scene_path),
             "source": str(source_path),
         },
@@ -865,11 +1313,27 @@ def compile_cad(
         "model": model,
         "omittedErrorCount": 0,
         "omittedIssueCount": 0,
+        "runId": run_id,
         "schema": RESULT_SCHEMA,
         "stages": [],
         "startedAt": _utc_now(),
         "visualReviewRequired": True,
     }
+
+    capability_path = output_dir / f"{model}_capabilities.json"
+    try:
+        capability_manifest = build_capability_manifest()
+        _write_json(capability_path, capability_manifest)
+        result["artifacts"]["capabilities"] = _artifact(capability_path)
+        result["capabilityFingerprint"] = capability_manifest["fingerprint"]
+    except Exception as error:
+        _issue(
+            result,
+            code="INTERNAL.CAPABILITY_DISCOVERY_FAILED",
+            stage="capability-discovery",
+            message=error,
+        )
+        return _finish(result, result_path=result_path, log_path=log_path)
 
     try:
         intent = _load_json(intent_path, "intent contract")
@@ -879,7 +1343,7 @@ def compile_cad(
     intent_audit_path = output_dir / f"{model}_intent-validation.json"
     _validation_artifact(
         intent_audit_path,
-        schema="intent-validation/v4",
+        schema="intent-validation/v5",
         source=intent_path,
         errors=intent_errors,
         part=intent.get("part") if isinstance(intent, dict) else None,
@@ -914,8 +1378,10 @@ def compile_cad(
         return _finish(result, result_path=result_path, log_path=log_path)
 
     intent_digest = _digest(intent_path)
-    previous_report_digest = _digest(report_path) if report_path.is_file() else None
-    source_command = runner.run(
+    report_path.unlink(missing_ok=True)
+    source_command = _run_with_deadline(
+        runner,
+        deadline,
         "source",
         [sys.executable, str(source_path)],
         cwd=workspace,
@@ -923,6 +1389,7 @@ def compile_cad(
         env_extra={
             "AMAGINE3D_INTENT_PATH": str(intent_path),
             "AMAGINE3D_OUTPUT_DIR": str(output_dir),
+            "AMAGINE3D_COMPILE_RUN_ID": run_id,
             "AMAGINE3D_SCENE_PATH": str(scene_path),
             "AMAGINE3D_SOURCE_PHASE": "compile",
             "PYTHONPATH": str(Path(__file__).resolve().parent)
@@ -934,7 +1401,7 @@ def compile_cad(
         },
     )
     _stage_record(result, "source", source_command)
-    if source_command.returncode != 0:
+    if source_command.timed_out or source_command.returncode != 0:
         _record_command_failure(
             result,
             source_command,
@@ -989,22 +1456,9 @@ def compile_cad(
     backend = select_backend(scene)
     result["backend"] = backend
     if backend == "hybrid":
-        expected_report = (output_dir / f"{model}_report.json").resolve()
-        if report_path != expected_report:
-            _issue(
-                result,
-                code="CONFIG.REPORT_PATH_UNSUPPORTED",
-                stage="backend",
-                message=(
-                    "Hybrid compiler owns its canonical report filename; "
-                    f"expected {expected_report}"
-                ),
-            )
-            return _finish(result, result_path=result_path, log_path=log_path)
-        previous_report_digest = (
-            _digest(report_path) if report_path.is_file() else None
-        )
-        backend_command = runner.run(
+        backend_command = _run_with_deadline(
+            runner,
+            deadline,
             "backend-hybrid",
             [
                 sys.executable,
@@ -1017,9 +1471,10 @@ def compile_cad(
             ],
             cwd=workspace,
             timeout_seconds=options.backend_timeout_seconds,
+            env_extra={"AMAGINE3D_COMPILE_RUN_ID": run_id},
         )
         _stage_record(result, "backend-hybrid", backend_command)
-        if backend_command.returncode != 0:
+        if backend_command.timed_out or backend_command.returncode != 0:
             _record_command_failure(
                 result,
                 backend_command,
@@ -1038,15 +1493,6 @@ def compile_cad(
             message=f"compiler did not produce the declared report: {report_path}",
         )
         return _finish(result, result_path=result_path, log_path=log_path)
-    if not _report_changed(report_path, previous_report_digest):
-        _issue(
-            result,
-            code="BUILD.REPORT_STALE",
-            stage="build-report",
-            message="build report was not regenerated by the current source/backend run",
-        )
-        return _finish(result, result_path=result_path, log_path=log_path)
-
     try:
         report = _load_json(report_path, "build report")
     except ValueError as error:
@@ -1055,6 +1501,17 @@ def compile_cad(
             code="BUILD.REPORT_INVALID",
             stage="build-report",
             message=error,
+        )
+        return _finish(result, result_path=result_path, log_path=log_path)
+    if report.get("runId") != run_id:
+        _issue(
+            result,
+            code="BUILD.REPORT_STALE",
+            stage="build-report",
+            message=(
+                "build report is not bound to the current compile run: "
+                f"expected {run_id}, observed {report.get('runId')!r}"
+            ),
         )
         return _finish(result, result_path=result_path, log_path=log_path)
     result["artifacts"]["buildReport"] = _artifact(report_path)
@@ -1100,19 +1557,19 @@ def compile_cad(
     _run_json_check(
         result,
         runner,
+        deadline,
         name="build-check",
         argv=[
             sys.executable,
             str(Path(__file__).resolve().with_name("build_check.py")),
             str(report_path),
-            "--out",
-            str(build_audit_path),
         ],
         cwd=workspace,
         timeout_seconds=options.check_timeout_seconds,
         output_path=build_audit_path,
         artifact_name="buildAudit",
         failure_code="BUILD.REPORT_INVALID",
+        expected_schema="evidence-a3d-build-audit/v1",
     )
     if any(
         issue["severity"] == "error" and issue["stage"] in {"build-report", "build-check"}
@@ -1131,6 +1588,34 @@ def compile_cad(
         )
         return _finish(result, result_path=result_path, log_path=log_path)
     profile_path = _resolve_reference(report_inputs["profile"], report_dir, "profile")
+
+    # Interface and assembly evidence is the cheapest high-value multipart gate.
+    # Run it before per-artifact QA so disconnected structures fail in one report.
+    if len(parts) > 1 and "stl" in artifacts:
+        assembly_audit_path = output_dir / f"{model}_assembly-audit.json"
+        _run_json_check(
+            result,
+            runner,
+            deadline,
+            name="assembly-qa",
+            argv=[
+                sys.executable,
+                str(Path(__file__).resolve().with_name("assembly_check.py")),
+                str(report_path),
+                str(_resolve_reference(artifacts["stl"], report_dir, "stl")),
+            ],
+            cwd=workspace,
+            timeout_seconds=options.check_timeout_seconds,
+            output_path=assembly_audit_path,
+            artifact_name="assemblyAudit",
+            failure_code="QA.ASSEMBLY_FAILED",
+            expected_schema="evidence-assembly-audit/v1",
+        )
+        if any(
+            issue["severity"] == "error" and issue["stage"] == "assembly-qa"
+            for issue in result["issues"]
+        ):
+            return _finish(result, result_path=result_path, log_path=log_path)
 
     mesh_script = Path(__file__).resolve().with_name("qa_check.py")
     mesh_targets: list[tuple[str, Path, int]] = []
@@ -1153,6 +1638,7 @@ def compile_cad(
         _run_json_check(
             result,
             runner,
+            deadline,
             name=f"mesh-qa:{target}",
             argv=[
                 sys.executable,
@@ -1167,37 +1653,17 @@ def compile_cad(
                 "--components",
                 str(components),
                 "--require-z0",
-                "--out",
-                str(audit_path),
             ],
             cwd=workspace,
             timeout_seconds=options.check_timeout_seconds,
             output_path=audit_path,
             artifact_name=f"meshAudit:{target}",
             failure_code="QA.MESH_FAILED",
+            expected_schema="evidence-mesh-audit/v3",
             part=target if target != "plate" else None,
         )
-
-    if len(parts) > 1 and "stl" in artifacts:
-        assembly_audit_path = output_dir / f"{model}_assembly-audit.json"
-        _run_json_check(
-            result,
-            runner,
-            name="assembly-qa",
-            argv=[
-                sys.executable,
-                str(Path(__file__).resolve().with_name("assembly_check.py")),
-                str(report_path),
-                str(_resolve_reference(artifacts["stl"], report_dir, "stl")),
-                "--out",
-                str(assembly_audit_path),
-            ],
-            cwd=workspace,
-            timeout_seconds=options.check_timeout_seconds,
-            output_path=assembly_audit_path,
-            artifact_name="assemblyAudit",
-            failure_code="QA.ASSEMBLY_FAILED",
-        )
+        if _compile_deadline_exceeded(result):
+            return _finish(result, result_path=result_path, log_path=log_path)
 
     for artifact_key in sorted(
         key for key in artifacts if key.startswith("step:")
@@ -1208,6 +1674,7 @@ def compile_cad(
         _run_json_check(
             result,
             runner,
+            deadline,
             name=f"step-qa:{token}",
             argv=[
                 sys.executable,
@@ -1217,16 +1684,17 @@ def compile_cad(
                 str(intent_path),
                 "--report",
                 str(report_path),
-                "--out",
-                str(audit_path),
             ],
             cwd=workspace,
             timeout_seconds=options.check_timeout_seconds,
             output_path=audit_path,
             artifact_name=f"stepAudit:{token}",
             failure_code="QA.STEP_FAILED",
+            expected_schema="evidence-step-audit/v1",
             part=token if token != "assembly" else None,
         )
+        if _compile_deadline_exceeded(result):
+            return _finish(result, result_path=result_path, log_path=log_path)
 
     if "3mf" in artifacts:
         three_mf_path = _resolve_reference(artifacts["3mf"], report_dir, "3mf")
@@ -1234,6 +1702,7 @@ def compile_cad(
         _run_json_check(
             result,
             runner,
+            deadline,
             name="color-qa",
             argv=[
                 sys.executable,
@@ -1246,34 +1715,40 @@ def compile_cad(
                 "--report",
                 str(report_path),
                 "--require-z0",
-                "--out",
-                str(color_audit_path),
             ],
             cwd=workspace,
             timeout_seconds=options.check_timeout_seconds,
             output_path=color_audit_path,
             artifact_name="colorAudit",
             failure_code="QA.COLOR_FAILED",
+            expected_schema="evidence-color-print-package-audit/v1",
         )
+        if _compile_deadline_exceeded(result):
+            return _finish(result, result_path=result_path, log_path=log_path)
         package_audit_path = output_dir / f"{model}_color-assembly-audit.json"
         _run_json_check(
             result,
             runner,
+            deadline,
             name="color-assembly-qa",
             argv=[
                 sys.executable,
                 str(Path(__file__).resolve().parent / "color" / "assembly_check.py"),
                 str(report_path),
                 str(three_mf_path),
-                "--out",
-                str(package_audit_path),
             ],
             cwd=workspace,
             timeout_seconds=options.check_timeout_seconds,
             output_path=package_audit_path,
             artifact_name="colorAssemblyAudit",
             failure_code="QA.COLOR_ASSEMBLY_FAILED",
+            expected_schema="evidence-assembly-audit/v1",
         )
+        if _compile_deadline_exceeded(result):
+            return _finish(result, result_path=result_path, log_path=log_path)
+
+    if any(issue["severity"] == "error" for issue in result["issues"]):
+        return _finish(result, result_path=result_path, log_path=log_path)
 
     display_reference = artifacts.get("glb:display")
     try:
@@ -1288,106 +1763,119 @@ def compile_cad(
             message=error,
         )
         return _finish(result, result_path=result_path, log_path=log_path)
-    preview_path = output_dir / f"{model}_views.png"
+    preview_path = output_dir / f"{model}_{run_id}_views.png"
     reference_view = intent["visual"]["reference_view"]
-    reference_preview_path = output_dir / f"{model}_{reference_view}-view.png"
+    reference_preview_path = (
+        output_dir / f"{model}_{run_id}_{reference_view}-view.png"
+    )
     render_audit_path = output_dir / f"{model}_render.json"
-    previous_preview_digest = _digest(preview_path) if preview_path.is_file() else None
-    previous_reference_digest = (
-        _digest(reference_preview_path) if reference_preview_path.is_file() else None
-    )
-    previous_render_digest = (
-        _digest(render_audit_path) if render_audit_path.is_file() else None
-    )
-    render_command = runner.run(
-        "render",
-        [
-            sys.executable,
-            str(Path(__file__).resolve().with_name("render_preview.py")),
-            str(display_path),
-            "--out",
-            str(preview_path),
-            "--report",
-            str(render_audit_path),
-            "--reference-view",
-            reference_view,
-            "--reference-out",
-            str(reference_preview_path),
-        ],
-        cwd=workspace,
-        timeout_seconds=options.check_timeout_seconds,
-    )
-    _stage_record(result, "render", render_command)
-    if render_command.returncode != 0:
-        _record_command_failure(
-            result,
-            render_command,
-            stage="render",
-            failure_code="VISUAL.RENDER_FAILED",
-            timeout_code="VISUAL.RENDER_TIMEOUT",
-            internal_code="INTERNAL.RENDER_ERROR",
+    with tempfile.TemporaryDirectory(
+        dir=output_dir,
+        prefix=f".{model}-render-",
+    ) as render_directory:
+        render_stage = Path(render_directory)
+        staged_preview = render_stage / preview_path.name
+        staged_reference = render_stage / reference_preview_path.name
+        staged_evidence = render_stage / render_audit_path.name
+        render_command = _run_with_deadline(
+            runner,
+            deadline,
+            "render",
+            [
+                sys.executable,
+                str(Path(__file__).resolve().with_name("render_preview.py")),
+                str(display_path),
+                "--out",
+                str(staged_preview),
+                "--report",
+                str(staged_evidence),
+                "--reference-view",
+                reference_view,
+                "--reference-out",
+                str(staged_reference),
+            ],
+            cwd=workspace,
+            timeout_seconds=options.check_timeout_seconds,
         )
-    elif (
-        not _report_changed(preview_path, previous_preview_digest)
-        or not _report_changed(reference_preview_path, previous_reference_digest)
-        or not _report_changed(render_audit_path, previous_render_digest)
-    ):
-        _issue(
-            result,
-            code="INTERNAL.RENDER_ERROR",
-            stage="render",
-            message=(
-                "renderer did not regenerate preview, matched view, and render evidence"
-            ),
-        )
-    else:
-        try:
-            render_evidence = _load_json(render_audit_path, "render evidence")
-            bound_meshes = render_evidence.get("meshes")
-            display_hash = _digest(display_path)
-            bound = isinstance(bound_meshes, list) and any(
-                isinstance(item, dict)
-                and Path(str(item.get("path", ""))).resolve() == display_path
-                and item.get("sha256") == display_hash
-                for item in bound_meshes
+        _stage_record(result, "render", render_command)
+        if render_command.timed_out or render_command.returncode != 0:
+            _record_command_failure(
+                result,
+                render_command,
+                stage="render",
+                failure_code="VISUAL.RENDER_FAILED",
+                timeout_code="VISUAL.RENDER_TIMEOUT",
+                internal_code="INTERNAL.RENDER_ERROR",
             )
-            preview_reference = render_evidence.get("preview")
-            preview_bound = (
-                isinstance(preview_reference, dict)
-                and Path(str(preview_reference.get("path", ""))).resolve()
-                == preview_path
-                and preview_reference.get("sha256") == _digest(preview_path)
-            )
-            matched_reference = render_evidence.get("matched_view")
-            matched_bound = (
-                isinstance(matched_reference, dict)
-                and matched_reference.get("name") == reference_view
-                and Path(str(matched_reference.get("path", ""))).resolve()
-                == reference_preview_path
-                and matched_reference.get("sha256")
-                == _digest(reference_preview_path)
-            )
-            if (
-                render_evidence.get("schema") != "evidence-render/v2"
-                or not bound
-                or not preview_bound
-                or not matched_bound
-            ):
-                raise ValueError(
-                    "render evidence is not hash-bound to the current display GLB and preview"
-                )
-            result["artifacts"]["preview"] = _artifact(preview_path)
-            result["artifacts"]["referencePreview"] = _artifact(
-                reference_preview_path
-            )
-            result["artifacts"]["renderEvidence"] = _artifact(render_audit_path)
-        except Exception as error:
+        elif not all(
+            _valid_staged_file(path)
+            for path in (staged_preview, staged_reference, staged_evidence)
+        ):
             _issue(
                 result,
-                code="VISUAL.RENDER_EVIDENCE_INVALID",
+                code="INTERNAL.RENDER_ERROR",
                 stage="render",
-                message=error,
+                message="renderer did not produce its complete run-scoped evidence bundle",
             )
+        else:
+            try:
+                render_evidence = _load_json(staged_evidence, "render evidence")
+                bound_meshes = render_evidence.get("meshes")
+                display_hash = _digest(display_path)
+                bound = isinstance(bound_meshes, list) and any(
+                    isinstance(item, dict)
+                    and Path(str(item.get("path", ""))).resolve() == display_path
+                    and item.get("sha256") == display_hash
+                    for item in bound_meshes
+                )
+                preview_reference = render_evidence.get("preview")
+                preview_bound = (
+                    isinstance(preview_reference, dict)
+                    and Path(str(preview_reference.get("path", ""))).resolve()
+                    == staged_preview
+                    and preview_reference.get("sha256") == _digest(staged_preview)
+                )
+                matched_reference = render_evidence.get("matched_view")
+                matched_bound = (
+                    isinstance(matched_reference, dict)
+                    and matched_reference.get("name") == reference_view
+                    and Path(str(matched_reference.get("path", ""))).resolve()
+                    == staged_reference
+                    and matched_reference.get("sha256") == _digest(staged_reference)
+                )
+                if (
+                    render_evidence.get("schema") != "evidence-render/v2"
+                    or not bound
+                    or not preview_bound
+                    or not matched_bound
+                ):
+                    raise ValueError(
+                        "render evidence is not hash-bound to the current display GLB and previews"
+                    )
+                _publish_render_bundle(
+                    staged_preview=staged_preview,
+                    staged_reference=staged_reference,
+                    preview_path=preview_path,
+                    reference_preview_path=reference_preview_path,
+                    render_audit_path=render_audit_path,
+                    render_evidence=render_evidence,
+                    run_id=run_id,
+                )
+                result["artifacts"]["preview"] = _artifact(preview_path)
+                result["artifacts"]["referencePreview"] = _artifact(
+                    reference_preview_path
+                )
+                result["artifacts"]["renderEvidence"] = _artifact(render_audit_path)
+            except Exception as error:
+                _issue(
+                    result,
+                    code="VISUAL.RENDER_EVIDENCE_INVALID",
+                    stage="render",
+                    message=error,
+                )
+
+    if _compile_deadline_exceeded(result):
+        return _finish(result, result_path=result_path, log_path=log_path)
 
     for warning in report.get("warnings", []):
         _issue(
@@ -1400,59 +1888,62 @@ def compile_cad(
 
     freshness_path = output_dir / f"{model}_freshness-audit.json"
     freshness_inputs = _freshness_candidates(
-        intent_path=intent_path,
-        scene_path=scene_path,
-        source_path=source_path,
+        report_path=report_path,
         report=report,
         report_dir=report_dir,
         result_artifacts=result["artifacts"],
-        log_path=log_path,
     )
-    freshness_command = runner.run(
+    freshness_command = _run_with_deadline(
+        runner,
+        deadline,
         "freshness",
         [
             sys.executable,
             str(Path(__file__).resolve().with_name("freshness_check.py")),
             "--after",
-            str(marker_path),
+            str(attempt_marker_path),
             *[str(path) for path in freshness_inputs],
         ],
         cwd=workspace,
         timeout_seconds=options.check_timeout_seconds,
     )
     _stage_record(result, "freshness", freshness_command)
-    freshness = _json_from_tail(freshness_command.output_tail)
-    if isinstance(freshness, dict):
-        freshness_evidence = {
-            **freshness,
-            "schema": "evidence-cad-compile-freshness/v1",
-        }
-        _write_json(freshness_path, freshness_evidence)
-        result["artifacts"]["freshnessAudit"] = _artifact(freshness_path)
-    if (
-        freshness_command.returncode != 0
-        or not isinstance(freshness, dict)
-        or freshness.get("pass") is not True
-    ):
-        stale = []
-        if isinstance(freshness, dict) and isinstance(
-            freshness.get("artifacts"), list
-        ):
-            stale = [
-                item.get("path")
-                for item in freshness["artifacts"]
-                if isinstance(item, dict) and item.get("fresh") is not True
-            ]
-        _issue(
+    if freshness_command.timed_out:
+        _record_command_failure(
             result,
-            code="FRESHNESS.CHECK_FAILED",
             stage="freshness",
-            message=(
-                f"stale or missing artifacts: {stale}"
-                if stale
-                else "freshness checker did not return passing evidence"
-            ),
+            command=freshness_command,
+            failure_code="FRESHNESS.CHECK_FAILED",
+            timeout_code="FRESHNESS.TIMEOUT",
+            internal_code="INTERNAL.FRESHNESS_ERROR",
         )
+    else:
+        freshness = _json_from_tail(freshness_command.output_tail)
+        freshness_errors = _validate_freshness_evidence(
+            freshness,
+            marker_path=attempt_marker_path,
+            candidates=freshness_inputs,
+        )
+        if freshness_command.returncode != 0:
+            freshness_errors.insert(
+                0,
+                f"freshness checker exited with code {freshness_command.returncode}",
+            )
+        if not freshness_errors and isinstance(freshness, dict):
+            freshness_evidence = {
+                **freshness,
+                "runId": run_id,
+                "schema": "evidence-cad-compile-freshness/v1",
+            }
+            _write_json(freshness_path, freshness_evidence)
+            result["artifacts"]["freshnessAudit"] = _artifact(freshness_path)
+        if freshness_errors:
+            _issue(
+                result,
+                code="FRESHNESS.CHECK_FAILED",
+                stage="freshness",
+                message="; ".join(freshness_errors),
+            )
     return _finish(result, result_path=result_path, log_path=log_path)
 
 
@@ -1471,9 +1962,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--workspace", type=Path, default=Path("."))
     parser.add_argument("--output-dir", type=Path, default=Path("."))
-    parser.add_argument("--report", type=Path)
     parser.add_argument("--result", type=Path)
     parser.add_argument("--log", type=Path)
+    parser.add_argument(
+        "--compile-timeout-seconds",
+        type=_positive_timeout,
+        default=DEFAULT_COMPILE_TIMEOUT_SECONDS,
+    )
     parser.add_argument(
         "--source-timeout-seconds", type=_positive_timeout, default=1_800.0
     )
@@ -1496,9 +1991,9 @@ def main(argv: list[str] | None = None) -> int:
                 scene=args.scene,
                 source=args.source,
                 output_dir=args.output_dir,
-                report=args.report,
                 result=args.result,
                 log=args.log,
+                compile_timeout_seconds=args.compile_timeout_seconds,
                 source_timeout_seconds=args.source_timeout_seconds,
                 backend_timeout_seconds=args.backend_timeout_seconds,
                 check_timeout_seconds=args.check_timeout_seconds,
@@ -1523,6 +2018,7 @@ def main(argv: list[str] | None = None) -> int:
             "omittedErrorCount": 0,
             "omittedIssueCount": 0,
             "pass": False,
+            "runId": str(uuid4()),
             "schema": RESULT_SCHEMA,
             "status": "failed",
             "visualReviewRequired": True,

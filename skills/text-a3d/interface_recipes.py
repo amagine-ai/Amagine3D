@@ -348,7 +348,7 @@ def self_tapping_screw_pair(
     minimum_root_embed_mm: float = 0.4,
     head_recess_diameter_mm: float | None = None,
     head_recess_depth_mm: float | None = None,
-    minimum_cover_land_mm: float = 0.8,
+    minimum_cover_land_mm: float | None = None,
     cutter_overshoot_mm: float = 1.0,
 ) -> SelfTappingScrewPair:
     """Create one coaxial plastic self-tapping screw connection.
@@ -369,16 +369,11 @@ def self_tapping_screw_pair(
     pilot = _positive("pilot_diameter_mm", pilot_diameter_mm)
     boss_outer = _positive("boss_outer_diameter_mm", boss_outer_diameter_mm)
     engagement = _positive("engagement_mm", engagement_mm)
-    tip_clearance = _non_negative(
-        "pilot_tip_clearance_mm", pilot_tip_clearance_mm
-    )
+    tip_clearance = _positive("pilot_tip_clearance_mm", pilot_tip_clearance_mm)
     closed_end = _positive("closed_end_mm", closed_end_mm)
     minimum_wall = _positive("minimum_boss_wall_mm", minimum_boss_wall_mm)
     root_embed = _positive("minimum_root_embed_mm", minimum_root_embed_mm)
-    minimum_cover_land = _positive(
-        "minimum_cover_land_mm", minimum_cover_land_mm
-    )
-    overshoot = _non_negative("cutter_overshoot_mm", cutter_overshoot_mm)
+    overshoot = _positive("cutter_overshoot_mm", cutter_overshoot_mm)
     if not isinstance(interface_id, str) or not interface_id.strip():
         raise InterfaceRecipeError("interface_id must be a non-empty string")
     if not isinstance(axis_id, str) or not axis_id.strip():
@@ -406,11 +401,19 @@ def self_tapping_screw_pair(
         )
     recess_diameter = None
     recess_depth = None
+    minimum_cover_land = None
     if has_recess_diameter and has_recess_depth:
         recess_diameter = _positive(
             "head_recess_diameter_mm", head_recess_diameter_mm
         )
         recess_depth = _positive("head_recess_depth_mm", head_recess_depth_mm)
+        if minimum_cover_land_mm is None:
+            raise InterfaceRecipeError(
+                "minimum_cover_land_mm is required with a head recess"
+            )
+        minimum_cover_land = _positive(
+            "minimum_cover_land_mm", minimum_cover_land_mm
+        )
         if recess_diameter <= clearance:
             raise InterfaceRecipeError(
                 "head recess diameter must exceed the clearance diameter"
@@ -419,6 +422,10 @@ def self_tapping_screw_pair(
             raise InterfaceRecipeError(
                 "head recess leaves less than minimum_cover_land_mm"
             )
+    elif minimum_cover_land_mm is not None:
+        raise InterfaceRecipeError(
+            "minimum_cover_land_mm requires a head recess"
+        )
 
     clearance_cutter = Pos(0, 0, -cover_thickness - overshoot) * Cylinder(
         clearance / 2,
@@ -484,7 +491,11 @@ def self_tapping_screw_pair(
                 "clearance_diameter_mm": clearance,
                 "head_recess_diameter_mm": recess_diameter,
                 "head_recess_depth_mm": recess_depth,
-                "minimum_cover_land_mm": minimum_cover_land,
+                **(
+                    {"minimum_cover_land_mm": minimum_cover_land}
+                    if minimum_cover_land is not None
+                    else {}
+                ),
             },
             "receiver": {
                 "pilot_diameter_mm": pilot,

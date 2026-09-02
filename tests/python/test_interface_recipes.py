@@ -129,6 +129,7 @@ class InterfaceRecipeTests(unittest.TestCase):
             cover_thickness_mm=2.4,
             head_recess_diameter_mm=6.2,
             head_recess_depth_mm=1.0,
+            minimum_cover_land_mm=0.8,
         )
         for shape in (
             pair.clearance_cutter,
@@ -165,6 +166,41 @@ class InterfaceRecipeTests(unittest.TestCase):
             evidence["screw"]["maximum_under_head_length_mm"],
             8.2,
         )
+
+    def test_self_tapping_pair_has_no_implicit_cover_land_without_a_recess(self) -> None:
+        pair = recipes.self_tapping_screw_pair(
+            interface_id="housing-base-fastener",
+            axis_id="side-left",
+            cover_thickness_mm=2.4,
+        )
+
+        self.assertNotIn("minimum_cover_land_mm", pair.evidence["cover"])
+
+    def test_self_tapping_pair_requires_an_explicit_cover_land_with_a_recess(self) -> None:
+        with self.assertRaisesRegex(
+            recipes.InterfaceRecipeError,
+            "minimum_cover_land_mm is required",
+        ):
+            recipes.self_tapping_screw_pair(
+                interface_id="housing-base-fastener",
+                axis_id="side-left",
+                cover_thickness_mm=2.4,
+                head_recess_diameter_mm=6.2,
+                head_recess_depth_mm=1.0,
+            )
+
+    def test_self_tapping_pair_requires_positive_tip_clearance_and_overshoot(self) -> None:
+        for field in ("pilot_tip_clearance_mm", "cutter_overshoot_mm"):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                recipes.InterfaceRecipeError,
+                f"{field} must be finite and positive",
+            ):
+                recipes.self_tapping_screw_pair(
+                    interface_id="housing-base-fastener",
+                    axis_id="side-left",
+                    cover_thickness_mm=2.4,
+                    **{field: 0.0},
+                )
 
     def test_self_tapping_pair_rejects_inverted_hole_sizes(self) -> None:
         with self.assertRaisesRegex(

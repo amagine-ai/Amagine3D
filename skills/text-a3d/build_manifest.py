@@ -12,10 +12,11 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import math
+import os
 from pathlib import Path
 import re
 from typing import Any, Iterable
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from material_plan import validate_material_plan, validate_material_sources
 
@@ -194,8 +195,42 @@ def bind_inputs(
     return intent, scene, profile, inputs
 
 
+def is_canonical_uuid(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = UUID(value)
+    except ValueError:
+        return False
+    return str(parsed) == value
+
+
 def new_run_id() -> str:
+    inherited = os.environ.get("AMAGINE3D_COMPILE_RUN_ID")
+    if inherited:
+        if not is_canonical_uuid(inherited):
+            raise ValueError("AMAGINE3D_COMPILE_RUN_ID must be a canonical UUID")
+        return inherited
     return str(uuid4())
+
+
+def write_json_atomic(path: Path, value: Any) -> None:
+    """Publish one complete JSON artifact without exposing partial contents."""
+
+    payload = json.dumps(
+        value,
+        indent=2,
+        sort_keys=True,
+        ensure_ascii=False,
+        allow_nan=False,
+    ) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid4()}.tmp")
+    try:
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def utc_timestamp() -> str:
@@ -857,6 +892,9 @@ def validate_manifest(data: Any) -> list[str]:
     for field in ("runId", "builtAt", "revision", "part"):
         if not isinstance(data.get(field), str) or not data[field].strip():
             errors.append(f"{field} must be a non-empty string")
+    run_id = data.get("runId")
+    if isinstance(run_id, str) and run_id.strip() and not is_canonical_uuid(run_id):
+        errors.append("runId must be a canonical UUID")
     backend = data.get("backend")
     if backend not in BUILD_BACKENDS:
         errors.append(f"backend must be one of {sorted(BUILD_BACKENDS)}")
@@ -909,7 +947,7 @@ def validate_manifest(data: Any) -> list[str]:
         errors.append("inputs must be an object")
     else:
         expected_input_schemas = {
-            "intent": "evidence-cad-intent/v4",
+            "intent": "evidence-cad-intent/v5",
             "scene": "evidence-semantic-scene/v1",
             "profile": "evidence-bambu-printer-profile/v1",
         }

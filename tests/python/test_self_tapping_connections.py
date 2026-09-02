@@ -44,7 +44,6 @@ def _manufacturing() -> tuple[dict, set[str]]:
                 "between": ["housing", "base"],
                 "connection": "self-tapping-screw",
                 "assembly_axis": "+Z",
-                "clearance_mm": 0.4,
                 "engagement_mm": 6.0,
                 "features": sorted(feature_ids),
                 "fastening": {
@@ -54,6 +53,11 @@ def _manufacturing() -> tuple[dict, set[str]]:
                     "clearance_diameter_mm": 3.4,
                     "boss_outer_diameter_mm": 7.5,
                     "closed_end_mm": 1.2,
+                    "cutter_overshoot_mm": 1.0,
+                    "cover_thickness_mm": 2.4,
+                    "pilot_tip_clearance_mm": 0.8,
+                    "minimum_boss_wall_mm": 1.8,
+                    "minimum_root_embed_mm": 0.4,
                     "locator_pairs": [
                         {
                             "id": "housing-base-locator",
@@ -104,6 +108,24 @@ class SelfTappingIntentTests(unittest.TestCase):
         self.assertIn("locator_pairs", text)
         self.assertIn("pilot < nominal < clearance", text)
 
+    def test_requires_every_geometry_controlling_fastener_dimension(self) -> None:
+        required = (
+            "cutter_overshoot_mm",
+            "cover_thickness_mm",
+            "pilot_tip_clearance_mm",
+            "minimum_boss_wall_mm",
+            "minimum_root_embed_mm",
+        )
+        for field in required:
+            with self.subTest(field=field):
+                manufacturing, feature_ids = _manufacturing()
+                manufacturing["interfaces"][0]["fastening"].pop(field)
+                errors = intent_contract.validate_manufacturing(
+                    manufacturing,
+                    feature_ids,
+                )
+                self.assertTrue(any(field in error for error in errors), errors)
+
     def test_rejects_reusing_one_hole_for_two_axes(self) -> None:
         manufacturing, feature_ids = _manufacturing()
         fasteners = manufacturing["interfaces"][0]["fastening"]["fasteners"]
@@ -126,6 +148,7 @@ class SelfTappingIntentTests(unittest.TestCase):
         interface = manufacturing["interfaces"][0]
         interface["connection"] = "collar-socket"
         interface.pop("fastening")
+        interface["clearances_mm"] = {"diameter": 0.4}
         self.assertEqual(
             intent_contract.validate_manufacturing(manufacturing, feature_ids),
             [],

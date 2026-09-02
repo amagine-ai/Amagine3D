@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 import ast
 from hashlib import sha256
-import importlib.util
 import json
 from pathlib import Path
 import symtable
-from typing import Any, Iterable
+from typing import Any
+
+from capability_manifest import literal_public_names
 
 
 PREFLIGHT_SCHEMA = "evidence-python-source-preflight/v1"
@@ -37,53 +38,6 @@ def _issue(
         **({"module": module} if module is not None else {}),
         **({"name": name} if name is not None else {}),
     }
-
-
-def _literal_public_names(module_name: str) -> set[str]:
-    """Read a module's literal public API without importing the module."""
-
-    spec = importlib.util.find_spec(module_name)
-    raw_origin = spec.origin if spec is not None else None
-    if not isinstance(raw_origin, str):
-        raise ValueError(f"managed module {module_name!r} is not installed")
-    origin = Path(raw_origin)
-    if not origin.is_file() or origin.suffix.lower() != ".py":
-        raise ValueError(
-            f"managed module {module_name!r} has no inspectable Python source"
-        )
-    try:
-        module_tree = ast.parse(origin.read_text(encoding="utf-8"), str(origin))
-    except (OSError, SyntaxError) as error:
-        raise ValueError(
-            f"managed module {module_name!r} cannot be inspected: {error}"
-        ) from error
-    for statement in module_tree.body:
-        if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets: Iterable[ast.expr]
-        if isinstance(statement, ast.Assign):
-            targets = statement.targets
-        else:
-            targets = (statement.target,)
-        if not any(
-            isinstance(target, ast.Name) and target.id == "__all__"
-            for target in targets
-        ):
-            continue
-        try:
-            value = ast.literal_eval(statement.value)
-        except (ValueError, TypeError, SyntaxError) as error:
-            raise ValueError(
-                f"managed module {module_name!r} has a non-literal __all__"
-            ) from error
-        if not isinstance(value, (list, tuple)) or not all(
-            isinstance(item, str) for item in value
-        ):
-            raise ValueError(
-                f"managed module {module_name!r} has an invalid __all__"
-            )
-        return set(value)
-    raise ValueError(f"managed module {module_name!r} does not declare __all__")
 
 
 def _module_bindings(table: symtable.SymbolTable) -> set[str]:
@@ -146,7 +100,7 @@ def validate_source_text(source: str, filename: str = "<source>") -> list[dict[s
         ]
 
     try:
-        public_names = _literal_public_names(MANAGED_MODULE)
+        public_names = literal_public_names(MANAGED_MODULE)
     except ValueError as error:
         return [_issue("api-catalog", str(error))]
 

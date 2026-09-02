@@ -1,7 +1,7 @@
 """Deterministic authoring helpers for the canonical intent and scene contracts.
 
 This module deliberately has no intermediate document format.  It writes the
-same evidence-cad-intent/v4 and evidence-semantic-scene/v1 JSON documents that
+same evidence-cad-intent/v5 and evidence-semantic-scene/v1 JSON documents that
 the validators and compilers consume.  The compact inputs only remove fields
 whose values are mechanically implied by an explicit semantic decision.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from hashlib import sha256
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -384,13 +385,13 @@ def paired_interface(
     male_feature: str,
     male_dimensions_mm: Mapping[str, float],
     female_feature: str,
-    female_offsets_mm: Mapping[str, float],
+    clearances_mm: Mapping[str, float],
     female_dimensions_mm: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Declare a paired scene interface without duplicating owners or dimensions.
 
     The caller still chooses the interface kind, endpoints, male dimensions, and
-    every fit offset.  `write_scene` resolves endpoint owners from immutable
+    every named dimension clearance.  `write_scene` resolves endpoint owners from immutable
     intent and derives the matching female dimensions and provenance records.
     """
 
@@ -408,7 +409,7 @@ def paired_interface(
         },
         "female": {
             "featureId": female_feature,
-            "offsetsMm": deepcopy(dict(female_offsets_mm)),
+            "clearancesMm": deepcopy(dict(clearances_mm)),
             "dimensionsMm": deepcopy(dict(female_dimensions_mm or {})),
         },
     }
@@ -464,17 +465,17 @@ def _expand_paired_interfaces(
 
         male_dimensions = canonical["male"].get("dimensionsMm")
         female = canonical["female"]
-        offsets = female.pop("offsetsMm", None)
+        clearances = female.pop("clearancesMm", None)
         female_dimensions = female.get("dimensionsMm")
         if not isinstance(male_dimensions, Mapping) or not male_dimensions:
             raise AuthoringError(
                 "scene interface",
                 [f"paired_interfaces[{index}].male.dimensionsMm must be non-empty"],
             )
-        if not isinstance(offsets, Mapping) or not offsets:
+        if not isinstance(clearances, Mapping):
             raise AuthoringError(
                 "scene interface",
-                [f"paired_interfaces[{index}].female.offsetsMm must be non-empty"],
+                [f"paired_interfaces[{index}].female.clearancesMm must be an object"],
             )
         if not isinstance(female_dimensions, Mapping):
             raise AuthoringError(
@@ -483,7 +484,7 @@ def _expand_paired_interfaces(
             )
         female_dimensions = deepcopy(dict(female_dimensions))
         derived: dict[str, dict[str, Any]] = {}
-        for field, offset in offsets.items():
+        for field, clearance in clearances.items():
             if field not in male_dimensions:
                 raise AuthoringError(
                     "scene interface",
@@ -496,17 +497,20 @@ def _expand_paired_interfaces(
             if (
                 not isinstance(male_value, (int, float))
                 or isinstance(male_value, bool)
-                or not isinstance(offset, (int, float))
-                or isinstance(offset, bool)
+                or not math.isfinite(float(male_value))
+                or not isinstance(clearance, (int, float))
+                or isinstance(clearance, bool)
+                or not math.isfinite(float(clearance))
+                or float(clearance) < 0
             ):
                 raise AuthoringError(
                     "scene interface",
                     [
                         f"paired_interfaces[{index}] dimension {field!r} and its "
-                        "offset must be finite numbers"
+                        "clearance must be finite, with a non-negative clearance"
                     ],
                 )
-            derived_value = float(male_value) + float(offset)
+            derived_value = float(male_value) + float(clearance)
             declared_value = female_dimensions.get(field, derived_value)
             if not isinstance(declared_value, (int, float)) or isinstance(
                 declared_value, bool
@@ -524,7 +528,10 @@ def _expand_paired_interfaces(
                     ],
                 )
             female_dimensions[field] = derived_value
-            derived[field] = {"from": f"male.{field}", "offsetMm": offset}
+            derived[field] = {
+                "from": f"male.{field}",
+                "offsetMm": float(clearance),
+            }
         female["dimensionsMm"] = female_dimensions
         female["derivedDimensionsMm"] = derived
         expanded.append(canonical)
@@ -559,17 +566,30 @@ def _validate_interface_alignment(
         if isinstance(item, Mapping)
         and isinstance(item.get("id"), str)
     }
+    expected_interface_ids = set(intent_interfaces)
+    for target in intent_interfaces.values():
+        if target.get("connection") != "self-tapping-screw":
+            continue
+        fastening = target.get("fastening")
+        locator_pairs = (
+            fastening.get("locator_pairs")
+            if isinstance(fastening, Mapping)
+            else ()
+        )
+        for locator in locator_pairs if isinstance(locator_pairs, Sequence) else ():
+            if isinstance(locator, Mapping) and isinstance(locator.get("id"), str):
+                expected_interface_ids.add(locator["id"])
     scene_interfaces = {
         item.get("id"): item
         for item in interfaces
         if isinstance(item, Mapping) and isinstance(item.get("id"), str)
     }
-    if set(scene_interfaces) != set(intent_interfaces):
+    if set(scene_interfaces) != expected_interface_ids:
         raise AuthoringError(
             "scene interface",
             [
                 "scene interface ids must exactly match immutable intent: "
-                f"expected {sorted(intent_interfaces)}, observed {sorted(scene_interfaces)}"
+                f"expected {sorted(expected_interface_ids)}, observed {sorted(scene_interfaces)}"
             ],
         )
 
@@ -627,6 +647,41 @@ def _validate_interface_alignment(
                     f"immutable parts {sorted(expected_parts)}"
                 ],
             )
+        female = scene_interface.get("female")
+        derived = (
+            female.get("derivedDimensionsMm")
+            if isinstance(female, Mapping)
+            else None
+        )
+        raw_clearances = target.get("clearances_mm")
+        clearances = raw_clearances if isinstance(raw_clearances, Mapping) else {}
+        if derived is None:
+            derived = {}
+        if not isinstance(derived, Mapping) or set(derived) != set(clearances):
+            raise AuthoringError(
+                "scene interface",
+                [
+                    f"interface {interface_id!r} derived dimension fields must "
+                    "exactly match immutable clearances_mm"
+                ],
+            )
+        for field, clearance in clearances.items():
+            rule = derived.get(field)
+            offset = rule.get("offsetMm") if isinstance(rule, Mapping) else None
+            if (
+                not isinstance(offset, (int, float))
+                or isinstance(offset, bool)
+                or not isinstance(clearance, (int, float))
+                or isinstance(clearance, bool)
+                or float(offset) != float(clearance)
+            ):
+                raise AuthoringError(
+                    "scene interface",
+                    [
+                        f"interface {interface_id!r} clearance {field!r} must "
+                        "exactly match immutable clearances_mm"
+                    ],
+                )
 
 
 def _intent_materials(intent: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -805,7 +860,7 @@ def write_scene(
 
     Part nesting supplies node ownership; node role supplies operation.  Paired
     interfaces derive endpoint ownership and female dimensions from explicit
-    offsets.  Representation masters, recipes, fit offsets, source meshes, and
+    named clearances.  Representation masters, recipes, fit clearances, source meshes, and
     optional raw interface structures remain caller decisions.
     """
 

@@ -17,6 +17,7 @@ import re
 import sys
 from typing import Any
 
+from capability_registry import capability_for_connection, connection_kinds
 from intent_contract import (
     feature_owner_map as intent_feature_owner_map,
     physical_part_names as intent_physical_part_names,
@@ -25,7 +26,7 @@ from intent_contract import (
 
 
 SCENE_SCHEMA = "evidence-semantic-scene/v1"
-INTENT_SCHEMAS = {"evidence-cad-intent/v4"}
+INTENT_SCHEMAS = {"evidence-cad-intent/v5"}
 REPRESENTATION_MASTERS = {"brep", "mesh"}
 ROLES = {"solid", "cutter", "separate", "display-only"}
 DISPLAY_COMPONENT_KIND = "displayComponent"
@@ -63,6 +64,192 @@ INTENT_ONLY_FIELDS = {
     "task_mode",
     "visual",
 }
+
+
+def _validate_interface_intent_alignment(
+    intent: dict[str, Any] | None,
+    interfaces: Any,
+    nodes_by_feature: dict[str, dict],
+    errors: list[str],
+) -> None:
+    """Validate ordinary interfaces independently from the authoring helper."""
+
+    if not isinstance(intent, dict):
+        return
+    manufacturing = intent.get("manufacturing")
+    if not isinstance(manufacturing, dict):
+        return
+    raw_targets = manufacturing.get("interfaces")
+    targets = raw_targets if isinstance(raw_targets, list) else []
+    implementations = interfaces if isinstance(interfaces, list) else []
+    target_by_id = {
+        item.get("id"): item
+        for item in targets
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    locator_by_id: dict[str, tuple[dict, dict]] = {}
+    for target in targets:
+        if not (
+            isinstance(target, dict)
+            and target.get("connection") == "self-tapping-screw"
+        ):
+            continue
+        fastening = target.get("fastening")
+        locator_pairs = (
+            fastening.get("locator_pairs") if isinstance(fastening, dict) else None
+        )
+        for locator in locator_pairs if isinstance(locator_pairs, list) else []:
+            if isinstance(locator, dict) and isinstance(locator.get("id"), str):
+                locator_by_id[locator["id"]] = (target, locator)
+    implementation_by_id = {
+        item.get("id"): item
+        for item in implementations
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    expected_ids = set(target_by_id) | set(locator_by_id)
+    if expected_ids != set(implementation_by_id):
+        errors.append(
+            "scene interface ids must exactly match immutable intent: "
+            f"expected {sorted(expected_ids)}, observed {sorted(implementation_by_id)}"
+        )
+    for interface_id in sorted(set(target_by_id) & set(implementation_by_id)):
+        target = target_by_id[interface_id]
+        implementation = implementation_by_id[interface_id]
+        path = f"interfaces[{interface_id}]"
+        connection = target.get("connection")
+        if implementation.get("kind") != connection:
+            errors.append(
+                f"{path}.kind must match immutable intent connection {connection!r}"
+            )
+        if connection == "self-tapping-screw":
+            continue
+        capability = capability_for_connection(str(connection))
+        if capability is None:
+            errors.append(f"{path}.kind has no registered proof capability")
+            continue
+        endpoints = {
+            name: implementation.get(name)
+            for name in ("male", "female")
+            if isinstance(implementation.get(name), dict)
+        }
+        expected_features = {
+            item for item in target.get("features", []) if isinstance(item, str)
+        }
+        observed_features = {
+            endpoint.get("featureId")
+            for endpoint in endpoints.values()
+            if isinstance(endpoint.get("featureId"), str)
+        }
+        if observed_features != expected_features:
+            errors.append(
+                f"{path} endpoints must exactly match immutable features "
+                f"{sorted(expected_features)}"
+            )
+        expected_parts = {
+            item for item in target.get("between", []) if isinstance(item, str)
+        }
+        observed_parts = {
+            endpoint.get("partId")
+            for endpoint in endpoints.values()
+            if isinstance(endpoint.get("partId"), str)
+        }
+        if observed_parts != expected_parts:
+            errors.append(
+                f"{path} endpoint owners must exactly match immutable parts "
+                f"{sorted(expected_parts)}"
+            )
+        endpoint_roles = capability.get("endpointRoles", {})
+        for endpoint_name, endpoint in endpoints.items():
+            feature_id = endpoint.get("featureId")
+            node = nodes_by_feature.get(feature_id)
+            allowed_roles = set(endpoint_roles.get(endpoint_name, ()))
+            if allowed_roles and isinstance(node, dict) and node.get("role") not in allowed_roles:
+                errors.append(
+                    f"{path}.{endpoint_name}.featureId must reference a scene node "
+                    f"with role in {sorted(allowed_roles)}"
+                )
+        female = endpoints.get("female")
+        derived = female.get("derivedDimensionsMm") if isinstance(female, dict) else None
+        raw_clearances = target.get("clearances_mm")
+        clearances = raw_clearances if isinstance(raw_clearances, dict) else {}
+        derived_fields = set(derived) if isinstance(derived, dict) else set()
+        if derived_fields != set(clearances):
+            errors.append(
+                f"{path}.female.derivedDimensionsMm fields must exactly match "
+                f"immutable clearances_mm: expected {sorted(clearances)}, "
+                f"observed {sorted(derived_fields)}"
+            )
+        if isinstance(derived, dict):
+            for field in sorted(set(derived) & set(clearances)):
+                rule = derived.get(field)
+                offset = rule.get("offsetMm") if isinstance(rule, dict) else None
+                clearance = clearances[field]
+                if _number(offset) and _number(clearance) and (
+                    float(offset) != float(clearance)
+                ):
+                    errors.append(
+                        f"{path}.female.derivedDimensionsMm.{field}.offsetMm must "
+                        f"exactly match immutable clearances_mm.{field} "
+                        f"{float(clearance):g}"
+                    )
+
+    for interface_id in sorted(set(locator_by_id) & set(implementation_by_id)):
+        parent, locator = locator_by_id[interface_id]
+        implementation = implementation_by_id[interface_id]
+        path = f"interfaces[{interface_id}]"
+        if implementation.get("kind") not in SELF_TAPPING_LOCATOR_KINDS:
+            errors.append(
+                f"{path}.kind must be one of the locator kinds declared for "
+                "self-tapping interfaces"
+            )
+        endpoints = {
+            name: implementation.get(name)
+            for name in ("male", "female")
+            if isinstance(implementation.get(name), dict)
+        }
+        expected_features = {
+            item
+            for item in (
+                locator.get("male_feature"),
+                locator.get("female_feature"),
+            )
+            if isinstance(item, str)
+        }
+        observed_features = {
+            endpoint.get("featureId")
+            for endpoint in endpoints.values()
+            if isinstance(endpoint.get("featureId"), str)
+        }
+        if observed_features != expected_features:
+            errors.append(
+                f"{path} endpoints must exactly match immutable locator features "
+                f"{sorted(expected_features)}"
+            )
+        expected_parts = {
+            item for item in parent.get("between", []) if isinstance(item, str)
+        }
+        observed_parts = {
+            endpoint.get("partId")
+            for endpoint in endpoints.values()
+            if isinstance(endpoint.get("partId"), str)
+        }
+        if observed_parts != expected_parts:
+            errors.append(
+                f"{path} endpoint owners must exactly match immutable parts "
+                f"{sorted(expected_parts)}"
+            )
+        for endpoint_name, allowed_roles in (
+            ("male", {"separate", "solid"}),
+            ("female", {"cutter"}),
+        ):
+            endpoint = endpoints.get(endpoint_name)
+            feature_id = endpoint.get("featureId") if isinstance(endpoint, dict) else None
+            node = nodes_by_feature.get(feature_id)
+            if isinstance(node, dict) and node.get("role") not in allowed_roles:
+                errors.append(
+                    f"{path}.{endpoint_name}.featureId must reference a scene node "
+                    f"with role in {sorted(allowed_roles)}"
+                )
 
 
 def _number(value: Any) -> bool:
@@ -978,6 +1165,26 @@ def _validate_self_tapping_intent_alignment(
                     fastening.get("closed_end_mm"),
                     receiver.get("closedEndMm"),
                 ),
+                "cutter_overshoot_mm": (
+                    fastening.get("cutter_overshoot_mm"),
+                    implementation.get("cutterOvershootMm"),
+                ),
+                "cover_thickness_mm": (
+                    fastening.get("cover_thickness_mm"),
+                    cover.get("thicknessMm"),
+                ),
+                "pilot_tip_clearance_mm": (
+                    fastening.get("pilot_tip_clearance_mm"),
+                    receiver.get("tipClearanceMm"),
+                ),
+                "minimum_boss_wall_mm": (
+                    fastening.get("minimum_boss_wall_mm"),
+                    receiver.get("minimumBossWallMm"),
+                ),
+                "minimum_root_embed_mm": (
+                    fastening.get("minimum_root_embed_mm"),
+                    receiver.get("minimumRootEmbedMm"),
+                ),
                 "head_recess_diameter_mm": (
                     fastening.get("head_recess_diameter_mm"),
                     cover.get("headRecessDiameterMm"),
@@ -993,7 +1200,7 @@ def _validate_self_tapping_intent_alignment(
             }
             for name, (expected, observed) in comparisons.items():
                 if _number(expected) and _number(observed):
-                    matches = abs(float(expected) - float(observed)) <= 1e-6
+                    matches = float(expected) == float(observed)
                 else:
                     matches = expected == observed
                 if not matches:
@@ -1399,6 +1606,8 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             kind = interface.get("kind")
             if not isinstance(kind, str) or not TOKEN_PATTERN.fullmatch(kind):
                 errors.append(f"{path}.kind is invalid")
+            elif kind not in connection_kinds():
+                errors.append(f"{path}.kind has no registered interface capability")
             if kind == "self-tapping-screw":
                 if "male" in interface or "female" in interface:
                     errors.append(
@@ -1446,13 +1655,21 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             ):
                 errors.append(f"{path} must connect two distinct parts")
 
+            capability = (
+                capability_for_connection(kind) if isinstance(kind, str) else None
+            )
+            requires_clearance = bool(
+                capability and "clearance" in capability.get("geometryChecks", ())
+            )
             female = endpoints.get("female")
             derived = female.get("derivedDimensionsMm") if female else None
-            if not isinstance(derived, dict) or not derived:
+            if requires_clearance and (not isinstance(derived, dict) or not derived):
                 errors.append(
                     f"{path}.female.derivedDimensionsMm must derive at least one field from male"
                 )
-            else:
+            elif derived is not None and not isinstance(derived, dict):
+                errors.append(f"{path}.female.derivedDimensionsMm must be an object")
+            elif isinstance(derived, dict):
                 for field, rule in derived.items():
                     rule_path = f"{path}.female.derivedDimensionsMm.{field}"
                     if not isinstance(field, str) or not TOKEN_PATTERN.fullmatch(field):
@@ -1493,6 +1710,12 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         if len(interface_ids) != len(set(interface_ids)):
             errors.append("interface ids must be unique")
 
+    _validate_interface_intent_alignment(
+        intent_data,
+        interfaces,
+        nodes_by_feature,
+        errors,
+    )
     _validate_self_tapping_locator_interfaces(interfaces, nodes_by_feature, errors)
     _validate_self_tapping_recipe_nodes(interfaces, nodes, errors)
     _validate_self_tapping_intent_alignment(intent_data, interfaces, errors)

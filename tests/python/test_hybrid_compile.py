@@ -23,6 +23,7 @@ import hybrid_compile  # noqa: E402
 import build_check  # noqa: E402
 import intent_contract  # noqa: E402
 import scene_contract  # noqa: E402
+import self_tapping_geometry  # noqa: E402
 import shape_consistency  # noqa: E402
 from tests.python.intent_fixture import (  # noqa: E402
     intent_ref as fixture_intent_ref,
@@ -199,7 +200,22 @@ def _fixture(root: Path) -> tuple[dict, float]:
                 },
             },
         ],
-        "interfaces": [],
+        "interfaces": [
+            {
+                "id": "button-housing-fixture",
+                "kind": "glue-face",
+                "male": {
+                    "partId": "button",
+                    "featureId": "controls/button",
+                    "dimensionsMm": {"height": 3.0},
+                },
+                "female": {
+                    "partId": "housing",
+                    "featureId": "housing/outer",
+                    "dimensionsMm": {"height": 3.0},
+                },
+            }
+        ],
     }
     return scene, float(housing.volume)
 
@@ -309,8 +325,8 @@ def _multipart_color_fixture(root: Path) -> dict:
     badge_left.apply_translation([-5, 0, 0])
     badge_right = trimesh.creation.box(extents=[10, 10, 6])
     badge_right.apply_translation([5, 0, 0])
-    button = trimesh.creation.box(extents=[6, 6, 4])
-    button.apply_translation([20, 0, 0])
+    button = trimesh.creation.box(extents=[6, 10, 4])
+    button.apply_translation([13, 0, 0])
     for name, mesh in (
         ("badge", badge),
         ("badge-left", badge_left),
@@ -320,10 +336,10 @@ def _multipart_color_fixture(root: Path) -> dict:
         mesh.export(source / f"{name}.stl")
     button_step = source / "button.step"
     export_step(
-        Pos(20, 0, 0)
+        Pos(13, 0, 0)
         * Box(
             6,
-            6,
+            10,
             4,
             align=(Align.CENTER, Align.CENTER, Align.CENTER),
         ),
@@ -390,8 +406,7 @@ def _multipart_color_fixture(root: Path) -> dict:
                 "id": "badge-button-interface",
                 "between": ["badge", "button"],
                 "connection": "glue-face",
-                "assembly_axis": "+Z",
-                "clearance_mm": 0.0,
+                "assembly_axis": "+X",
                 "engagement_mm": 1.0,
                 "features": ["badge-body", "button-body"],
                 "acceptance": "The button is installed on the badge face.",
@@ -403,7 +418,7 @@ def _multipart_color_fixture(root: Path) -> dict:
         "revision": "multipart-color-regions-001",
         "intentRef": _write_intent(
             root,
-            dimensions_mm=(33.0, 10.0, 6.0),
+            dimensions_mm=(26.0, 10.0, 6.0),
             part="control-panel",
             feature_owners={"badge-body": "badge", "button-body": "button"},
             color_regions=color_regions,
@@ -474,7 +489,22 @@ def _multipart_color_fixture(root: Path) -> dict:
                 },
             },
         ],
-        "interfaces": [],
+        "interfaces": [
+            {
+                "id": "badge-button-interface",
+                "kind": "glue-face",
+                "male": {
+                    "partId": "badge",
+                    "featureId": "badge-body",
+                    "dimensionsMm": {"depth": 10.0},
+                },
+                "female": {
+                    "partId": "button",
+                    "featureId": "button-body",
+                    "dimensionsMm": {"depth": 10.0},
+                },
+            }
+        ],
     }
 
 
@@ -1037,14 +1067,14 @@ class HybridCompileTests(unittest.TestCase):
             "pinholed-skin-cover",
         )
         self.assertEqual(
-            hybrid_compile._axis_triangle_intersections(
+            self_tapping_geometry._axis_triangle_intersections(
                 pinholed_skin,
                 np.zeros(3),
                 np.asarray([0.0, 0.0, 1.0]),
             ),
             [],
         )
-        passage_probe = hybrid_compile._segment_cylinder(
+        passage_probe = self_tapping_geometry._segment_cylinder(
             1.68,
             np.asarray([0.0, 0.0, -4.05]),
             np.asarray([0.0, 0.0, 0.05]),
@@ -1075,18 +1105,18 @@ class HybridCompileTests(unittest.TestCase):
                 passage_probe,
                 "open clearance",
             ),
-            hybrid_compile._probe_tolerance(passage_probe),
+            self_tapping_geometry._probe_tolerance(passage_probe),
         )
 
     def test_head_recess_witness_requires_the_full_minimum_floor(self):
         cover = trimesh.creation.box(extents=[10.0, 10.0, 2.4])
         cover.apply_translation([0.0, 0.0, -1.2])
-        through = hybrid_compile._segment_cylinder(
+        through = self_tapping_geometry._segment_cylinder(
             1.7,
             np.asarray([0.0, 0.0, -3.0]),
             np.asarray([0.0, 0.0, 0.5]),
         )
-        shallow_floor_recess = hybrid_compile._segment_cylinder(
+        shallow_floor_recess = self_tapping_geometry._segment_cylinder(
             3.0,
             np.asarray([0.0, 0.0, -3.0]),
             np.asarray([0.0, 0.0, -0.6]),
@@ -1096,7 +1126,7 @@ class HybridCompileTests(unittest.TestCase):
             [through, shallow_floor_recess],
             "insufficient-floor-cover",
         )
-        floor_witness = hybrid_compile._segment_annulus(
+        floor_witness = self_tapping_geometry._segment_annulus(
             1.72,
             2.98,
             np.asarray([0.0, 0.0, -0.78]),
@@ -1111,7 +1141,7 @@ class HybridCompileTests(unittest.TestCase):
             0.1,
         )
 
-        exact_floor_recess = hybrid_compile._segment_cylinder(
+        exact_floor_recess = self_tapping_geometry._segment_cylinder(
             3.0,
             np.asarray([0.0, 0.0, -3.0]),
             np.asarray([0.0, 0.0, -0.8]),
@@ -1127,7 +1157,7 @@ class HybridCompileTests(unittest.TestCase):
                 exact_floor,
                 "exact head recess floor",
             ),
-            hybrid_compile._probe_tolerance(floor_witness),
+            self_tapping_geometry._probe_tolerance(floor_witness),
         )
 
     def test_shared_self_tapping_recipe_places_actual_geometry_on_one_axis(self):
@@ -1169,6 +1199,7 @@ class HybridCompileTests(unittest.TestCase):
             "housing-base-service-joint",
             "side-left",
         )
+        self.assertNotIn("minimum_cover_land_mm", evidence["cover"])
         origin = np.asarray([5.0, 6.0, 7.0])
         expected_diameters = {
             "clearance-cutter": 3.4,
@@ -1347,7 +1378,6 @@ class HybridCompileTests(unittest.TestCase):
                         "between": ["base", "housing"],
                         "connection": "self-tapping-screw",
                         "assembly_axis": "+Z",
-                        "clearance_mm": 0.4,
                         "engagement_mm": 6.0,
                         "features": interface_features,
                         "acceptance": "two aligned screw axes retain the base",
@@ -1358,6 +1388,11 @@ class HybridCompileTests(unittest.TestCase):
                             "clearance_diameter_mm": 3.4,
                             "boss_outer_diameter_mm": 7.5,
                             "closed_end_mm": 1.2,
+                            "cutter_overshoot_mm": 1.0,
+                            "cover_thickness_mm": 2.4,
+                            "pilot_tip_clearance_mm": 0.8,
+                            "minimum_boss_wall_mm": 1.8,
+                            "minimum_root_embed_mm": 0.4,
                             "locator_pairs": [
                                 {
                                     "id": "housing-base-locator",
@@ -1433,6 +1468,29 @@ class HybridCompileTests(unittest.TestCase):
             self.assertTrue(
                 all(
                     item["pass"]
+                    for item in report["fastenerGeometryChecks"].values()
+                )
+            )
+            self.assertTrue(
+                all(
+                    item["checks"][
+                        "clearance_cutter_volume_matches_recipe_controls"
+                    ]
+                    and item["checks"][
+                        "clearance_cutter_bounds_match_recipe_controls"
+                    ]
+                    and item["checks"][
+                        "pilot_cutter_volume_matches_recipe_controls"
+                    ]
+                    and item["checks"][
+                        "pilot_cutter_bounds_match_recipe_controls"
+                    ]
+                    and item["checks"][
+                        "receiver_boss_volume_matches_recipe_controls"
+                    ]
+                    and item["checks"][
+                        "receiver_boss_bounds_match_recipe_controls"
+                    ]
                     for item in report["fastenerGeometryChecks"].values()
                 )
             )

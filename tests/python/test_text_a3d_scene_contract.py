@@ -122,7 +122,7 @@ def _scene(root: Path) -> dict:
                 "between": ["button", "base"],
                 "connection": "pin-socket",
                 "assembly_axis": "+Z",
-                "clearance_mm": 0.35,
+                "clearances_mm": {"diameter": 0.35},
                 "engagement_mm": 3.0,
                 "features": ["button-stem", "button-guide"],
                 "acceptance": "button stem enters its guide",
@@ -311,7 +311,6 @@ def _self_tapping_scene(root: Path) -> dict:
                 "between": ["base", "housing"],
                 "connection": "self-tapping-screw",
                 "assembly_axis": "+Y",
-                "clearance_mm": 0.4,
                 "engagement_mm": 6.0,
                 "features": interface_features,
                 "acceptance": "two screw axes and a locator retain the base",
@@ -322,6 +321,11 @@ def _self_tapping_scene(root: Path) -> dict:
                     "clearance_diameter_mm": 3.4,
                     "boss_outer_diameter_mm": 7.5,
                     "closed_end_mm": 1.2,
+                    "cutter_overshoot_mm": 1.0,
+                    "cover_thickness_mm": 2.4,
+                    "pilot_tip_clearance_mm": 0.8,
+                    "minimum_boss_wall_mm": 1.8,
+                    "minimum_root_embed_mm": 0.4,
                     "locator_pairs": [
                         {
                             "id": "housing-base-locator",
@@ -344,7 +348,7 @@ class SemanticSceneContractTests(unittest.TestCase):
             data = _scene(root)
             self.assertEqual(scene_contract.validate(data, root), [])
 
-    def test_referenced_intent_must_pass_the_complete_v4_contract(self):
+    def test_referenced_intent_must_pass_the_complete_v5_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data = _scene(root)
@@ -439,6 +443,61 @@ class SemanticSceneContractTests(unittest.TestCase):
             self.assertIn("operation must be subtract for role cutter", text)
             self.assertIn("must reference a non-display feature", text)
             self.assertIn("expects 3.35 mm", text)
+
+    def test_named_radial_and_axial_clearances_bind_exactly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            intent_path = root / data["intentRef"]["path"]
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            target = intent["manufacturing"]["interfaces"][0]
+            target["clearances_mm"] = {"diameter": 0.35, "length": 0.2}
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+
+            interface = data["interfaces"][0]
+            interface["male"]["dimensionsMm"]["length"] = 3.0
+            interface["female"]["dimensionsMm"]["length"] = 3.2
+            interface["female"]["derivedDimensionsMm"]["length"] = {
+                "from": "male.length",
+                "offsetMm": 0.2,
+            }
+            self.assertEqual(scene_contract.validate(data, root), [])
+
+            interface["female"]["derivedDimensionsMm"]["length"][
+                "offsetMm"
+            ] += 1e-9
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("exactly match immutable clearances_mm.length" in item for item in errors),
+                errors,
+            )
+
+            interface["female"]["derivedDimensionsMm"]["length"]["offsetMm"] = 0.2
+            del interface["female"]["derivedDimensionsMm"]["diameter"]
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("fields must exactly match immutable clearances_mm" in item for item in errors),
+                errors,
+            )
+
+    def test_legacy_scalar_clearance_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            intent_path = root / data["intentRef"]["path"]
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            target = intent["manufacturing"]["interfaces"][0]
+            target.pop("clearances_mm")
+            target["clearance_mm"] = 0.35
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("clearance_mm is unsupported" in item for item in errors),
+                errors,
+            )
 
     def test_display_component_requires_real_cutter_and_source_mesh(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -726,6 +785,33 @@ class SemanticSceneContractTests(unittest.TestCase):
                 any("pilot_diameter_mm must match immutable intent" in item for item in errors),
                 errors,
             )
+
+    def test_self_tapping_scene_exactly_binds_every_consumed_control_dimension(self):
+        mutations = (
+            (("cutterOvershootMm",), "cutter_overshoot_mm"),
+            (("cover", "thicknessMm"), "cover_thickness_mm"),
+            (("receiver", "tipClearanceMm"), "pilot_tip_clearance_mm"),
+            (("receiver", "minimumBossWallMm"), "minimum_boss_wall_mm"),
+            (("receiver", "minimumRootEmbedMm"), "minimum_root_embed_mm"),
+        )
+        for path, intent_field in mutations:
+            with self.subTest(field=intent_field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                data = _self_tapping_scene(root)
+                fastener = data["interfaces"][0]["fasteners"][0]
+                owner = fastener
+                for token in path[:-1]:
+                    owner = owner[token]
+                owner[path[-1]] = float(owner[path[-1]]) + 1e-9
+
+                errors = scene_contract.validate(data, root)
+                self.assertTrue(
+                    any(
+                        f"{intent_field} must match immutable intent" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
 
 
 class ShapeConsistencyTests(unittest.TestCase):

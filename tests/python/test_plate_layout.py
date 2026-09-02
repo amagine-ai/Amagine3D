@@ -54,7 +54,7 @@ def _write_scene(root: Path, intent_path: Path) -> Path:
         "revision": "plate-layout-test-001",
         "intentRef": {
             "path": str(intent_path),
-            "schema": "evidence-cad-intent/v4",
+            "schema": "evidence-cad-intent/v5",
             "sha256": sha256(intent_path.read_bytes()).hexdigest(),
         },
         "units": "mm",
@@ -83,7 +83,22 @@ def _write_scene(root: Path, intent_path: Path) -> Path:
                 ("medium-face", "medium"),
             )
         ],
-        "interfaces": [],
+        "interfaces": [
+            {
+                "id": "case-glue-face",
+                "kind": "glue-face",
+                "male": {
+                    "partId": "large",
+                    "featureId": "large-face",
+                    "dimensionsMm": {"depth": 70.0},
+                },
+                "female": {
+                    "partId": "medium",
+                    "featureId": "medium-face",
+                    "dimensionsMm": {"depth": 70.0},
+                },
+            }
+        ],
     }), encoding="utf-8")
     return scene_path
 
@@ -184,7 +199,6 @@ class ExportAssemblyPlateLayoutTests(unittest.TestCase):
                             "between": ["large", "medium"],
                             "connection": "glue-face",
                             "assembly_axis": "+Z",
-                            "clearance_mm": 0.0,
                             "engagement_mm": 1.0,
                             "features": ["large-face", "medium-face"],
                             "acceptance": "flat faces align for assembly",

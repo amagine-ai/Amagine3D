@@ -50,7 +50,6 @@ def _default_manufacturing(feature_owners: dict[str, str]) -> dict[str, Any]:
                 "between": [first, second],
                 "connection": "glue-face",
                 "assembly_axis": "+Z",
-                "clearance_mm": 0.0,
                 "engagement_mm": 1.0,
                 "features": [features_by_part[first][0], features_by_part[second][0]],
                 "acceptance": "fixture parts retain their declared ownership",
@@ -71,7 +70,7 @@ def write_intent(
 ) -> tuple[Path, dict[str, Any]]:
     manufacturing = manufacturing or _default_manufacturing(feature_owners)
     intent: dict[str, Any] = {
-        "schema": "evidence-cad-intent/v4",
+        "schema": "evidence-cad-intent/v5",
         "part": part,
         "task_mode": "specification",
         "representation": "full-3d",
@@ -132,7 +131,7 @@ def intent_ref(path: Path, *, relative_to: Path | None = None) -> dict[str, str]
     )
     return {
         "path": reference_path,
-        "schema": "evidence-cad-intent/v4",
+        "schema": "evidence-cad-intent/v5",
         "sha256": sha256(path.read_bytes()).hexdigest(),
     }
 

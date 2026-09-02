@@ -62,7 +62,7 @@ def _write_brep_scene(root: Path, intent_path: Path, part_name: str) -> Path:
         "revision": "color-test-rev-001",
         "intentRef": {
             "path": str(intent_path),
-            "schema": "evidence-cad-intent/v4",
+            "schema": "evidence-cad-intent/v5",
             "sha256": sha256(intent_path.read_bytes()).hexdigest(),
         },
         "units": "mm",
@@ -414,7 +414,7 @@ class ColorPipelineTests(unittest.TestCase):
         profile_path.write_text(color_profile.serialize(profile), encoding="utf-8")
         profile_hash = sha256(profile_path.read_bytes()).hexdigest()
         intent = {
-            "schema": "evidence-cad-intent/v4",
+            "schema": "evidence-cad-intent/v5",
             "part": "tile",
             "task_mode": "specification",
             "representation": "full-3d",
@@ -953,7 +953,7 @@ class ColorPipelineTests(unittest.TestCase):
             profile_path.write_text(color_profile.serialize(profile), encoding="utf-8")
             profile_hash = sha256(profile_path.read_bytes()).hexdigest()
             intent = {
-                "schema": "evidence-cad-intent/v4",
+                "schema": "evidence-cad-intent/v5",
                 "part": "tower",
                 "task_mode": "specification",
                 "representation": "full-3d",
@@ -1228,7 +1228,7 @@ class ColorContractTests(unittest.TestCase):
             "status": "evaluated",
         })
 
-    def test_checked_in_root_v4_color_example_is_valid(self):
+    def test_checked_in_root_v5_color_example_is_valid(self):
         result = subprocess.run(
             [
                 sys.executable,

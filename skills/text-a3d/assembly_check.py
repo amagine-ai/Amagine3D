@@ -9,6 +9,7 @@ from itertools import combinations
 import json
 import math
 from pathlib import Path
+import re
 import sys
 
 
@@ -34,6 +35,12 @@ _build_check = _load_local_module(
     "_text_a3d_build_check_for_assembly_check",
     "build_check.py",
 )
+
+_interface_geometry = _load_local_module(
+    "_text_a3d_interface_geometry_for_assembly_check",
+    "interface_geometry.py",
+)
+audit_report_interfaces = _interface_geometry.audit_report_interfaces
 
 
 BUILD_SCHEMA = "evidence-a3d-build/v1"
@@ -96,6 +103,73 @@ class Audit:
     @property
     def passed(self) -> bool:
         return all(item["pass"] for item in self.checks)
+
+
+def _assembly_issue_code(check: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9]+", "_", check).strip("_").upper()
+    return f"ASSEMBLY.{token or 'CHECK_FAILED'}"
+
+
+def _assembly_repair_hint(check: str) -> str:
+    if check == "build_manifest":
+        return "Regenerate the unified build report and every hash-bound input or artifact in the same compile run."
+    if check == "schema":
+        return "Export the assembly through the supported multipart backend and unified build-report schema."
+    if check == "part_count":
+        return "Declare and export every intended manufactured part as a separately identified physical body."
+    if check.startswith("part:"):
+        return "Repair the named physical part so its semantic and printable representations are valid single volumes."
+    if check == "artifact_keys" or check.startswith("artifact:"):
+        return "Regenerate the named required artifact and bind its exact path and SHA-256 in the build report."
+    if check.endswith("_binding"):
+        return "Regenerate the bound file reference from the exact current input or output instead of reusing stale evidence."
+    if check == "intent_contract" or check == "manufacturing_contract":
+        return "Align the multipart export with the immutable intent part ownership and manufacturing declarations."
+    if check in {"assembly_solid_count", "print_plate_solid_count"}:
+        return "Preserve one physical body per declared part through assembly and print-plate export."
+    if check == "overlap_policy":
+        return "Emit a finite non-negative overlap policy and only tighten it in downstream audits."
+    if check == "part_overlaps":
+        return "Reposition or reshape the reported offending parts until measured overlap is within the declared policy."
+    if check == "interface_feature_evidence":
+        return "Observe every intent-declared connector feature, including cutters before boolean subtraction."
+    if check == "part_evidence_ownership":
+        return "Bind each feature and modeling event to its declared physical part owner."
+    if check == "interface_geometry":
+        return "Regenerate measurable interface endpoints and semantic part meshes, then rerun the interface proof."
+    return "Repair the observed assembly evidence so it matches the reported expectation and rerun the audit."
+
+
+def _structured_issues(
+    audit: Audit,
+    interface_issues: list[dict],
+) -> list[dict]:
+    """Return every independent failure without wrapping detailed interface issues."""
+
+    issues: list[dict] = []
+    for item in audit.checks:
+        if item.get("pass") is True:
+            continue
+        check = str(item.get("name", "assembly-check"))
+        if check == "interface_geometry" and interface_issues:
+            continue
+        part = None
+        if check.startswith("part:"):
+            fields = check.split(":", 2)
+            part = fields[1] if len(fields) > 1 else None
+        issues.append(
+            {
+                "check": check,
+                "code": _assembly_issue_code(check),
+                "expected": item.get("expected"),
+                "observed": item.get("observed"),
+                **({"part": part} if part else {}),
+                "repairHint": _assembly_repair_hint(check),
+                "severity": "error",
+            }
+        )
+    issues.extend(interface_issues)
+    return issues
 
 
 def _audit_hybrid_report(
@@ -209,6 +283,33 @@ def _audit_hybrid_report(
         {"keys": sorted(expected_pairs), "max_overlap_mm3": effective_limit},
     )
 
+    try:
+        interface_audit = audit_report_interfaces(report, report_path)
+    except Exception as error:
+        interface_audit = {
+            "issues": [
+                {
+                    "check": "interface-geometry",
+                    "code": "INTERFACE.EVIDENCE_NOT_EVALUATED",
+                    "expected": "measurable interface evidence",
+                    "observed": str(error),
+                    "repairHint": "Regenerate bound interface features and semantic part meshes.",
+                    "severity": "error",
+                }
+            ],
+            "pass": False,
+            "warnings": [],
+        }
+    audit.add(
+        "interface_geometry",
+        interface_audit.get("pass") is True,
+        {
+            "issue_count": len(interface_audit.get("issues", [])),
+            "issues": interface_audit.get("issues", []),
+        },
+        "every immutable interface has passing physical evidence",
+    )
+
     features = report.get("features")
     feature_map = features if isinstance(features, dict) else {}
     owners = {
@@ -232,13 +333,20 @@ def _audit_hybrid_report(
         },
         {"feature_owners": part_names},
     )
+    interface_issues = (
+        interface_audit.get("issues")
+        if isinstance(interface_audit.get("issues"), list)
+        else []
+    )
     return {
         "checks": audit.checks,
         "errors": [item["name"] for item in audit.checks if item["status"] == "fail"],
+        "issues": _structured_issues(audit, interface_issues),
         "pass": audit.passed,
         "report": str(report_path.resolve()),
         "schema": "evidence-assembly-audit/v1",
         "status": "pass" if audit.passed else "fail",
+        "warnings": interface_audit.get("warnings", []),
     }
 
 
@@ -541,13 +649,47 @@ def audit_report(
         {"feature_owners": part_names},
     )
 
+    try:
+        interface_audit = audit_report_interfaces(report, report_path)
+    except Exception as error:
+        interface_audit = {
+            "issues": [
+                {
+                    "check": "interface-geometry",
+                    "code": "INTERFACE.EVIDENCE_NOT_EVALUATED",
+                    "expected": "measurable interface evidence",
+                    "observed": str(error),
+                    "repairHint": "Regenerate bound interface features and semantic part meshes.",
+                    "severity": "error",
+                }
+            ],
+            "pass": False,
+            "warnings": [],
+        }
+    audit.add(
+        "interface_geometry",
+        interface_audit.get("pass") is True,
+        {
+            "issue_count": len(interface_audit.get("issues", [])),
+            "issues": interface_audit.get("issues", []),
+        },
+        "every immutable interface has passing physical evidence",
+    )
+
+    interface_issues = (
+        interface_audit.get("issues")
+        if isinstance(interface_audit.get("issues"), list)
+        else []
+    )
     return {
         "checks": audit.checks,
         "errors": [item["name"] for item in audit.checks if item["status"] == "fail"],
+        "issues": _structured_issues(audit, interface_issues),
         "pass": audit.passed,
         "report": str(report_path.resolve()),
         "schema": "evidence-assembly-audit/v1",
         "status": "pass" if audit.passed else "fail",
+        "warnings": interface_audit.get("warnings", []),
     }
 
 

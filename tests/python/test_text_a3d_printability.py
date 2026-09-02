@@ -38,6 +38,7 @@ cad_helpers = load_module("single_cad_helpers", SKILL / "cad_helpers.py")
 assembly_check = load_module("single_assembly_check", SKILL / "assembly_check.py")
 intent_contract = load_module("single_intent_contract", SKILL / "intent_contract.py")
 step_check = load_module("single_step_check", SKILL / "step_check.py")
+import capability_registry  # noqa: E402
 from tests.python.intent_fixture import write_intent as write_fixture_intent  # noqa: E402
 
 COORDINATE_SYSTEM = {
@@ -63,6 +64,7 @@ def _write_brep_scene(
     intent_path: Path,
     part_names: list[str],
     *,
+    interface_dimensions: dict[str, tuple[str, float]] | None = None,
     revision: str = "test-rev-001",
 ) -> Path:
     intent = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -78,13 +80,76 @@ def _write_brep_scene(
         and isinstance(feature.get("id"), str)
         and feature.get("part", single_owner) in part_names
     ]
+    feature_roles: dict[str, str] = {}
+    scene_interfaces: list[dict] = []
+    interface_dimensions = interface_dimensions or {}
+    for interface in intent.get("manufacturing", {}).get("interfaces", []):
+        if not isinstance(interface, dict) or interface.get("connection") == "self-tapping-screw":
+            continue
+        feature_ids = interface.get("features")
+        if not (
+            isinstance(feature_ids, list)
+            and len(feature_ids) == 2
+            and all(isinstance(item, str) for item in feature_ids)
+        ):
+            continue
+        capability = capability_registry.capability_for_connection(
+            interface.get("connection")
+        )
+        if capability is None:
+            continue
+        male_feature, female_feature = feature_ids
+        endpoint_roles = capability["endpointRoles"]
+        feature_roles[male_feature] = (
+            "solid" if "solid" in endpoint_roles["male"] else endpoint_roles["male"][0]
+        )
+        feature_roles[female_feature] = (
+            "solid"
+            if "solid" in endpoint_roles["female"]
+            else endpoint_roles["female"][0]
+        )
+        field, male_value = interface_dimensions.get(
+            interface["id"],
+            ("width", 1.0),
+        )
+        raw_clearances = interface.get("clearances_mm")
+        clearances = raw_clearances if isinstance(raw_clearances, dict) else {}
+        clearance = float(clearances.get(field, 0.0))
+        owners = {
+            feature_id: owner for feature_id, owner in scene_features
+        }
+        female = {
+            "partId": owners[female_feature],
+            "featureId": female_feature,
+            "dimensionsMm": {field: male_value + clearance},
+        }
+        if field in clearances:
+            female["derivedDimensionsMm"] = {
+                field: {
+                    "from": f"male.{field}",
+                    "offsetMm": clearance,
+                }
+            }
+        scene_interfaces.append(
+            {
+                "id": interface["id"],
+                "kind": interface["connection"],
+                "male": {
+                    "partId": owners[male_feature],
+                    "featureId": male_feature,
+                    "dimensionsMm": {field: male_value},
+                },
+                "female": female,
+            }
+        )
+
     scene_path = root / f"{intent_path.stem}_scene.json"
     scene = {
         "schema": "evidence-semantic-scene/v1",
         "revision": revision,
         "intentRef": {
             "path": str(intent_path),
-            "schema": "evidence-cad-intent/v4",
+            "schema": "evidence-cad-intent/v5",
             "sha256": sha256(intent_path.read_bytes()).hexdigest(),
         },
         "units": "mm",
@@ -99,8 +164,10 @@ def _write_brep_scene(
                 "id": feature_id.replace("/", "--"),
                 "partId": owner,
                 "featureId": feature_id,
-                "role": "solid",
-                "operation": "union",
+                "role": feature_roles.get(feature_id, "solid"),
+                "operation": (
+                    "subtract" if feature_roles.get(feature_id) == "cutter" else "union"
+                ),
                 "recipe": {
                     "kind": "roundedBox",
                     "parameters": {"sizeMm": [1, 1, 1], "radiusMm": 0.0},
@@ -108,7 +175,7 @@ def _write_brep_scene(
             }
             for feature_id, owner in scene_features
         ],
-        "interfaces": [],
+        "interfaces": scene_interfaces,
     }
     scene_path.write_text(json.dumps(scene), encoding="utf-8")
     return scene_path
@@ -146,7 +213,7 @@ def _qa_report_for_mesh(
     if intent_path is not None:
         inputs["intent"] = {
             "path": str(intent_path),
-            "schema": "evidence-cad-intent/v4",
+            "schema": "evidence-cad-intent/v5",
             "sha256": sha256(intent_path.read_bytes()).hexdigest(),
         }
     identity = np.eye(4).tolist()
@@ -556,7 +623,7 @@ class PrintabilityGeometryTests(unittest.TestCase):
             profile_hash = sha256(profile_path.read_bytes()).hexdigest()
             intent_path.write_text(
                 json.dumps({
-                    "schema": "evidence-cad-intent/v4",
+                    "schema": "evidence-cad-intent/v5",
                     "part": "body",
                     "task_mode": "specification",
                     "representation": "full-3d",
@@ -742,7 +809,7 @@ class SinglePartOrientationExportTests(unittest.TestCase):
             intent_path = root / "tower_intent.json"
             intent_path.write_text(
                 json.dumps({
-                    "schema": "evidence-cad-intent/v4",
+                    "schema": "evidence-cad-intent/v5",
                     "part": "tower",
                     "task_mode": "specification",
                     "representation": "full-3d",
@@ -994,7 +1061,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                                 "between": ["lower-shell", "top-lid"],
                                 "connection": "tab-slot",
                                 "assembly_axis": "+Z",
-                                "clearance_mm": 0.3,
+                                "clearances_mm": {"width": 0.3},
                                 "engagement_mm": 2.0,
                                 "features": ["lid-tab", "lid-slot"],
                                 "acceptance": "2 mm printable tab enters the lid slot with 0.3 mm clearance",
@@ -1014,7 +1081,10 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 dimensions_mm=(20.0, 10.0, 6.0),
             )
             scene_path = _write_brep_scene(
-                root, intent_path, ["lower-shell", "top-lid"]
+                root,
+                intent_path,
+                ["lower-shell", "top-lid"],
+                interface_dimensions={"lid-tab-slot": ("width", 6.0)},
             )
             tab = Pos(0, 0, 4) * Box(
                 6, 3, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
@@ -1249,7 +1319,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             )
             intent_path = root / "case_intent.json"
             intent = {
-                "schema": "evidence-cad-intent/v4",
+                "schema": "evidence-cad-intent/v5",
                 "part": "case",
                 "task_mode": "specification",
                 "representation": "full-3d",
@@ -1301,7 +1371,6 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                             "between": ["base", "lid"],
                             "connection": "glue-face",
                             "assembly_axis": "+Z",
-                            "clearance_mm": 0.0,
                             "engagement_mm": 1.0,
                             "features": ["base-glue-face", "lid-glue-face"],
                             "acceptance": "The two flat mating faces align.",
@@ -1359,19 +1428,30 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             }
             self.assertEqual(intent_contract.validate(intent, root), [])
             intent_path.write_text(json.dumps(intent), encoding="utf-8")
-            scene_path = _write_brep_scene(root, intent_path, ["base", "lid"])
+            scene_path = _write_brep_scene(
+                root,
+                intent_path,
+                ["base", "lid"],
+                interface_dimensions={"case-glue-face": ("width", 16.0)},
+            )
 
             base = Box(20, 10, 4, align=(Align.CENTER, Align.CENTER, Align.MIN))
             lid = Pos(0, 0, 4) * Box(
                 16, 8, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
             )
             cad_helpers.observe(base, "base-envelope", "part", part_name="base")
+            bond_face = Pos(0, 0, 3.995) * Box(
+                16,
+                8,
+                0.005,
+                align=(Align.CENTER, Align.CENTER, Align.MIN),
+            )
             cad_helpers.observe(
-                base, "base-glue-face", "interface", part_name="base"
+                bond_face, "base-glue-face", "interface", part_name="base"
             )
             cad_helpers.observe(lid, "lid-envelope", "part", part_name="lid")
             cad_helpers.observe(
-                lid, "lid-glue-face", "interface", part_name="lid"
+                bond_face, "lid-glue-face", "interface", part_name="lid"
             )
             colors = {"base": "#e8e0d4", "lid": "#20242a"}
             with contextlib.redirect_stdout(io.StringIO()):
@@ -1576,7 +1656,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                                 "between": ["lower-shell", "wrong-lid"],
                                 "connection": "tab-slot",
                                 "assembly_axis": "+Z",
-                                "clearance_mm": 0.3,
+                                "clearances_mm": {"width": 0.3},
                                 "engagement_mm": 2.0,
                                 "features": ["lid-tab", "lid-slot"],
                                 "acceptance": "2 mm printable tab enters the lid slot with 0.3 mm clearance",
@@ -1629,7 +1709,6 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                                 "between": ["base", "lid"],
                                 "connection": "glue-face",
                                 "assembly_axis": "+Z",
-                                "clearance_mm": 0.0,
                                 "engagement_mm": 1.0,
                                 "features": ["base-glue-face", "lid-glue-face"],
                                 "acceptance": "flat mating faces align before glue-up",
@@ -1713,7 +1792,6 @@ class ContractTests(unittest.TestCase):
                     "between": ["body", "lid"],
                     "connection": "glue-face",
                     "assembly_axis": "+Z",
-                    "clearance_mm": 0.0,
                     "engagement_mm": 1.0,
                     "features": ["primary-envelope", "mounting-hole"],
                     "acceptance": "faces align",
@@ -1826,7 +1904,7 @@ class ContractTests(unittest.TestCase):
                     "between": ["lower-shell", "top-lid"],
                     "connection": "tab-slot",
                     "assembly_axis": "+Z",
-                    "clearance_mm": 0.3,
+                    "clearances_mm": {"width": 0.3},
                     "engagement_mm": 2.0,
                     "features": ["lid-tab", "lid-slot"],
                     "acceptance": "2 mm tab enters the lid slot with 0.3 mm clearance",
@@ -1932,9 +2010,9 @@ class ContractTests(unittest.TestCase):
         data = json.loads(example_path.read_text(encoding="utf-8"))
         data["schema"] = "evidence-cad-intent/v3"
         errors = intent_contract.validate(data, example_path.parent)
-        self.assertTrue(any("evidence-cad-intent/v4" in error for error in errors))
+        self.assertTrue(any("evidence-cad-intent/v5" in error for error in errors))
 
-        data["schema"] = "evidence-cad-intent/v4"
+        data["schema"] = "evidence-cad-intent/v5"
         data["manufacturing"] = {
             "mode": "single-part",
             "parts": [{"name": "ignored"}],

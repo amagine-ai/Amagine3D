@@ -53,7 +53,7 @@ PLACED_OPENING_KINDS = {
     "window",
 }
 PRINT_PACKAGE_MODES = {"co_print_body", "separate_parts"}
-INTENT_SCHEMA = "evidence-cad-intent/v4"
+INTENT_SCHEMA = "evidence-cad-intent/v5"
 BUILD_SCHEMA = "evidence-a3d-build/v1"
 
 

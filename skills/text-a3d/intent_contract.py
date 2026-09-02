@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import sys
 
+from capability_registry import capability_for_connection, connection_kinds
+
 
 MODES = {
     "inspect",
@@ -22,28 +24,15 @@ SOURCES = {"inferred", "reference", "standard", "user"}
 CONFIDENCE = {"high", "low", "medium"}
 MANUFACTURING_MODES = {"multipart", "single-part"}
 PART_INSTALLATIONS = {"adhesive", "interface", "loose"}
-INTERFACE_CONNECTIONS = {
-    "collar-socket",
-    "dovetail",
-    "glue-face",
-    "hinge-pin",
-    "inset-pocket",
-    "peg-socket",
-    "pin-socket",
-    "press-fit",
-    "retained-slider",
-    "self-tapping-screw",
-    "snap-fit",
-    "tab-slot",
-    "threaded-insert",
-}
+INTERFACE_CONNECTIONS = connection_kinds()
 ASSEMBLY_AXES = {"+X", "+Y", "+Z", "-X", "-Y", "-Z"}
-INTENT_SCHEMA = "evidence-cad-intent/v4"
+INTENT_SCHEMA = "evidence-cad-intent/v5"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
 FEATURE_ID_PATTERN = re.compile(
     r"[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*"
     r"(?:/[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*)*"
 )
+DIMENSION_FIELD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._/-]*")
 HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 MATERIAL_TRANSMISSIONS = {"opaque", "translucent", "transparent"}
 REGION_CONTINUITY = {
@@ -195,12 +184,22 @@ def _validate_self_tapping_fastening(
     clearance = fastening.get("clearance_diameter_mm")
     boss_outer = fastening.get("boss_outer_diameter_mm")
     closed_end = fastening.get("closed_end_mm")
+    cutter_overshoot = fastening.get("cutter_overshoot_mm")
+    cover_thickness = fastening.get("cover_thickness_mm")
+    tip_clearance = fastening.get("pilot_tip_clearance_mm")
+    minimum_boss_wall = fastening.get("minimum_boss_wall_mm")
+    minimum_root_embed = fastening.get("minimum_root_embed_mm")
     for key, value in (
         ("nominal_diameter_mm", nominal),
         ("pilot_diameter_mm", pilot),
         ("clearance_diameter_mm", clearance),
         ("boss_outer_diameter_mm", boss_outer),
         ("closed_end_mm", closed_end),
+        ("cutter_overshoot_mm", cutter_overshoot),
+        ("cover_thickness_mm", cover_thickness),
+        ("pilot_tip_clearance_mm", tip_clearance),
+        ("minimum_boss_wall_mm", minimum_boss_wall),
+        ("minimum_root_embed_mm", minimum_root_embed),
     ):
         if not _positive_number(value):
             errors.append(f"{prefix}.{key} must be positive")
@@ -214,6 +213,28 @@ def _validate_self_tapping_fastening(
             errors.append(
                 f"{prefix}.boss_outer_diameter_mm must exceed pilot_diameter_mm"
             )
+        elif _positive_number(minimum_boss_wall) and (
+            float(boss_outer) - float(pilot)
+        ) / 2 < float(minimum_boss_wall):
+            errors.append(
+                f"{prefix}.boss_outer_diameter_mm leaves less than "
+                "minimum_boss_wall_mm around the pilot"
+            )
+    engagement = interface.get("engagement_mm")
+    if all(
+        _positive_number(value)
+        for value in (
+            minimum_root_embed,
+            engagement,
+            tip_clearance,
+            closed_end,
+        )
+    ) and float(minimum_root_embed) > (
+        float(engagement) + float(tip_clearance) + float(closed_end)
+    ):
+        errors.append(
+            f"{prefix}.minimum_root_embed_mm cannot exceed the receiver boss height"
+        )
     head_diameter = fastening.get("head_recess_diameter_mm")
     head_depth = fastening.get("head_recess_depth_mm")
     minimum_land = fastening.get("minimum_cover_land_mm")
@@ -233,6 +254,13 @@ def _validate_self_tapping_fastening(
             errors.append(f"{prefix}.head_recess_depth_mm must be positive")
         if not _positive_number(minimum_land):
             errors.append(f"{prefix}.minimum_cover_land_mm must be positive")
+        if all(
+            _positive_number(value)
+            for value in (head_depth, minimum_land, cover_thickness)
+        ) and float(head_depth) + float(minimum_land) > float(cover_thickness):
+            errors.append(
+                f"{prefix} head recess leaves less than minimum_cover_land_mm"
+            )
     elif minimum_land is not None:
         errors.append(
             f"{prefix}.minimum_cover_land_mm requires a head recess"
@@ -439,13 +467,57 @@ def validate_manufacturing(
                     errors.append(
                         f"manufacturing.interfaces[{index}].assembly_axis is invalid"
                     )
-                if (
-                    "clearance_mm" not in interface
-                    or not _non_negative_number(interface.get("clearance_mm"))
+                if "clearance_mm" in interface:
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].clearance_mm is unsupported; "
+                        "declare named clearances_mm dimensions"
+                    )
+                clearances = interface.get("clearances_mm")
+                capability = (
+                    capability_for_connection(connection)
+                    if isinstance(connection, str)
+                    else None
+                )
+                requires_clearance = bool(
+                    capability
+                    and "clearance" in capability.get("geometryChecks", ())
+                )
+                if connection == "self-tapping-screw":
+                    if "clearances_mm" in interface:
+                        errors.append(
+                            f"manufacturing.interfaces[{index}].clearances_mm is not "
+                            "valid for self-tapping-screw; fastening dimensions are "
+                            "the authoritative fit contract"
+                        )
+                elif requires_clearance and (
+                    not isinstance(clearances, dict) or not clearances
                 ):
                     errors.append(
-                        f"manufacturing.interfaces[{index}].clearance_mm must be finite and non-negative"
+                        f"manufacturing.interfaces[{index}].clearances_mm must be a "
+                        "non-empty object of named dimension deltas"
                     )
+                elif not requires_clearance and "clearances_mm" in interface and (
+                    not isinstance(clearances, dict) or clearances
+                ):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].clearances_mm must be "
+                        "empty or omitted because this connection has no clearance proof"
+                    )
+                if isinstance(clearances, dict):
+                    for field, value in clearances.items():
+                        if (
+                            not isinstance(field, str)
+                            or not DIMENSION_FIELD_PATTERN.fullmatch(field)
+                        ):
+                            errors.append(
+                                f"manufacturing.interfaces[{index}].clearances_mm "
+                                "field names must be valid dimension tokens"
+                            )
+                        if not _non_negative_number(value):
+                            errors.append(
+                                f"manufacturing.interfaces[{index}].clearances_mm"
+                                f".{field} must be finite and non-negative"
+                            )
                 if not _positive_number(interface.get("engagement_mm")):
                     errors.append(
                         f"manufacturing.interfaces[{index}].engagement_mm must be positive"
@@ -635,7 +707,7 @@ def validate_feature_ownership(
     manufacturing,
     intent_part: str | None,
 ) -> tuple[list[str], dict[str, str]]:
-    """Make feature ownership explicit for multipart intent v4 contracts."""
+    """Make feature ownership explicit for multipart intent v5 contracts."""
 
     errors: list[str] = []
     owners: dict[str, str] = {}
@@ -680,7 +752,7 @@ def validate_feature_ownership(
 
 
 def physical_part_names(data: dict) -> set[str]:
-    """Return the physical part identity set of a validated v4 intent."""
+    """Return the physical part identity set of a validated v5 intent."""
     manufacturing = data.get("manufacturing")
     if not isinstance(manufacturing, dict):
         return set()
@@ -699,7 +771,7 @@ def physical_part_names(data: dict) -> set[str]:
 
 
 def feature_owner_map(data: dict) -> dict[str, str]:
-    """Return feature-to-physical-part ownership for a validated v4 intent."""
+    """Return feature-to-physical-part ownership for a validated v5 intent."""
     parts = physical_part_names(data)
     single_owner = next(iter(parts)) if len(parts) == 1 else None
     owners: dict[str, str] = {}
@@ -880,7 +952,7 @@ def main() -> int:
         "intent": str(path.resolve()),
         "part": data.get("part") if isinstance(data, dict) else None,
         "pass": not errors,
-        "schema": "intent-validation/v4",
+        "schema": "intent-validation/v5",
     }
     print(json.dumps(result, indent=2))
     return 0 if not errors else 1

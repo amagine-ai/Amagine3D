@@ -69,6 +69,7 @@ new_run_id = _build_manifest.new_run_id
 semantic_assembly_record = _build_manifest.semantic_assembly_record
 utc_timestamp = _build_manifest.utc_timestamp
 validate_manifest = _build_manifest.validate_manifest
+write_json_atomic = _build_manifest.write_json_atomic
 
 _export_audit = _load_local_module(
     "_text_a3d_export_audit_for_cad_helpers",
@@ -1088,7 +1089,7 @@ def export_part(
             "exporter produced an invalid build manifest: "
             + "; ".join(manifest_errors)
         )
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(report_path, report)
     print(json.dumps(report, indent=2))
     return report
 
@@ -1472,6 +1473,6 @@ def export_assembly(
             + "; ".join(manifest_errors)
         )
     report_path = output / f"{name}_report.json"
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(report_path, report)
     print(json.dumps(report, indent=2))
     return report

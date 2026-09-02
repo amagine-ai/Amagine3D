@@ -12,6 +12,8 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
+from uuid import UUID
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,12 +21,14 @@ SKILL = ROOT / "skills" / "text-a3d"
 if str(SKILL) not in sys.path:
     sys.path.insert(0, str(SKILL))
 
+import cad_compile  # noqa: E402
 from cad_compile import (  # noqa: E402
     CommandResult,
     CommandRunner,
     CompileOptions,
     ConfigurationError,
     compile_cad,
+    main,
     select_backend,
 )
 from tests.python.intent_fixture import intent_ref, write_intent  # noqa: E402
@@ -145,7 +149,7 @@ def _minimal_report(
         "pass": True,
         "revision": "cad-compile-test-001",
         "inputs": {
-            "intent": _bound(intent_path, schema="evidence-cad-intent/v4"),
+            "intent": _bound(intent_path, schema="evidence-cad-intent/v5"),
             "scene": _bound(
                 scene_path,
                 schema="evidence-semantic-scene/v1",
@@ -174,6 +178,20 @@ def _minimal_report(
     return root / "part_report.json", report
 
 
+def _audit_schema(stage: str) -> str:
+    if stage == "build-check":
+        return "evidence-a3d-build-audit/v1"
+    if stage in {"assembly-qa", "color-assembly-qa"}:
+        return "evidence-assembly-audit/v1"
+    if stage.startswith("mesh-qa:"):
+        return "evidence-mesh-audit/v3"
+    if stage.startswith("step-qa:"):
+        return "evidence-step-audit/v1"
+    if stage == "color-qa":
+        return "evidence-color-print-package-audit/v1"
+    raise AssertionError(f"no test audit schema declared for stage {stage}")
+
+
 class _PassingRunner:
     def __init__(
         self,
@@ -189,13 +207,31 @@ class _PassingRunner:
         self.report = report
         self.report_stage = report_stage
         self.calls: list[str] = []
+        scene_reference = report.get("inputs", {}).get("scene", {})
+        self.scene_path = Path(scene_reference["path"])
+        self.scene_bytes = self.scene_path.read_bytes()
 
     def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
         self.calls.append(stage)
         with self.log_path.open("a", encoding="utf-8") as log:
             log.write(f"{stage}\n")
+        if stage == "source":
+            self.scene_path.write_bytes(self.scene_bytes)
         if stage == self.report_stage:
-            payload = {**self.report, "runId": "current-source-run"}
+            for reference in self.report.get("artifacts", {}).values():
+                if not isinstance(reference, dict) or not isinstance(
+                    reference.get("path"), str
+                ):
+                    continue
+                artifact_path = Path(reference["path"])
+                if not artifact_path.is_absolute():
+                    artifact_path = self.report_path.parent / artifact_path
+                if artifact_path.is_file():
+                    artifact_path.write_bytes(artifact_path.read_bytes())
+            payload = {
+                **self.report,
+                "runId": (env_extra or {}).get("AMAGINE3D_COMPILE_RUN_ID"),
+            }
             self.report_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
         elif stage == "source":
             pass
@@ -226,16 +262,23 @@ class _PassingRunner:
             marker_index = argv.index("--after")
             marker = argv[marker_index + 1]
             checked = argv[marker_index + 2 :]
+            marker_path = Path(marker)
+            marker_stat = marker_path.stat()
             payload = {
                 "pass": True,
                 "marker": marker,
-                "marker_mtime_ns": 1,
+                "marker_mtime_ns": marker_stat.st_mtime_ns,
+                "marker_sha256": sha256(marker_path.read_bytes()).hexdigest(),
+                "marker_size": marker_stat.st_size,
                 "artifacts": [
                     {
                         "path": path,
                         "exists": True,
                         "fresh": True,
-                        "mtime_ns": 2,
+                        "mtime_ns": Path(path).stat().st_mtime_ns,
+                        "sha256": sha256(Path(path).read_bytes()).hexdigest(),
+                        "size": Path(path).stat().st_size,
+                        "stable": True,
                     }
                     for path in checked
                 ],
@@ -248,10 +291,209 @@ class _PassingRunner:
         else:
             output = Path(argv[argv.index("--out") + 1])
             output.write_text(
-                json.dumps({"errors": [], "pass": True, "warnings": []}) + "\n",
+                json.dumps(
+                    {
+                        "errors": [],
+                        "pass": True,
+                        "schema": _audit_schema(stage),
+                        "warnings": [],
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
         return CommandResult(returncode=0, elapsed_ms=1, output_tail="")
+
+
+class _ZeroReturncodeTimeoutRunner(_PassingRunner):
+    def __init__(
+        self,
+        log_path: Path,
+        report_path: Path,
+        report: dict,
+        *,
+        timed_out_stage: str,
+        report_stage: str = "source",
+    ):
+        super().__init__(
+            log_path,
+            report_path,
+            report,
+            report_stage=report_stage,
+        )
+        self.timed_out_stage = timed_out_stage
+
+    def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
+        command = super().run(
+            stage,
+            argv,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            env_extra=env_extra,
+        )
+        if stage != self.timed_out_stage:
+            return command
+        return CommandResult(
+            returncode=0,
+            elapsed_ms=command.elapsed_ms,
+            output_tail=command.output_tail,
+            timed_out=True,
+        )
+
+
+class _InvalidFreshnessRunner(_PassingRunner):
+    def __init__(self, *args, invalidity: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.invalidity = invalidity
+
+    def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
+        command = super().run(
+            stage,
+            argv,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            env_extra=env_extra,
+        )
+        if stage != "freshness":
+            return command
+        payload = json.loads(command.output_tail)
+        if self.invalidity == "wrong-marker":
+            payload["marker"] = str(self.report_path.parent / ".unrelated-marker")
+        elif self.invalidity == "missing-artifact":
+            payload["artifacts"].pop()
+        elif self.invalidity == "false-freshness":
+            payload["artifacts"][0]["fresh"] = False
+        elif self.invalidity == "deleted-artifact":
+            Path(payload["artifacts"][0]["path"]).unlink()
+        elif self.invalidity == "deleted-marker":
+            Path(payload["marker"]).unlink()
+        elif self.invalidity == "wrong-mtime":
+            payload["artifacts"][0]["mtime_ns"] += 1
+        elif self.invalidity == "wrong-size":
+            payload["artifacts"][0]["size"] += 1
+        elif self.invalidity == "wrong-sha256":
+            payload["artifacts"][0]["sha256"] = "0" * 64
+        elif self.invalidity == "changed-after-check":
+            artifact = payload["artifacts"][0]
+            path = Path(artifact["path"])
+            original = path.read_bytes()
+            if not original:
+                raise AssertionError("freshness mutation fixture must be non-empty")
+            changed = bytes([original[0] ^ 1]) + original[1:]
+            before = path.stat()
+            path.write_bytes(changed)
+            os.utime(
+                path,
+                ns=(before.st_atime_ns, artifact["mtime_ns"]),
+            )
+        else:
+            raise AssertionError(f"unknown invalidity {self.invalidity}")
+        return CommandResult(
+            returncode=0,
+            elapsed_ms=command.elapsed_ms,
+            output_tail=json.dumps(payload),
+        )
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+class _BudgetRunner(_PassingRunner):
+    def __init__(self, *args, clock: _FakeClock, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.clock = clock
+        self.timeouts: list[tuple[str, float]] = []
+
+    def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
+        self.timeouts.append((stage, timeout_seconds))
+        command = super().run(
+            stage,
+            argv,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            env_extra=env_extra,
+        )
+        elapsed = 3.0 if stage == "source" else timeout_seconds
+        self.clock.advance(elapsed)
+        if stage != "build-check":
+            return command
+        return CommandResult(
+            returncode=0,
+            elapsed_ms=round(elapsed * 1_000),
+            output_tail=command.output_tail,
+            timed_out=True,
+        )
+
+
+def _compile_with_zero_returncode_timeout(
+    root: Path,
+    *,
+    timed_out_stage: str,
+    master: str = "brep",
+) -> tuple[dict, _ZeroReturncodeTimeoutRunner]:
+    marker = _mark(root)
+    intent, _ = write_intent(
+        root,
+        part="part",
+        feature_owners={"part-body": "part"},
+        dimensions_mm=(40, 30, 20),
+    )
+    _localize_profile(intent, root)
+    scene = _write_scene(root, intent, master=master)
+    source_mesh = root / "part-source.stl"
+    if master == "mesh":
+        source_mesh.write_bytes(b"solid part\nendsolid part\n")
+    source = root / "build.py"
+    source.write_text("# fake source is handled by the injected runner\n")
+    report_path, report = _minimal_report(
+        root,
+        intent_path=intent,
+        scene_path=scene,
+        source_path=source,
+    )
+    report_stage = "source"
+    if master == "mesh":
+        report_stage = "backend-hybrid"
+        report["backend"] = "hybrid-mesh"
+        report["parts"]["part"]["representationMaster"] = "mesh"
+        report["inputs"].pop("source")
+        report["inputs"]["geometry"] = {
+            "node:part-body-node": _bound(source_mesh, schema="mesh-source/v1")
+        }
+        report["artifacts"].pop("step:part")
+    holder: dict[str, _ZeroReturncodeTimeoutRunner] = {}
+
+    def factory(log_path: Path) -> _ZeroReturncodeTimeoutRunner:
+        runner = _ZeroReturncodeTimeoutRunner(
+            log_path,
+            report_path,
+            report,
+            timed_out_stage=timed_out_stage,
+            report_stage=report_stage,
+        )
+        holder["runner"] = runner
+        return runner
+
+    result = compile_cad(
+        CompileOptions(
+            workspace=root,
+            marker=marker,
+            intent=intent,
+            scene=scene,
+            source=source,
+            output_dir=Path("."),
+        ),
+        runner_factory=factory,
+    )
+    return result, holder["runner"]
 
 
 class _FailingMeshRunner(_PassingRunner):
@@ -271,6 +513,7 @@ class _FailingMeshRunner(_PassingRunner):
                 {
                     "errors": ["minimum_wall_thickness"],
                     "pass": False,
+                    "schema": "evidence-mesh-audit/v3",
                     "warnings": [],
                 }
             )
@@ -278,6 +521,93 @@ class _FailingMeshRunner(_PassingRunner):
             encoding="utf-8",
         )
         return CommandResult(returncode=1, elapsed_ms=1, output_tail="")
+
+
+class _StructuredFailingMeshRunner(_PassingRunner):
+    def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
+        if stage != "mesh-qa:part":
+            return super().run(
+                stage,
+                argv,
+                cwd=cwd,
+                timeout_seconds=timeout_seconds,
+                env_extra=env_extra,
+            )
+        self.calls.append(stage)
+        output = Path(argv[argv.index("--out") + 1])
+        output.write_text(
+            json.dumps(
+                {
+                    "errors": ["legacy-summary"],
+                    "issues": [
+                        {
+                            "check": "component-count",
+                            "code": "QA.MULTIPLE_COMPONENTS",
+                            "componentCount": 3,
+                            "expected": {"componentCount": 1},
+                            "observed": {"componentCount": 3},
+                            "partId": "part",
+                            "repairHint": "Join only the physical regions that belong to this part.",
+                            "severity": "error",
+                        },
+                        {
+                            "check": "thin-wall",
+                            "code": "QA.THIN_WALL",
+                            "expected": {"minimumMm": 0.8},
+                            "observed": {"minimumMm": 0.5},
+                            "partId": "part",
+                            "severity": "error",
+                        },
+                    ],
+                    "pass": False,
+                    "schema": "evidence-mesh-audit/v3",
+                    "warnings": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return CommandResult(returncode=1, elapsed_ms=1, output_tail="")
+
+
+class _InvalidBuildAuditRunner(_PassingRunner):
+    def __init__(self, *args, invalidity: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.invalidity = invalidity
+
+    def run(self, stage, argv, *, cwd, timeout_seconds, env_extra=None):
+        command = super().run(
+            stage,
+            argv,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            env_extra=env_extra,
+        )
+        if stage != "build-check":
+            return command
+        payload = {
+            "errors": [],
+            "pass": True,
+            "schema": "evidence-a3d-build-audit/v1",
+            "warnings": [],
+        }
+        if self.invalidity == "wrong-schema":
+            payload["schema"] = "evidence-unrelated-audit/v1"
+        elif self.invalidity == "errors-with-pass":
+            payload["errors"] = ["contradictory failure"]
+        elif self.invalidity == "error-issue-with-pass":
+            payload["issues"] = [
+                {
+                    "code": "QA.CONTRADICTORY_FAILURE",
+                    "message": "contradictory failure",
+                    "severity": "error",
+                }
+            ]
+        else:
+            raise AssertionError(f"unknown invalidity {self.invalidity}")
+        output = Path(argv[argv.index("--out") + 1])
+        output.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        return command
 
 
 class CadCompileTests(unittest.TestCase):
@@ -493,6 +823,304 @@ class CadCompileTests(unittest.TestCase):
                 (root / "part_compile-result.json").read_text(encoding="utf-8")
             )
             self.assertEqual([stage["name"] for stage in full["stages"]], ["source"])
+
+    def test_source_timeout_is_fail_closed_when_process_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, runner = _compile_with_zero_returncode_timeout(
+                Path(directory),
+                timed_out_stage="source",
+            )
+
+            self.assertFalse(result["pass"], result)
+            self.assertEqual(
+                [issue["code"] for issue in result["issues"]],
+                ["SOURCE.TIMEOUT"],
+            )
+            self.assertEqual(runner.calls, ["source"])
+            full = json.loads(
+                Path(result["result"]["path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                full["stages"],
+                [
+                    {
+                        "elapsedMs": 1,
+                        "name": "source",
+                        "returnCode": 0,
+                        "status": "timeout",
+                    }
+                ],
+            )
+
+    def test_hybrid_timeout_is_fail_closed_when_process_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, runner = _compile_with_zero_returncode_timeout(
+                Path(directory),
+                timed_out_stage="backend-hybrid",
+                master="mesh",
+            )
+
+            self.assertFalse(result["pass"], result)
+            self.assertEqual(
+                [issue["code"] for issue in result["issues"]],
+                ["BACKEND.TIMEOUT"],
+            )
+            self.assertEqual(runner.calls, ["source", "backend-hybrid"])
+            self.assertNotIn("buildReport", result["artifacts"])
+            full = json.loads(
+                Path(result["result"]["path"]).read_text(encoding="utf-8")
+            )
+            hybrid_stage = next(
+                stage
+                for stage in full["stages"]
+                if stage["name"] == "backend-hybrid"
+            )
+            self.assertEqual(hybrid_stage["returnCode"], 0)
+            self.assertEqual(hybrid_stage["status"], "timeout")
+
+    def test_render_timeout_is_fail_closed_when_process_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, runner = _compile_with_zero_returncode_timeout(
+                Path(directory),
+                timed_out_stage="render",
+            )
+
+            self.assertFalse(result["pass"], result)
+            self.assertIn("freshness", runner.calls)
+            self.assertEqual(
+                [issue["code"] for issue in result["issues"]],
+                ["VISUAL.RENDER_TIMEOUT"],
+            )
+            self.assertNotIn("preview", result["artifacts"])
+            self.assertNotIn("referencePreview", result["artifacts"])
+            self.assertNotIn("renderEvidence", result["artifacts"])
+            full = json.loads(
+                Path(result["result"]["path"]).read_text(encoding="utf-8")
+            )
+            render_stage = next(
+                stage for stage in full["stages"] if stage["name"] == "render"
+            )
+            self.assertEqual(render_stage["returnCode"], 0)
+            self.assertEqual(render_stage["status"], "timeout")
+
+    def test_freshness_timeout_is_fail_closed_when_process_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = _compile_with_zero_returncode_timeout(
+                Path(directory),
+                timed_out_stage="freshness",
+            )
+
+            self.assertFalse(result["pass"], result)
+            self.assertEqual(
+                [issue["code"] for issue in result["issues"]],
+                ["FRESHNESS.TIMEOUT"],
+            )
+            self.assertNotIn("freshnessAudit", result["artifacts"])
+            full = json.loads(
+                Path(result["result"]["path"]).read_text(encoding="utf-8")
+            )
+            freshness_stage = next(
+                stage for stage in full["stages"] if stage["name"] == "freshness"
+            )
+            self.assertEqual(freshness_stage["returnCode"], 0)
+            self.assertEqual(freshness_stage["status"], "timeout")
+
+    def test_aggregate_deadline_clamps_later_stage_and_stops_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(
+                root,
+                part="part",
+                feature_owners={"part-body": "part"},
+                dimensions_mm=(40, 30, 20),
+            )
+            _localize_profile(intent, root)
+            scene = _write_scene(root, intent)
+            source = root / "build.py"
+            source.write_text("# fake source is handled by the injected runner\n")
+            report_path, report = _minimal_report(
+                root,
+                intent_path=intent,
+                scene_path=scene,
+                source_path=source,
+            )
+            clock = _FakeClock()
+            holder = {}
+
+            def factory(log_path):
+                runner = _BudgetRunner(
+                    log_path,
+                    report_path,
+                    report,
+                    clock=clock,
+                )
+                holder["runner"] = runner
+                return runner
+
+            result = compile_cad(
+                CompileOptions(
+                    workspace=root,
+                    marker=marker,
+                    intent=intent,
+                    scene=scene,
+                    source=source,
+                    output_dir=Path("."),
+                    compile_timeout_seconds=5,
+                    source_timeout_seconds=4,
+                    check_timeout_seconds=10,
+                ),
+                runner_factory=factory,
+                monotonic=clock,
+            )
+
+            self.assertFalse(result["pass"], result)
+            self.assertEqual(
+                [issue["code"] for issue in result["issues"]],
+                ["COMPILE.DEADLINE_EXCEEDED"],
+            )
+            self.assertEqual(holder["runner"].calls, ["source", "build-check"])
+            self.assertEqual(holder["runner"].timeouts[0], ("source", 4))
+            self.assertEqual(holder["runner"].timeouts[1][0], "build-check")
+            self.assertAlmostEqual(holder["runner"].timeouts[1][1], 2)
+            full = json.loads(Path(result["result"]["path"]).read_text())
+            self.assertEqual(full["stages"][-1]["status"], "timeout")
+            self.assertEqual(full["stages"][-1]["timeoutScope"], "compile")
+
+    def test_freshness_evidence_must_bind_exact_marker_and_artifact_set(self) -> None:
+        for invalidity in (
+            "wrong-marker",
+            "missing-artifact",
+            "false-freshness",
+            "deleted-artifact",
+            "deleted-marker",
+            "wrong-mtime",
+            "wrong-size",
+            "wrong-sha256",
+            "changed-after-check",
+        ):
+            with self.subTest(invalidity=invalidity), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                marker = _mark(root)
+                intent, _ = write_intent(
+                    root,
+                    part="part",
+                    feature_owners={"part-body": "part"},
+                    dimensions_mm=(40, 30, 20),
+                )
+                _localize_profile(intent, root)
+                scene = _write_scene(root, intent)
+                source = root / "build.py"
+                source.write_text("# fake source is handled by the injected runner\n")
+                report_path, report = _minimal_report(
+                    root,
+                    intent_path=intent,
+                    scene_path=scene,
+                    source_path=source,
+                )
+                old_audit = root / "part_freshness-audit.json"
+                old_audit.write_bytes(b"previous valid audit\n")
+
+                result = compile_cad(
+                    CompileOptions(
+                        workspace=root,
+                        marker=marker,
+                        intent=intent,
+                        scene=scene,
+                        source=source,
+                        output_dir=Path("."),
+                    ),
+                    runner_factory=lambda log_path: _InvalidFreshnessRunner(
+                        log_path,
+                        report_path,
+                        report,
+                        invalidity=invalidity,
+                    ),
+                )
+
+                self.assertFalse(result["pass"], result)
+                self.assertEqual(result["issues"][-1]["code"], "FRESHNESS.CHECK_FAILED")
+                self.assertNotIn("freshnessAudit", result["artifacts"])
+                self.assertEqual(old_audit.read_bytes(), b"previous valid audit\n")
+
+    def test_interrupted_render_publication_preserves_old_evidence_and_cleans_run_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(
+                root,
+                part="part",
+                feature_owners={"part-body": "part"},
+                dimensions_mm=(40, 30, 20),
+            )
+            _localize_profile(intent, root)
+            scene = _write_scene(root, intent)
+            source = root / "build.py"
+            source.write_text("# fake source is handled by the injected runner\n")
+            report_path, report = _minimal_report(
+                root,
+                intent_path=intent,
+                scene_path=scene,
+                source_path=source,
+            )
+            render_audit = root / "part_render.json"
+            render_audit.write_bytes(b"previous render evidence\n")
+            moves = 0
+
+            def interrupt_second_move(source_path: Path, destination: Path) -> None:
+                nonlocal moves
+                if moves == 1:
+                    raise OSError("injected render publication interruption")
+                source_path.replace(destination)
+                moves += 1
+
+            with mock.patch.object(
+                cad_compile,
+                "_replace_file",
+                side_effect=interrupt_second_move,
+            ):
+                result = compile_cad(
+                    CompileOptions(
+                        workspace=root,
+                        marker=marker,
+                        intent=intent,
+                        scene=scene,
+                        source=source,
+                        output_dir=Path("."),
+                    ),
+                    runner_factory=lambda log_path: _PassingRunner(
+                        log_path,
+                        report_path,
+                        report,
+                    ),
+                )
+
+            self.assertFalse(result["pass"], result)
+            self.assertEqual(render_audit.read_bytes(), b"previous render evidence\n")
+            self.assertNotIn("renderEvidence", result["artifacts"])
+            self.assertEqual(list(root.glob(f"part_{result['runId']}_*.png")), [])
+
+    def test_configuration_failure_payload_has_canonical_uuid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                returncode = main(
+                    [
+                        "scene.json",
+                        "--marker",
+                        "marker",
+                        "--intent",
+                        "intent.json",
+                        "--source",
+                        "source.py",
+                        "--workspace",
+                        directory,
+                    ]
+                )
+            payload = json.loads(output.getvalue())
+            self.assertEqual(returncode, 1)
+            self.assertEqual(str(UUID(payload["runId"])), payload["runId"])
+            self.assertEqual(payload["issues"][0]["code"], "CONFIG.INVALID")
 
     @unittest.skipUnless(os.name == "posix", "POSIX process-group regression")
     def test_stage_timeout_terminates_nested_descendant(self) -> None:
@@ -766,6 +1394,162 @@ class CadCompileTests(unittest.TestCase):
             self.assertIn("preserve identity and function", issue["repairHint"])
             self.assertIn("never simplify or scale", issue["repairHint"])
 
+    def test_json_checks_fail_closed_on_schema_and_success_contradictions(self) -> None:
+        for invalidity in (
+            "wrong-schema",
+            "errors-with-pass",
+            "error-issue-with-pass",
+        ):
+            with self.subTest(invalidity=invalidity), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                marker = _mark(root)
+                intent, _ = write_intent(
+                    root,
+                    part="part",
+                    feature_owners={"part-body": "part"},
+                    dimensions_mm=(40, 30, 20),
+                )
+                _localize_profile(intent, root)
+                scene = _write_scene(root, intent)
+                source = root / "build.py"
+                source.write_text(
+                    "# fake source is handled by the injected runner\n",
+                    encoding="utf-8",
+                )
+                report_path, report = _minimal_report(
+                    root,
+                    intent_path=intent,
+                    scene_path=scene,
+                    source_path=source,
+                )
+
+                result = compile_cad(
+                    CompileOptions(
+                        workspace=root,
+                        marker=marker,
+                        intent=intent,
+                        scene=scene,
+                        source=source,
+                        output_dir=Path("."),
+                    ),
+                    runner_factory=lambda log_path: _InvalidBuildAuditRunner(
+                        log_path,
+                        report_path,
+                        report,
+                        invalidity=invalidity,
+                    ),
+                )
+
+                self.assertFalse(result["pass"], result)
+                internal = [
+                    issue
+                    for issue in result["issues"]
+                    if issue["stage"] == "build-check"
+                    and issue["code"] == "INTERNAL.QA_ERROR"
+                ]
+                self.assertEqual(len(internal), 1, result)
+                if invalidity == "wrong-schema":
+                    self.assertNotIn("buildAudit", result["artifacts"])
+                    self.assertEqual(
+                        internal[0]["expected"],
+                        "evidence-a3d-build-audit/v1",
+                    )
+                else:
+                    self.assertIn("buildAudit", result["artifacts"])
+
+    def test_identical_deterministic_qa_reports_are_fresh_per_compile_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(
+                root,
+                part="part",
+                feature_owners={"part-body": "part"},
+                dimensions_mm=(40, 30, 20),
+            )
+            _localize_profile(intent, root)
+            scene = _write_scene(root, intent)
+            source = root / "build.py"
+            source.write_text("# fake source is handled by the injected runner\n")
+            report_path, report = _minimal_report(
+                root,
+                intent_path=intent,
+                scene_path=scene,
+                source_path=source,
+            )
+
+            def factory(log_path):
+                return _PassingRunner(log_path, report_path, report)
+
+            options = CompileOptions(
+                workspace=root,
+                marker=marker,
+                intent=intent,
+                scene=scene,
+                source=source,
+                output_dir=Path("."),
+            )
+            first = compile_cad(options, runner_factory=factory)
+            first_build_audit = Path(
+                first["artifacts"]["buildAudit"]["path"]
+            ).read_bytes()
+            second = compile_cad(options, runner_factory=factory)
+            second_build_audit = Path(second["artifacts"]["buildAudit"]["path"]).read_bytes()
+
+            self.assertTrue(first["pass"], first)
+            self.assertTrue(second["pass"], second)
+            self.assertNotEqual(first["runId"], second["runId"])
+            self.assertEqual(first_build_audit, second_build_audit)
+            self.assertFalse(
+                any(issue["code"] == "INTERNAL.QA_ERROR" for issue in second["issues"])
+            )
+
+    def test_structured_qa_issues_are_aggregated_without_legacy_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(
+                root,
+                part="part",
+                feature_owners={"part-body": "part"},
+                dimensions_mm=(40, 30, 20),
+            )
+            _localize_profile(intent, root)
+            scene = _write_scene(root, intent)
+            source = root / "build.py"
+            source.write_text("# fake source is handled by the injected runner\n")
+            report_path, report = _minimal_report(
+                root,
+                intent_path=intent,
+                scene_path=scene,
+                source_path=source,
+            )
+
+            result = compile_cad(
+                CompileOptions(
+                    workspace=root,
+                    marker=marker,
+                    intent=intent,
+                    scene=scene,
+                    source=source,
+                    output_dir=Path("."),
+                ),
+                runner_factory=lambda log_path: _StructuredFailingMeshRunner(
+                    log_path, report_path, report
+                ),
+            )
+
+            structured = [
+                issue for issue in result["issues"] if issue["stage"] == "mesh-qa:part"
+            ]
+            self.assertEqual(
+                [issue["code"] for issue in structured],
+                ["QA.MULTIPLE_COMPONENTS", "QA.THIN_WALL"],
+            )
+            self.assertEqual(structured[0]["componentCount"], 3)
+            self.assertEqual(structured[1]["observed"], {"minimumMm": 0.5})
+            self.assertNotIn("renderEvidence", result["artifacts"])
+
     def test_mesh_scene_delegates_to_hybrid_without_claiming_step(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -893,6 +1677,17 @@ class CadCompileTests(unittest.TestCase):
             self.assertTrue(
                 all(item["fresh"] for item in freshness["artifacts"]),
                 freshness,
+            )
+            self.assertTrue(
+                all(
+                    {"mtime_ns", "sha256", "size", "stable"}.issubset(item)
+                    for item in freshness["artifacts"]
+                ),
+                freshness,
+            )
+            self.assertNotIn(
+                str((root / "part_compile.log").resolve()),
+                {str(Path(item["path"]).resolve()) for item in freshness["artifacts"]},
             )
 
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +20,7 @@ from build_manifest import (  # noqa: E402
     artifact_record,
     bind_inputs,
     identity_matrix,
+    new_run_id,
     semantic_assembly_record,
     validate_manifest,
 )
@@ -44,7 +47,7 @@ def _valid_report(root: Path) -> dict:
     }
     inputs = {}
     for name, schema in (
-        ("intent", "evidence-cad-intent/v4"),
+        ("intent", "evidence-cad-intent/v5"),
         ("scene", "evidence-semantic-scene/v1"),
         ("profile", "evidence-bambu-printer-profile/v1"),
     ):
@@ -166,7 +169,7 @@ def _valid_report(root: Path) -> dict:
         },
         "pass": True,
         "revision": "rev-1",
-        "runId": "run-1",
+        "runId": "123e4567-e89b-42d3-a456-426614174000",
         "scale": 1.0,
         "schema": "evidence-a3d-build/v1",
         "warnings": [],
@@ -174,6 +177,31 @@ def _valid_report(root: Path) -> dict:
 
 
 class BuildManifestTests(unittest.TestCase):
+    def test_run_ids_are_canonical_uuids_in_environment_and_manifest(self):
+        canonical = "123e4567-e89b-42d3-a456-426614174000"
+        with patch.dict(os.environ, {"AMAGINE3D_COMPILE_RUN_ID": canonical}):
+            self.assertEqual(new_run_id(), canonical)
+        for invalid in (
+            "123E4567-E89B-42D3-A456-426614174000",
+            "123e4567e89b42d3a456426614174000",
+            "{123e4567-e89b-42d3-a456-426614174000}",
+            "run-1",
+        ):
+            with self.subTest(invalid=invalid):
+                with patch.dict(
+                    os.environ,
+                    {"AMAGINE3D_COMPILE_RUN_ID": invalid},
+                ):
+                    with self.assertRaisesRegex(ValueError, "canonical UUID"):
+                        new_run_id()
+                with tempfile.TemporaryDirectory() as directory:
+                    report = _valid_report(Path(directory))
+                    report["runId"] = invalid
+                    self.assertIn(
+                        "runId must be a canonical UUID",
+                        validate_manifest(report),
+                    )
+
     def _bound_brep_inputs(self, root: Path) -> tuple[Path, Path, Path]:
         intent_path, _ = write_intent(
             root,

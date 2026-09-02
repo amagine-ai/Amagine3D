@@ -3,9 +3,73 @@
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import json
+import os
+import stat
 import sys
 from pathlib import Path
+
+
+def _missing_snapshot() -> dict[str, object]:
+    return {
+        "exists": False,
+        "mtime_ns": None,
+        "sha256": None,
+        "size": None,
+        "stable": False,
+    }
+
+
+def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(right.st_mode)
+        and right.st_nlink == 1
+        and left.st_dev == right.st_dev
+        and left.st_ino == right.st_ino
+        and left.st_size == right.st_size
+        and left.st_mtime_ns == right.st_mtime_ns
+        and left.st_ctime_ns == right.st_ctime_ns
+    )
+
+
+def stable_file_snapshot(path: Path) -> dict[str, object]:
+    """Hash one regular file through one descriptor and bind it to its path."""
+
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            return _missing_snapshot()
+        digest = sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        current = path.lstat()
+    except OSError:
+        return _missing_snapshot()
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    stable = (
+        _same_file_state(before, after)
+        and _same_file_state(before, current)
+    )
+    return {
+        "exists": True,
+        "mtime_ns": after.st_mtime_ns,
+        "sha256": digest.hexdigest() if stable else None,
+        "size": after.st_size,
+        "stable": stable,
+    }
 
 
 def main() -> int:
@@ -35,26 +99,33 @@ def main() -> int:
         print(json.dumps({"error": "marker_missing", "marker": str(marker)}))
         return 1
 
-    marker_mtime_ns = marker.stat().st_mtime_ns
+    marker_snapshot = stable_file_snapshot(marker)
+    if marker_snapshot["stable"] is not True:
+        print(json.dumps({"error": "marker_unstable", "marker": str(marker)}))
+        return 1
+    marker_mtime_ns = marker_snapshot["mtime_ns"]
     checks = []
     passed = True
     for raw_path in args.artifacts:
         path = Path(raw_path)
-        exists = path.is_file()
-        mtime_ns = path.stat().st_mtime_ns if exists else None
-        fresh = exists and mtime_ns is not None and mtime_ns >= marker_mtime_ns
-        checks.append({
-            "path": str(path),
-            "exists": exists,
-            "fresh": fresh,
-            "mtime_ns": mtime_ns,
-        })
+        snapshot = stable_file_snapshot(path)
+        mtime_ns = snapshot["mtime_ns"]
+        fresh = (
+            snapshot["exists"] is True
+            and snapshot["stable"] is True
+            and isinstance(mtime_ns, int)
+            and isinstance(marker_mtime_ns, int)
+            and mtime_ns >= marker_mtime_ns
+        )
+        checks.append({"path": str(path), "fresh": fresh, **snapshot})
         passed = passed and fresh
 
     print(json.dumps({
         "pass": passed,
         "marker": str(marker),
         "marker_mtime_ns": marker_mtime_ns,
+        "marker_sha256": marker_snapshot["sha256"],
+        "marker_size": marker_snapshot["size"],
         "artifacts": checks,
     }, indent=2))
     return 0 if passed else 1

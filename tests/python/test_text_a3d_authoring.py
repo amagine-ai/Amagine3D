@@ -42,6 +42,34 @@ def _intent_kwargs() -> dict:
 
 
 class AuthoringTests(unittest.TestCase):
+    def test_paired_interface_derives_independent_named_clearances(self):
+        compact = authoring.paired_interface(
+            id="pin-fit",
+            kind="pin-socket",
+            male_feature="pin/stem",
+            male_dimensions_mm={"diameter": 4.0, "length": 5.0},
+            female_feature="guide/bore",
+            clearances_mm={"diameter": 0.4, "length": 0.2},
+        )
+
+        expanded = authoring._expand_paired_interfaces(
+            [compact],
+            {"pin/stem": "pin", "guide/bore": "guide"},
+        )[0]
+
+        self.assertEqual(
+            expanded["female"]["dimensionsMm"],
+            {"diameter": 4.4, "length": 5.2},
+        )
+        self.assertEqual(
+            expanded["female"]["derivedDimensionsMm"],
+            {
+                "diameter": {"from": "male.diameter", "offsetMm": 0.4},
+                "length": {"from": "male.length", "offsetMm": 0.2},
+            },
+        )
+        self.assertNotIn("clearancesMm", expanded["female"])
+
     def test_compile_phase_forbids_intent_authoring_without_creating_a_file(self):
         with tempfile.TemporaryDirectory() as directory:
             intent_path = Path(directory) / "device_intent.json"
@@ -151,6 +179,89 @@ class AuthoringTests(unittest.TestCase):
                 profile["derived"]["process_wall_target_mm"],
             )
 
+    def test_intent_writer_preserves_all_self_tapping_control_dimensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature_specs = {
+                "base": ("base-collar", "base-clearance"),
+                "housing": ("housing-socket", "housing-pilot", "housing-boss"),
+            }
+            parts = {
+                part: {
+                    "role": part,
+                    "acceptance": f"one {part}",
+                    "features": [
+                        {
+                            "id": feature,
+                            "kind": "interface",
+                            "evidence": f"{feature} is required",
+                            "acceptance": f"{feature} remains bound",
+                        }
+                        for feature in features
+                    ],
+                }
+                for part, features in feature_specs.items()
+            }
+            controls = {
+                "cutter_overshoot_mm": 1.0,
+                "cover_thickness_mm": 2.4,
+                "pilot_tip_clearance_mm": 0.8,
+                "minimum_boss_wall_mm": 1.8,
+                "minimum_root_embed_mm": 0.4,
+            }
+            interface = {
+                "id": "service-joint",
+                "connection": "self-tapping-screw",
+                "assembly_axis": "+Z",
+                "engagement_mm": 6.0,
+                "features": [
+                    feature
+                    for features in feature_specs.values()
+                    for feature in features
+                ],
+                "acceptance": "one located self-tapping service joint",
+                "fastening": {
+                    "screw_family": "M3 plastic thread-forming/self-tapping",
+                    "nominal_diameter_mm": 3.0,
+                    "pilot_diameter_mm": 2.6,
+                    "clearance_diameter_mm": 3.4,
+                    "boss_outer_diameter_mm": 7.5,
+                    "closed_end_mm": 1.2,
+                    **controls,
+                    "locator_pairs": [
+                        {
+                            "id": "service-locator",
+                            "male_feature": "base-collar",
+                            "female_feature": "housing-socket",
+                        }
+                    ],
+                    "fasteners": [
+                        {
+                            "id": "axis-a",
+                            "clearance_feature": "base-clearance",
+                            "pilot_feature": "housing-pilot",
+                            "boss_feature": "housing-boss",
+                        }
+                    ],
+                },
+            }
+
+            intent = authoring.write_intent(
+                root / "device_intent.json",
+                part="device",
+                manufacturing_mode="multipart",
+                parts=parts,
+                interfaces=[interface],
+                critical_features=interface["features"],
+                **_intent_kwargs(),
+            )
+
+            fastening = intent["manufacturing"]["interfaces"][0]["fastening"]
+            self.assertEqual(
+                {field: fastening[field] for field in controls},
+                controls,
+            )
+
     def test_writes_canonical_single_part_intent_and_scene(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -175,7 +286,7 @@ class AuthoringTests(unittest.TestCase):
                 **_intent_kwargs(),
             )
 
-            self.assertEqual(intent["schema"], "evidence-cad-intent/v4")
+            self.assertEqual(intent["schema"], "evidence-cad-intent/v5")
             self.assertEqual(intent["coordinate_system"], intent_contract.COORDINATE_SYSTEM)
             self.assertEqual(intent["features"][0]["part"], "device")
             self.assertEqual(intent["printability"]["build_axis"], "+Z")
@@ -287,7 +398,7 @@ class AuthoringTests(unittest.TestCase):
                         "id": "button-fit",
                         "connection": "pin-socket",
                         "assembly_axis": "+Z",
-                        "clearance_mm": 0.35,
+                        "clearances_mm": {"diameter": 0.35},
                         "engagement_mm": 3.0,
                         "features": ["button-stem", "button-guide"],
                         "acceptance": "the stem enters the guide with 0.35 mm clearance",
@@ -381,7 +492,7 @@ class AuthoringTests(unittest.TestCase):
                         male_feature="button-stem",
                         male_dimensions_mm={"diameter": 3.0},
                         female_feature="button-guide",
-                        female_offsets_mm={"diameter": 0.35},
+                        clearances_mm={"diameter": 0.35},
                     )
                 ],
             )
@@ -393,7 +504,7 @@ class AuthoringTests(unittest.TestCase):
             )
             interface = scene["interfaces"][0]
             self.assertNotIn("nodes", scene["parts"][0])
-            self.assertNotIn("offsetsMm", interface["female"])
+            self.assertNotIn("clearancesMm", interface["female"])
             self.assertEqual(interface["male"]["partId"], "button")
             self.assertEqual(interface["female"]["partId"], "base")
             self.assertEqual(interface["female"]["dimensionsMm"]["diameter"], 3.35)
@@ -410,7 +521,7 @@ class AuthoringTests(unittest.TestCase):
                     male_feature="button-stem",
                     male_dimensions_mm={"diameter": 3.0},
                     female_feature="button-guide",
-                    female_offsets_mm={"diameter": 0.35},
+                    clearances_mm={"diameter": 0.35},
                 ),
                 authoring.paired_interface(
                     id="button-fit",
@@ -418,7 +529,7 @@ class AuthoringTests(unittest.TestCase):
                     male_feature="button-stem",
                     male_dimensions_mm={"diameter": 3.0},
                     female_feature="button-guide",
-                    female_offsets_mm={"diameter": 0.35},
+                    clearances_mm={"diameter": 0.35},
                 ),
                 authoring.paired_interface(
                     id="button-fit",
@@ -426,7 +537,7 @@ class AuthoringTests(unittest.TestCase):
                     male_feature="button-stem",
                     male_dimensions_mm={"diameter": 3.0},
                     female_feature="base-body",
-                    female_offsets_mm={"diameter": 0.35},
+                    clearances_mm={"diameter": 0.35},
                 ),
             ]
             for index, invalid in enumerate(invalid_interfaces):
