@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from hashlib import sha256
 import importlib.util
 import json
@@ -44,12 +43,56 @@ _export_3mf = _load_local_module(
     "_text_a3d_color_export_3mf_for_cad_helpers",
     "export_3mf.py",
 )
-_intent_contract = _load_local_module(
-    "_text_a3d_color_intent_contract_for_cad_helpers",
+def _load_parent_module(module_name: str, filename: str):
+    parent = Path(__file__).resolve().parent.parent
+    if str(parent) not in sys.path:
+        sys.path.insert(0, str(parent))
+    path = parent / filename
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_coordinate_frames = _load_parent_module(
+    "_text_a3d_coordinate_frames_for_color_cad_helpers",
+    "coordinate_frames.py",
+)
+_intent_contract = _load_parent_module(
+    "_text_a3d_intent_contract_for_color_cad_helpers",
     "intent_contract.py",
+)
+_build_manifest = _load_parent_module(
+    "_text_a3d_build_manifest_for_color_cad_helpers",
+    "build_manifest.py",
 )
 write_color_archive = _export_3mf.write_color_archive
 validate_coordinate_system = _intent_contract.validate_coordinate_system
+rigid_transform = _coordinate_frames.rigid_transform
+artifact_record = _build_manifest.artifact_record
+bind_inputs = _build_manifest.bind_inputs
+new_run_id = _build_manifest.new_run_id
+semantic_assembly_record = _build_manifest.semantic_assembly_record
+utc_timestamp = _build_manifest.utc_timestamp
+validate_manifest = _build_manifest.validate_manifest
+_export_audit_contract = _load_parent_module(
+    "_text_a3d_export_audit_for_color_cad_helpers",
+    "export_audit.py",
+)
+audit_exports = _export_audit_contract.audit_exports
+ExportAuditError = _export_audit_contract.ExportAuditError
+export_geometry_record = _export_audit_contract.geometry_record
+_material_plan = _load_parent_module(
+    "_text_a3d_material_plan_for_color_cad_helpers",
+    "material_plan.py",
+)
+build_material_plan = _material_plan.build_material_plan
+material_record = _material_plan.material_record
+source_binding = _material_plan.source_binding
+validate_material_sources = _material_plan.validate_material_sources
 
 
 class RegionInvariantError(RuntimeError):
@@ -160,32 +203,23 @@ def _shape_record(shape) -> dict:
     }
 
 
+def _manifest_geometry_record(stats: dict) -> dict:
+    """Translate kernel-specific measurements into the shared build schema."""
+    return {
+        "bodyCount": stats["solid_count"],
+        "boundsMm": stats["bbox_mm"],
+        "isVolume": bool(stats["valid"] and stats["solid_count"] > 0),
+        "valid": stats["valid"],
+        "volumeMm3": stats["volume_mm3"],
+    }
+
+
 def _translate(shape, x: float, y: float, z: float):
     return Pos(x, y, z) * shape
 
 
 def _rotate(shape, rx: float, ry: float, rz: float):
     return Rot(rx, ry, rz) * shape
-
-
-def _print_transform(shape) -> tuple[float, float, float]:
-    box = shape.bounding_box()
-    return (-box.min.X, -box.min.Y, -box.min.Z)
-
-
-def _profile_from_intent(intent_data: dict, intent_path: Path) -> dict | None:
-    reference = intent_data.get("printability", {}).get("profile", {})
-    raw_path = reference.get("path") if isinstance(reference, dict) else None
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        return None
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = intent_path.parent / path
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return value if isinstance(value, dict) else None
 
 
 def _rectangle_bounds(polygon) -> tuple[float, float, float, float] | None:
@@ -203,10 +237,8 @@ def _rectangle_bounds(polygon) -> tuple[float, float, float, float] | None:
 def _footprint_fits(
     width: float,
     depth: float,
-    profile: dict | None,
+    profile: dict,
 ) -> tuple[bool, dict]:
-    if profile is None:
-        return True, {"reason": "no profile available during export"}
     tool = profile.get("machine", {}).get("selected_tool", {})
     bounds = _rectangle_bounds(tool.get("polygon_mm", []))
     height_limit = tool.get("height_mm")
@@ -226,9 +258,7 @@ def _footprint_fits(
     }
 
 
-def _uniform_scale_to_fit_profile(dimensions: list[float], profile: dict | None) -> dict:
-    if profile is None:
-        return {"available": False, "reason": "no profile available during export"}
+def _uniform_scale_to_fit_profile(dimensions: list[float], profile: dict) -> dict:
     tool = profile.get("machine", {}).get("selected_tool", {})
     bounds = _rectangle_bounds(tool.get("polygon_mm", []))
     height_limit = tool.get("height_mm")
@@ -470,7 +500,6 @@ def _orientation_candidates(
                 round(print_dimensions[2], 5),
                 preference,
             ],
-            "scale_to_apply": 1.0,
             "translate_mm": translate,
             "uniform_scale_to_fit_profile": scale_fit,
         })
@@ -479,7 +508,7 @@ def _orientation_candidates(
 
 def _select_print_orientation(
     shape,
-    profile: dict | None,
+    profile: dict,
     *,
     intent_data: dict | None = None,
 ) -> dict:
@@ -499,12 +528,6 @@ def _select_print_orientation(
 def _apply_print_orientation(shape, orientation: dict):
     selected = orientation["selected"]
     rotated = _rotate(shape, *selected["rotate_degrees_xyz"])
-    scale = float(selected.get("scale_to_apply", 1.0) or 1.0)
-    if not math.isclose(scale, 1.0, abs_tol=1e-12):
-        raise RegionInvariantError(
-            "print orientation must be rigid; rebuild driving dimensions "
-            "instead of applying export-time scale"
-        )
     return _translate(rotated, *selected["translate_mm"])
 
 
@@ -613,8 +636,9 @@ def export_regions(
     out_dir: str = ".",
     *,
     intent_path: str,
+    scene_path: str,
     parent=None,
-    source_path: str | None = None,
+    source_path: str,
     max_coverage_error_mm3: float = 0.01,
 ) -> dict:
     """Validate color regions and export print, display, CAD, and report evidence."""
@@ -628,15 +652,27 @@ def export_regions(
 
     output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
     output.mkdir(parents=True, exist_ok=True)
-    intent = Path(intent_path).resolve()
     try:
-        intent_data = json.loads(intent.read_text(encoding="utf-8"))
-    except Exception as error:
-        raise RegionInvariantError(f"could not read intent contract: {error}") from error
-    if intent_data.get("schema") != "evidence-color-intent/v3":
-        raise RegionInvariantError("intent contract must use evidence-color-intent/v3")
+        intent_data, scene_data, profile, inputs = bind_inputs(
+            intent_path=intent_path,
+            scene_path=scene_path,
+            expected_parts={name},
+            source_path=source_path,
+        )
+    except ValueError as error:
+        raise RegionInvariantError(str(error)) from error
+    intent = Path(intent_path).resolve()
     if intent_data.get("part") != name:
         raise RegionInvariantError("intent part does not match the export name")
+    if intent_data.get("manufacturing", {}).get("mode") != "single-part":
+        raise RegionInvariantError(
+            "export_regions requires manufacturing.mode='single-part'"
+        )
+    intent_errors = _intent_contract.validate(intent_data, intent.parent)
+    if intent_errors:
+        raise RegionInvariantError(
+            "invalid intent contract: " + "; ".join(intent_errors)
+        )
     coordinate_errors = validate_coordinate_system(
         intent_data.get("coordinate_system")
     )
@@ -664,19 +700,13 @@ def export_regions(
             "intent critical features must uniquely reference declared features"
         )
     report = {
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "coordinates": {
-            "assembly": ["step:assemble"],
-            "display": ["glb:display"],
-            "print": ["3mf", "stl"],
-        },
         "events": list(_EVENTS),
         "features": dict(_FEATURES),
         "overlaps_mm3": {},
         "parameters": dict(_PARAMETERS),
         "part": name,
         "regions": {},
-        "schema": "evidence-color-build/v5",
+        "schema": "backend-color-evidence/v1",
     }
 
     normalized: dict[str, tuple] = {}
@@ -715,8 +745,10 @@ def export_regions(
                 f"intent material for {region_name!r} must be an object"
             )
         material = material or {}
-        transmission = material.get("transmission", "opaque")
-        if transmission not in {"opaque", "translucent", "transparent"}:
+        transmission = material.get("transmission")
+        if transmission is not None and transmission not in {
+            "opaque", "translucent", "transparent"
+        }:
             raise RegionInvariantError(
                 f"intent transmission for {region_name!r} is invalid"
             )
@@ -727,25 +759,30 @@ def export_regions(
             raise RegionInvariantError(
                 f"intent filament for {region_name!r} must be a non-empty string"
             )
-        material_regions.append({
-            "color": color,
-            "filament": filament,
-            "name": region_name,
-            "transmission": transmission,
-        })
+        material_regions.append(
+            material_record(
+                region_name,
+                color,
+                filament=filament,
+                transmission=transmission,
+                color_status="declared",
+                filament_status=(
+                    "declared" if "filament" in material else "proposed"
+                ),
+                transmission_status=(
+                    "declared" if "transmission" in material else "proposed"
+                ),
+            )
+        )
         continuity = item.get("continuity")
         if continuity is not None:
             report["regions"][region_name]["continuity"] = continuity
 
-    package_mode = intent_data.get("printability", {}).get(
-        "print_package_mode", "co_print_body"
-    )
+    package_mode = intent_data.get("printability", {}).get("print_package_mode")
     if package_mode not in PRINT_PACKAGE_MODES:
         raise RegionInvariantError(
             "printability.print_package_mode must be co_print_body or separate_parts"
         )
-    report["print_package_mode"] = package_mode
-
     names = list(normalized)
     for index, left in enumerate(names):
         for right in names[index + 1:]:
@@ -792,7 +829,6 @@ def export_regions(
     if not assembly_record["valid"]:
         raise RegionInvariantError("assembly manufacturing geometry is invalid")
 
-    profile = _profile_from_intent(intent_data, intent)
     print_orientation = _select_print_orientation(
         assembly_body,
         profile,
@@ -809,6 +845,7 @@ def export_regions(
 
     entries = []
     artifacts = {}
+    audit_stls = {}
     internal_region_dir = output / ".amagine3d-internal" / name
     semantic_region_dir = internal_region_dir / "semantic"
     internal_region_dir.mkdir(parents=True, exist_ok=True)
@@ -821,6 +858,15 @@ def export_regions(
             "path": str(path.resolve()),
             "sha256": _digest(path),
         }
+        artifacts[f"region:{region_name}:print"] = {
+            "coordinateFrame": "part-print",
+            "path": str(path.resolve()),
+            "sha256": _digest(path),
+        }
+        audit_stls[f"region:{region_name}:print"] = (
+            path,
+            export_geometry_record(shape),
+        )
         entries.append((str(path), color, region_name))
     for region_name, (shape, _) in normalized.items():
         path = semantic_region_dir / f"{name}-region-{region_name}.stl"
@@ -829,6 +875,15 @@ def export_regions(
             "path": str(path.resolve()),
             "sha256": _digest(path),
         }
+        artifacts[f"region:{region_name}:semantic"] = {
+            "coordinateFrame": "semantic",
+            "path": str(path.resolve()),
+            "sha256": _digest(path),
+        }
+        audit_stls[f"region:{region_name}:semantic"] = (
+            path,
+            export_geometry_record(shape),
+        )
 
     manufacturing_path = output / f"{name}.stl"
     export_stl(
@@ -837,20 +892,23 @@ def export_regions(
         tolerance=0.01,
         angular_tolerance=0.1,
     )
-    artifacts["stl"] = {
+    artifacts[f"stl:{name}"] = {
         "path": str(manufacturing_path.resolve()),
         "sha256": _digest(manufacturing_path),
     }
+    audit_stls[f"stl:{name}"] = (
+        manufacturing_path,
+        export_geometry_record(print_body),
+    )
     report["semantic"] = {"shape": assembly_record}
     report["manufacturing"] = {
         **print_body_record,
-        "transform": {
-            "from": "semantic",
-            "rotate_degrees_xyz": print_orientation["selected"]["rotate_degrees_xyz"],
-            "scale": print_orientation["selected"].get("scale_to_apply", 1.0),
-            "to": "print",
-            "translate_mm": print_orientation["selected"]["translate_mm"],
-        },
+        "transform": rigid_transform(
+            "semantic",
+            "print",
+            rotate_degrees_xyz=print_orientation["selected"]["rotate_degrees_xyz"],
+            translate_mm=print_orientation["selected"]["translate_mm"],
+        ),
     }
     report["print_orientation"] = print_orientation
     report["internal_region_meshes"] = internal_region_meshes
@@ -863,8 +921,11 @@ def export_regions(
         package_name=name,
     )
     artifacts["3mf"] = {
+        "coordinateFrame": "plate-print",
         "path": str(archive_path.resolve()),
         "sha256": _digest(archive_path),
+        "validator": "lib3mf",
+        "verified": True,
     }
 
     children = []
@@ -874,7 +935,7 @@ def export_regions(
         children.append(shape)
     assembly_shape = Compound(children=children)
     report["assembly"] = {"shape": _shape_record(assembly_shape)}
-    assemble_step_path = output / f"{name}-assemble.step"
+    assemble_step_path = output / f"{name}.step"
     display_glb_path = output / f"{name}-display.glb"
     export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)
     _export_display_glb(
@@ -884,7 +945,7 @@ def export_regions(
         ],
         display_glb_path,
     )
-    artifacts["step:assemble"] = {
+    artifacts[f"step:{name}"] = {
         "path": str(assemble_step_path.resolve()),
         "sha256": _digest(assemble_step_path),
     }
@@ -894,40 +955,166 @@ def export_regions(
     }
 
     material_plan_path = output / f"{name}_material-plan.json"
-    material_plan = {
-        "archive_encodes": ["region_name", "rgb"],
-        "archive_omits": ["filament", "transmission"],
-        "part": name,
-        "regions": material_regions,
-        "requires_manual_slicer_assignment": any(
-            item["filament"]
-            for item in material_regions
-        ),
-        "schema": "evidence-color-material-plan/v1",
-    }
+    assignments = [
+        {
+            "materialId": material["id"],
+            "part": name,
+            "region": material["id"],
+            "scope": "brep-region",
+        }
+        for material in material_regions
+    ]
+    material_plan = build_material_plan(
+        part=name,
+        package_mode=package_mode,
+        materials=material_regions,
+        assignments=assignments,
+        source_bindings=[
+            source_binding(
+                material=material,
+                part=name,
+                region=material["id"],
+                scope="brep-region",
+                source_id=material["id"],
+                source_kind="intent-color-region",
+            )
+            for material in material_regions
+        ],
+    )
+    source_errors = validate_material_sources(material_plan, intent_data, scene_data)
+    if source_errors:
+        raise RegionInvariantError(
+            "invalid material provenance: " + "; ".join(source_errors)
+        )
     material_plan_path.write_text(
         json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
     )
-    artifacts["material_plan"] = {
+    artifacts["materialPlan"] = {
         "path": str(material_plan_path.resolve()),
         "sha256": _digest(material_plan_path),
     }
-    report["material_semantics"] = material_plan
-
-    source = Path(source_path or sys.argv[0]).resolve()
-    report["artifacts"] = artifacts
-    report["source"] = (
-        {"path": str(source), "sha256": _digest(source)} if source.is_file() else None
+    try:
+        export_audit = audit_exports(
+            stls=audit_stls,
+            steps={
+                f"step:{name}": (
+                    assemble_step_path,
+                    export_geometry_record(assembly_shape),
+                )
+            },
+            glb=(display_glb_path, list(normalized)),
+        )
+    except ExportAuditError as error:
+        raise RegionInvariantError(f"export read-back audit failed: {error}") from error
+    export_audit_path = output / f"{name}_export-audit.json"
+    export_audit_path.write_text(
+        json.dumps(export_audit, indent=2) + "\n", encoding="utf-8"
     )
-    report["intent"] = {"path": str(intent), "sha256": _digest(intent)}
+    artifacts["exportAudit"] = {
+        "path": str(export_audit_path.resolve()),
+        "sha256": _digest(export_audit_path),
+    }
+    transform_matrix = report["manufacturing"]["transform"]["matrix"]
+    manifest_artifacts = {}
+    for key, record in artifacts.items():
+        if key == f"step:{name}" or key == "glb:display":
+            frame = "semantic"
+        elif key == f"stl:{name}":
+            frame = "part-print"
+        elif key == "3mf":
+            frame = "plate-print"
+        else:
+            frame = None
+        manifest_artifacts[key] = {
+            **record,
+            **({"coordinateFrame": frame} if frame is not None else {}),
+        }
+    part_records = {
+        name: {
+            "print": _manifest_geometry_record(print_body_record),
+            "representationMaster": "brep",
+            "semantic": _manifest_geometry_record(assembly_record),
+        }
+    }
+    try:
+        semantic_assembly = semantic_assembly_record(
+            part_records, inputs["intent"]["sha256"], intent_data
+        )
+    except ValueError as error:
+        raise RegionInvariantError(str(error)) from error
+    backend_data = {
+        "assembly": report.get("assembly"),
+        "exportAudit": export_audit,
+        "internalRegionMeshes": report.get("internal_region_meshes"),
+        "overlapsMm3": report.get("overlaps_mm3", {}),
+        "parameters": dict(_PARAMETERS),
+        "parentCoverage": report.get("parent_coverage"),
+        "printPlate": _manifest_geometry_record(print_body_record),
+        "printPackageMode": package_mode,
+        "printOrientation": print_orientation,
+        "regions": report.get("regions", {}),
+        "semanticAssembly": semantic_assembly,
+        "threeMf": report.get("three_mf"),
+    }
+    report = {
+        "artifactMatrix": {
+            "parts": {
+                name: {
+                    "glb": "required",
+                    "step": "required",
+                    "stl": "required",
+                    "threeMf": "required",
+                }
+            }
+        },
+        "artifacts": manifest_artifacts,
+        "autoScale": False,
+        "backend": "brep-color-regions",
+        "backendData": backend_data,
+        "builtAt": utc_timestamp(),
+        "coordinateFrames": {
+            "semantic": {
+                "scale": 1.0,
+                "units": "mm",
+                "up": scene_data["coordinateSystem"]["up"],
+            },
+            "part-print": {
+                "partTransforms": {name: transform_matrix},
+                "scale": 1.0,
+                "units": "mm",
+            },
+            "plate-print": {
+                "partTransforms": {name: transform_matrix},
+                "profileId": profile.get("id"),
+                "scale": 1.0,
+                "units": "mm",
+            },
+        },
+        "events": [
+            {**event, "part": event.get("part", name)} for event in _EVENTS
+        ],
+        "features": {
+            feature_id: {**record, "part": record.get("part", name)}
+            for feature_id, record in _FEATURES.items()
+        },
+        "inputs": inputs,
+        "materialPlan": material_plan,
+        "part": name,
+        "parts": part_records,
+        "pass": export_audit["pass"],
+        "revision": scene_data["revision"],
+        "runId": new_run_id(),
+        "scale": 1.0,
+        "schema": "evidence-a3d-build/v1",
+        "warnings": [],
+    }
+    manifest_errors = validate_manifest(report)
+    if manifest_errors:
+        raise RegionInvariantError(
+            "exporter produced an invalid build manifest: "
+            + "; ".join(manifest_errors)
+        )
     report_path = output / f"{name}_report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return report
-
-
-safe_cut = checked_cut
-safe_fillet = checked_fillet
-safe_chamfer = checked_chamfer
-measure = observe
-finalize_parts = export_regions

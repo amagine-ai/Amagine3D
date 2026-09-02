@@ -2,6 +2,9 @@
 
 Unlike a mesh-count-only check, inspection reads the XML package back and
 reports the color actually attached to every named object.
+
+Write with ``--package-mode co_print_body|separate_parts OUTPUT
+MESH=#RRGGBB [...]``. Inspect an archive with ``--inspect ARCHIVE``.
 """
 
 from __future__ import annotations
@@ -68,18 +71,20 @@ def _identity(wrapper):
         return result
 
 
-def _package_mode(value: str | None) -> str:
-    mode = value or "co_print_body"
-    if mode not in PACKAGE_MODES:
-        raise ValueError(f"invalid 3MF package mode: {mode}")
-    return mode
+def _package_mode(value: str) -> str:
+    if not isinstance(value, str) or value not in PACKAGE_MODES:
+        raise ValueError(
+            "3MF package mode is required and must be "
+            "co_print_body or separate_parts"
+        )
+    return value
 
 
 def write_color_archive(
     entries,
     out_path: str,
     *,
-    package_mode: str = "co_print_body",
+    package_mode: str,
     package_name: str | None = None,
 ) -> dict:
     regions = [
@@ -115,6 +120,15 @@ def write_color_archive(
         mesh = trimesh.load(region.path, force="mesh", process=False)
         if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
             raise ValueError(f"region {region.name!r} did not load as a mesh")
+        mesh.merge_vertices()
+        mesh.remove_unreferenced_vertices()
+        body_count = len(mesh.split(only_watertight=False))
+        if not mesh.is_watertight or not mesh.is_volume or body_count != 1:
+            raise ValueError(
+                f"region {region.name!r} must be one closed volumetric mesh; "
+                f"watertight={mesh.is_watertight}, is_volume={mesh.is_volume}, "
+                f"body_count={body_count}"
+            )
         loaded_regions.append((region, mesh))
 
     region_metadata = {
@@ -125,54 +139,54 @@ def write_color_archive(
     }
 
     if package_mode == "co_print_body":
-        object_3mf = model.AddMeshObject()
-        object_3mf.SetName(package_name or Path(out_path).stem)
-        vertices = []
-        triangles = []
-        triangle_properties = []
-        vertex_offset = 0
-        triangle_start = 0
-        color_resource_id = palette.GetResourceID()
+        child_objects = []
         for region, mesh in loaded_regions:
+            object_3mf = model.AddMeshObject()
+            object_3mf.SetName(region.name)
+            vertices = []
             for vertex in mesh.vertices:
                 position = lib3mf.Position()
                 for axis in range(3):
                     position.Coordinates[axis] = float(vertex[axis])
                 vertices.append(position)
+            triangles = []
             for face in mesh.faces:
                 triangle = lib3mf.Triangle()
                 for corner in range(3):
-                    triangle.Indices[corner] = int(face[corner]) + vertex_offset
+                    triangle.Indices[corner] = int(face[corner])
                 triangles.append(triangle)
-                properties = lib3mf.TriangleProperties()
-                properties.ResourceID = int(color_resource_id)
-                for corner in range(3):
-                    properties.PropertyIDs[corner] = int(palette_index[region.color])
-                triangle_properties.append(properties)
-            triangle_count = int(len(mesh.faces))
+            object_3mf.SetGeometry(vertices, triangles)
+            object_3mf.SetObjectLevelProperty(
+                palette.GetResourceID(), palette_index[region.color],
+            )
+            child_objects.append(object_3mf)
             region_record = {
                 "color": region.color,
                 "name": region.name,
-                "triangle_range": {
-                    "count": triangle_count,
-                    "start": triangle_start,
+                "object_id": int(object_3mf.GetResourceID()),
+                "topology": {
+                    "body_count": 1,
+                    "is_volume": True,
+                    "watertight": True,
                 },
-                "triangles": triangle_count,
+                "triangles": int(len(mesh.faces)),
                 "vertices": int(len(mesh.vertices)),
             }
             region_metadata["regions"].append(region_record)
+            summary["objects"].append(region_record)
             summary["regions"].append(region_record)
-            vertex_offset += int(len(mesh.vertices))
-            triangle_start += triangle_count
-        object_3mf.SetGeometry(vertices, triangles)
-        object_3mf.SetAllTriangleProperties(triangle_properties)
-        summary["objects"].append({
-            "color": None,
+        parent = model.AddComponentsObject()
+        parent.SetName(package_name or Path(out_path).stem)
+        for child in child_objects:
+            parent.AddComponent(child, _identity(wrapper))
+        summary["component_object"] = {
+            "child_object_ids": [
+                int(child.GetResourceID()) for child in child_objects
+            ],
             "name": package_name or Path(out_path).stem,
-            "triangles": len(triangles),
-            "vertices": len(vertices),
-        })
-        model.AddBuildItem(object_3mf, _identity(wrapper))
+            "object_id": int(parent.GetResourceID()),
+        }
+        model.AddBuildItem(parent, _identity(wrapper))
     else:
         mesh_objects = []
         for region, mesh in loaded_regions:
@@ -217,7 +231,33 @@ def write_color_archive(
         False,
     )
     model.QueryWriter("3mf").WriteToFile(str(out_path))
-    summary["inspection"] = inspect_color_archive(out_path)
+    inspection = inspect_color_archive(out_path)
+    expected = {region.name: region.color for region in regions}
+    observed = {
+        region["name"]: region.get("color")
+        for region in inspection["regions"]
+    }
+    required_component_count = 1 if package_mode == "co_print_body" else 0
+    verified = (
+        inspection["package_mode"] == package_mode
+        and inspection["build_item_count"]
+        == (1 if package_mode == "co_print_body" else len(regions))
+        and inspection["component_object_count"] == required_component_count
+        and inspection["object_count"] == len(regions)
+        and observed == expected
+        and all(
+            region.get("topology", {}).get("watertight") is True
+            and region.get("topology", {}).get("is_volume") is True
+            and region.get("topology", {}).get("body_count") == 1
+            for region in inspection["regions"]
+        )
+        and inspection.get("lib3mf", {}).get("verified") is True
+    )
+    if not verified:
+        raise ValueError("generated 3MF failed volumetric region readback")
+    summary["inspection"] = inspection
+    summary["verified"] = True
+    summary["validator"] = "lib3mf"
     return summary
 
 
@@ -428,11 +468,7 @@ def _placed_region_records(
         if _local(element.tag) == "item"
     ]
     if not build_items:
-        build_items = [
-            ElementTree.Element("item", {"objectid": object_id})
-            for object_id, record in object_records.items()
-            if record["kind"] == "mesh"
-        ]
+        raise ValueError("3MF archive must contain explicit build items")
     records = []
     for item in build_items:
         object_id = item.attrib.get("objectid")
@@ -448,64 +484,136 @@ def _placed_region_records(
     return records
 
 
-def _metadata_region_records(metadata: dict | None, build_items: list[dict]) -> list[dict]:
-    if not isinstance(metadata, dict):
-        return []
-    metadata_regions = metadata.get("regions")
-    if not isinstance(metadata_regions, list):
-        return []
-    object_id = build_items[0].get("object_id") if len(build_items) == 1 else None
-    transform = _transform_matrix(
-        build_items[0].get("transform") if len(build_items) == 1 else None
+def _rgba_hex(color) -> str:
+    return (
+        f"#{int(color.Red):02X}{int(color.Green):02X}"
+        f"{int(color.Blue):02X}"
     )
-    records = []
-    for index, region in enumerate(metadata_regions):
-        if not isinstance(region, dict):
-            continue
-        name = region.get("name")
-        color = region.get("color")
-        if not isinstance(name, str) or not isinstance(color, str):
-            continue
-        try:
-            color = _color(color)
-        except ValueError:
-            continue
-        records.append({
+
+
+def _lib3mf_readback(path: str) -> dict:
+    """Import independently with lib3mf and inspect physical resource graph."""
+
+    wrapper = lib3mf.get_wrapper()
+    model = wrapper.CreateModel()
+    try:
+        model.QueryReader("3mf").ReadFromFile(str(path))
+    except Exception as error:
+        raise ValueError(f"lib3mf could not import generated 3MF: {error}") from error
+
+    mesh_records = []
+    meshes_by_id = {}
+    iterator = model.GetMeshObjects()
+    while iterator.MoveNext():
+        mesh_object = iterator.GetCurrentMeshObject()
+        object_id = int(mesh_object.GetResourceID())
+        vertices = [
+            [
+                float(mesh_object.GetVertex(index).Coordinates[axis])
+                for axis in range(3)
+            ]
+            for index in range(mesh_object.GetVertexCount())
+        ]
+        faces = [
+            [
+                int(mesh_object.GetTriangle(index).Indices[corner])
+                for corner in range(3)
+            ]
+            for index in range(mesh_object.GetTriangleCount())
+        ]
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+        mesh.merge_vertices()
+        mesh.remove_unreferenced_vertices()
+        resource_id, property_id, has_property = (
+            mesh_object.GetObjectLevelProperty()
+        )
+        color = None
+        if has_property:
+            try:
+                group = model.GetColorGroupByID(resource_id)
+                color = _rgba_hex(group.GetColor(property_id))
+            except Exception as error:
+                raise ValueError(
+                    f"mesh object {mesh_object.GetName()!r} has an unreadable "
+                    f"color property: {error}"
+                ) from error
+        body_count = len(mesh.split(only_watertight=False))
+        record = {
             "color": color,
-            "id": f"{object_id or 'object'}:region:{index}",
-            "kind": "mesh-region",
-            "name": name,
+            "name": mesh_object.GetName(),
             "object_id": object_id,
-            "source": "metadata",
-            "transform": transform.round(8).tolist(),
-            "triangle_range": region.get("triangle_range"),
+            "topology": {
+                "body_count": body_count,
+                "is_volume": bool(mesh.is_volume),
+                "watertight": bool(mesh.is_watertight),
+            },
+            "triangles": int(mesh_object.GetTriangleCount()),
+            "vertices": int(mesh_object.GetVertexCount()),
+        }
+        mesh_records.append(record)
+        meshes_by_id[object_id] = record
+
+    component_records = []
+    iterator = model.GetComponentsObjects()
+    while iterator.MoveNext():
+        component_object = iterator.GetCurrentComponentsObject()
+        children = []
+        for index in range(component_object.GetComponentCount()):
+            component = component_object.GetComponent(index)
+            child_id = int(component.GetObjectResourceID())
+            children.append({
+                "name": meshes_by_id.get(child_id, {}).get("name"),
+                "object_id": child_id,
+            })
+        component_records.append({
+            "children": children,
+            "name": component_object.GetName(),
+            "object_id": int(component_object.GetResourceID()),
         })
-    return records
+
+    build_records = []
+    iterator = model.GetBuildItems()
+    while iterator.MoveNext():
+        item = iterator.GetCurrent()
+        resource = item.GetObjectResource()
+        build_records.append({
+            "kind": (
+                "components" if resource.IsComponentsObject() else "mesh"
+            ),
+            "name": resource.GetName(),
+            "object_id": int(item.GetObjectResourceID()),
+        })
+
+    all_closed = bool(mesh_records) and all(
+        record["topology"]["watertight"]
+        and record["topology"]["is_volume"]
+        and record["topology"]["body_count"] == 1
+        for record in mesh_records
+    )
+    references_valid = all(
+        child["object_id"] in meshes_by_id
+        for component in component_records
+        for child in component["children"]
+    )
+    return {
+        "build_items": build_records,
+        "component_objects": component_records,
+        "mesh_objects": mesh_records,
+        "unit": str(model.GetUnit()).rsplit(".", 1)[-1],
+        "verified": bool(all_closed and references_valid and build_records),
+    }
 
 
 def _archive_package_mode(
-    build_items: list[dict],
-    regions: list[dict],
     metadata: dict | None = None,
 ) -> str:
     if (
         isinstance(metadata, dict)
+        and metadata.get("schema") == REGION_METADATA_SCHEMA
         and metadata.get("package_mode") in PACKAGE_MODES
-        and len(build_items) == 1
-        and regions
     ):
         return metadata["package_mode"]
-    if (
-        len(build_items) == 1
-        and build_items[0].get("object_kind") == "components"
-        and len(regions) > 1
-    ):
-        return "co_print_body"
-    if len(build_items) > 1 and all(
-        item.get("object_kind") == "mesh" for item in build_items
-    ):
-        return "separate_parts"
-    return "custom"
+    return "invalid"
 
 
 def inspect_color_archive(path: str) -> dict:
@@ -536,9 +644,114 @@ def inspect_color_archive(path: str) -> dict:
     component_objects = [item for item in all_objects if item["kind"] == "components"]
     build_items = _build_item_records(root, object_records)
     metadata = _region_metadata(root)
-    regions = _metadata_region_records(
-        metadata, build_items
-    ) or _placed_region_records(root, objects_by_id, object_records)
+    if not isinstance(metadata, dict):
+        raise ValueError("3MF archive is missing required color-region metadata")
+    metadata_regions = metadata.get("regions")
+    if not isinstance(metadata_regions, list) or not metadata_regions:
+        raise ValueError("3MF color-region metadata must contain regions")
+    regions = _placed_region_records(root, objects_by_id, object_records)
+    if not regions:
+        raise ValueError("3MF archive exposes no placed region mesh objects")
+    metadata_by_name = {
+        item.get("name"): item
+        for item in metadata_regions
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    if set(metadata_by_name) != {item.get("name") for item in regions}:
+        raise ValueError("3MF metadata regions do not match placed mesh objects")
+    for region in regions:
+        metadata_region = metadata_by_name[region["name"]]
+        try:
+            metadata_color = _color(metadata_region.get("color"))
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"3MF metadata region {region['name']!r} has invalid color"
+            ) from error
+        if metadata_color != region.get("color"):
+            raise ValueError(
+                f"3MF metadata region {region['name']!r} color does not match "
+                "its mesh object"
+            )
+        declared_object_id = metadata_region.get("object_id")
+        if (
+            declared_object_id is not None
+            and declared_object_id != int(region["object_id"])
+        ):
+            raise ValueError(
+                f"3MF metadata region {region['name']!r} object_id does not "
+                "match its mesh object"
+            )
+    mesh_topology = {}
+    for object_id, element in objects_by_id.items():
+        if object_records[object_id]["kind"] != "mesh":
+            continue
+        mesh = _mesh_from_object(element, UNIT_TO_MM[root.attrib.get("unit", "millimeter")])
+        mesh.merge_vertices()
+        mesh.remove_unreferenced_vertices()
+        mesh_topology[object_id] = {
+            "body_count": len(mesh.split(only_watertight=False)),
+            "is_volume": bool(mesh.is_volume),
+            "watertight": bool(mesh.is_watertight),
+        }
+    regions = [
+        {**record, "topology": mesh_topology.get(record["object_id"], {})}
+        for record in regions
+    ]
+    lib3mf_readback = _lib3mf_readback(path)
+    xml_region_map = {
+        (int(record["object_id"]), record["name"]): record.get("color")
+        for record in regions
+    }
+    lib_region_map = {
+        (record["object_id"], record["name"]): record.get("color")
+        for record in lib3mf_readback["mesh_objects"]
+    }
+    region_ids = {int(record["object_id"]) for record in regions}
+    mode = _archive_package_mode(metadata)
+    if mode == "co_print_body":
+        component_graph_valid = (
+            len(lib3mf_readback["component_objects"]) == 1
+            and len(lib3mf_readback["build_items"]) == 1
+            and lib3mf_readback["build_items"][0]["kind"] == "components"
+            and {
+                child["object_id"]
+                for child in lib3mf_readback["component_objects"][0]["children"]
+            }
+            == region_ids
+        )
+    else:
+        built_mesh_ids = {
+            item["object_id"]
+            for item in lib3mf_readback["build_items"]
+            if item["kind"] == "mesh"
+        }
+        built_component_ids = {
+            item["object_id"]
+            for item in lib3mf_readback["build_items"]
+            if item["kind"] == "components"
+        }
+        component_child_ids = {
+            child["object_id"]
+            for component in lib3mf_readback["component_objects"]
+            if component["object_id"] in built_component_ids
+            for child in component["children"]
+        }
+        component_graph_valid = (
+            built_mesh_ids | component_child_ids == region_ids
+            and all(
+                item["kind"] in {"components", "mesh"}
+                for item in lib3mf_readback["build_items"]
+            )
+        )
+    lib3mf_readback["verified"] = bool(
+        lib3mf_readback["verified"]
+        and lib_region_map == xml_region_map
+        and component_graph_valid
+    )
+    if not lib3mf_readback["verified"]:
+        raise ValueError(
+            "3MF lib3mf readback does not match its region/material/build graph"
+        )
     palette_colors = {item["color"] for item in regions if item.get("color")}
     if not palette_colors:
         palette_colors = {item["color"] for item in mesh_objects if item.get("color")}
@@ -550,12 +763,13 @@ def inspect_color_archive(path: str) -> dict:
         "component_object_count": len(component_objects),
         "object_count": len(mesh_objects),
         "objects": mesh_objects,
-        "package_mode": _archive_package_mode(build_items, regions, metadata),
+        "package_mode": mode,
         "palette_count": len(palette_colors),
         "placed_region_count": len(regions),
         "region_metadata": metadata,
         "regions": regions,
         "unit": root.attrib.get("unit", "millimeter"),
+        "lib3mf": lib3mf_readback,
     }
 
 
@@ -603,13 +817,9 @@ def load_color_archive_mesh(path: str) -> tuple[trimesh.Trimesh, dict]:
     ]
     placed = []
     placed_summaries = []
-    source_items = build_items or []
-    if not source_items:
-        source_items = [
-            ElementTree.Element("item", {"objectid": object_id})
-            for object_id in objects
-        ]
-    for item in source_items:
+    if not build_items:
+        raise ValueError("3MF archive must contain explicit build items")
+    for item in build_items:
         object_id = item.attrib.get("objectid")
         if not object_id:
             continue
@@ -640,23 +850,25 @@ def load_color_archive_mesh(path: str) -> tuple[trimesh.Trimesh, dict]:
     return mesh, summary
 
 
-# Compatibility with previously generated sources.
-write_3mf = write_color_archive
-verify_3mf = inspect_color_archive
-
-
 def main() -> int:
     args = sys.argv[1:]
-    if len(args) == 2 and args[0] in {"--inspect", "--verify"}:
+    if len(args) == 2 and args[0] == "--inspect":
         print(json.dumps(inspect_color_archive(args[1]), indent=2))
         return 0
-    package_mode = "co_print_body"
-    if args and args[0] == "--separate-parts":
-        package_mode = "separate_parts"
-        args = args[1:]
-    if len(args) < 2:
-        print(__doc__)
+    if len(args) < 4 or args[0] != "--package-mode":
+        print(json.dumps({
+            "error": (
+                "write requires --package-mode "
+                "co_print_body|separate_parts OUTPUT MESH=#RRGGBB [...]"
+            )
+        }))
         return 2
+    try:
+        package_mode = _package_mode(args[1])
+    except ValueError as error:
+        print(json.dumps({"error": str(error)}))
+        return 2
+    args = args[2:]
     output = args[0]
     entries = []
     for specification in args[1:]:

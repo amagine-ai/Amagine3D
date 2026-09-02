@@ -9,7 +9,8 @@ through the same primitive stack.
 | clean orthographic silhouette | traced profile, constrained extrusion, then depth features | many hand-placed boxes |
 | pixel/icon source | deterministic occupied-cell union or relief | manually copied cells |
 | single product photo | primary envelope, landmark solids, then restrained hidden-side inference | claiming unseen details are exact |
-| organic/sculptural subject | a small set of lofted profiles or surface-led approximation | hundreds of primitives that create a lumpy silhouette |
+| organic/sculptural subject | a canonical watertight mesh master with semantic landmarks | hundreds of primitives that create a lumpy silhouette |
+| organic exterior plus precise interfaces | mesh-master body plus BRep-derived cutters, bosses, and sockets in one semantic scene | independent visual and manufacturing proxies |
 
 ## Frame and feature graph
 
@@ -36,14 +37,9 @@ from the object. Model in dependency order:
 4. small controls/details
 5. finishes
 
-For a real LED/LCD or another purchased installed component, derive physical
-enclosure consequences before visual decoration: a visible aperture, a rear
-keepout/seat with clearance, and any printable retention features. Use one
-screen datum and component envelope for all of them. Put the glass/content mesh
-behind the aperture as `display-only`; include it in the display GLB and exclude
-it from STEP/STL/3MF. The visual mesh is not a cutting tool, and the full module
-keepout is not the visible opening. A printable bezel or dummy screen is a
-separate physical case and needs its own recipient geometry.
+For an LED/LCD or another installed display component, read
+`installed-displays.md`. Do not load that component-specific guidance for tasks
+without an installed display.
 
 For replica or exact-match requests, build the object first and the print
 placement second. A support-free bed pose is not permission to flatten the
@@ -67,23 +63,15 @@ reliable, change strategy: keep the object single-part, move the split, alter
 orientation, use relief/engraving instead of a separate insert, or record a
 non-printed fastening choice. Keep the parts as separate valid solids and
 export with `export_assembly()`. It writes `NAME-PART.stl` for individual
-print placement, `NAME.stl` for print-bed layout, `NAME-assemble.step` for
-physical assembly QA, and `NAME-display.glb` for user preview. Pass
+print placement, `NAME-PART.step` for each BRep master, `NAME.stl` for
+print-bed layout, `NAME-assemble.step` for whole-assembly QA, and
+`NAME-display.glb` for user preview. Pass
 `part_name=` to every `observe()`, checked cut, and checked finish so per-part
 QA reads only its own evidence.
 
-Read `multipart-connections.md` before choosing the interface. For an ordinary
-removable shell, cover, or base without a user-selected fastening method, and
-when ordinary driver access and purchased hardware are acceptable, prefer one
-locating collar/socket or spaced locating pins plus two symmetric M3 plastic
-self-tapping screw connections (two fastener axes). Let the locator position the
-seam and let the screws clamp it. Derive each cover clearance hole, receiver
-pilot, and boss from one
-screw axis with `self_tapping_screw_pair()`; apply the same rigid placement to
-the entire group and mirror/pattern repeated axes. Select snaps or dovetails for
-tool-free/hardware-free access, inserts for frequent service or higher clamp
-load, and hinges, sliders, fitted pockets, or adhesive when their assembly
-behavior is a better match.
+Read `multipart-basics.md` for every multipart design. Load the detailed
+`multipart-connections.md` recipe only when the design uses direct fastening
+into printed plastic or the positive serviceable-enclosure default applies.
 
 ## build123d guardrails
 
@@ -107,6 +95,9 @@ behavior is a better match.
 state thickness. `surface-led` is appropriate when the recognizable form depends
 on a controlled outer surface more than internal mechanics.
 
-If build123d cannot represent the requested organic surface faithfully, stop at
-an honest failed visual validation rather than hiding the limitation behind a
-watertight STL.
+If build123d cannot represent an identity-bearing organic surface faithfully,
+use a canonical mesh master and compile precise BRep-derived manufacturing
+features into it through the same semantic scene. The mesh remains the physical
+authority, so do not fabricate a faceted STEP or maintain a separate polished
+visual proxy. Stop with an honest failed visual validation only when neither
+representation can satisfy the intent and evidence.

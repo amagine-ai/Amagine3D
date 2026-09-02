@@ -1,4 +1,4 @@
-"""Create orthographic visual evidence for single-material STL or GLB files."""
+"""Create orthographic visual evidence for semantic display GLB or print meshes."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import tracemalloc
+
+import numpy as np
+import trimesh
 
 from cpu_z_buffer import (
     CONTACT_VIEWS,
@@ -46,13 +49,70 @@ def _save_png(image, destination: Path) -> None:
     image.save(destination, format="PNG")
 
 
+def _visual_color(
+    mesh: trimesh.Trimesh,
+    fallback: tuple[int, int, int],
+) -> tuple[int, int, int]:
+    """Preserve a uniform GLB/3MF material color when one is available."""
+
+    material = getattr(mesh.visual, "material", None)
+    candidates = (
+        getattr(mesh.visual, "main_color", None),
+        getattr(material, "main_color", None),
+        getattr(material, "baseColorFactor", None),
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            value = np.asarray(candidate, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            continue
+        if len(value) >= 3 and np.isfinite(value[:3]).all():
+            return tuple(int(np.clip(round(item), 0, 255)) for item in value[:3])
+    return fallback
+
+
+def _render_inputs(source: Path, fallback: tuple[int, int, int]) -> list[MeshInput]:
+    """Load every transformed scene node instead of flattening material regions."""
+
+    loaded = trimesh.load(source, force="scene", process=True)
+    if not isinstance(loaded, trimesh.Scene):
+        raise ValueError(f"no renderable scene in {source}")
+    preserve_material = source.suffix.lower() in {".3mf", ".glb", ".gltf"}
+    inputs: list[MeshInput] = []
+    for node_name in sorted(loaded.graph.nodes_geometry):
+        transform, geometry_name = loaded.graph[node_name]
+        geometry = loaded.geometry.get(geometry_name)
+        if not isinstance(geometry, trimesh.Trimesh) or geometry.is_empty:
+            continue
+        mesh = geometry.copy()
+        mesh.apply_transform(transform)
+        if not np.isfinite(mesh.vertices).all():
+            raise ValueError(f"non-finite mesh vertices in {source}:{node_name}")
+        color = _visual_color(mesh, fallback) if preserve_material else fallback
+        inputs.append(
+            MeshInput(
+                f"{source.stem}/{node_name}",
+                mesh,
+                color,
+                source,
+            )
+        )
+    if not inputs:
+        # Keep the established error wording and support importers that return
+        # one mesh without a populated scene graph.
+        inputs.append(MeshInput(source.stem, load_mesh(source), fallback, source))
+    return inputs
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", nargs="?")
     parser.add_argument(
         "--part",
         action="append",
-        help="STL or GLB to include in a single-material multipart preview",
+        help="Additional STL, 3MF, or GLB to include in one preview",
     )
     parser.add_argument("--out")
     parser.add_argument("--size", type=int, default=DEFAULT_OUTPUT_SIZE)
@@ -109,13 +169,12 @@ def main() -> int:
             args.out or sources[0].with_name(f"{sources[0].stem}_views.png")
         ).resolve()
         inputs = [
-            MeshInput(
-                source.stem,
-                load_mesh(source),
-                PART_TINTS[index % len(PART_TINTS)],
-                source,
-            )
+            item
             for index, source in enumerate(sources)
+            for item in _render_inputs(
+                source,
+                PART_TINTS[index % len(PART_TINTS)],
+            )
         ]
         count = triangle_count(inputs)
         if count > limits.max_triangles:

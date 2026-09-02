@@ -724,6 +724,7 @@ export function CadWorkbench({
             updateDraft(agentEvent, draftId, requestSessionId),
           sessionId: requestSessionId,
           signal: controller.signal,
+          taskType: 'cad',
           webSearchEnabled,
         });
       } catch (error) {

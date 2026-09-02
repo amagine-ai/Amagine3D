@@ -1,4 +1,4 @@
-"""Cross-check region report against colors and object names stored in a 3MF."""
+"""Audit the unified material plan against a verified colored 3MF package."""
 
 from __future__ import annotations
 
@@ -8,32 +8,153 @@ import json
 from pathlib import Path
 import sys
 
-if __package__:
-    from .export_3mf import inspect_color_archive
-else:
-    from export_3mf import inspect_color_archive
+SKILL_DIR = Path(__file__).resolve().parent
+SKILL_ROOT = SKILL_DIR.parent
+for directory in (SKILL_DIR, SKILL_ROOT):
+    if str(directory) not in sys.path:
+        sys.path.insert(0, str(directory))
 
+from build_check import audit as audit_build
+from build_manifest import BUILD_SCHEMA
+from material_plan import MATERIAL_PLAN_SCHEMA, validate_material_plan
+from export_3mf import inspect_color_archive
 
-COLOR_BUILD_SCHEMA = "evidence-color-build/v5"
-UNIFIED_ASSEMBLY_SCHEMA = "evidence-cad-assembly-build/v3"
+SUPPORTED_BACKENDS = {"brep-assembly", "brep-color-regions", "hybrid-mesh"}
 
 
 def _expected_colors(report: dict) -> dict[str, str]:
-    if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA:
-        values = report.get("part_colors", {})
-        return {
-            name: color.upper()
-            for name, color in values.items()
-            if isinstance(name, str) and isinstance(color, str)
-        } if isinstance(values, dict) else {}
-    values = report.get("regions", {})
+    plan = report["materialPlan"]
+    materials = {item["id"]: item["color"] for item in plan["materials"]}
+    values: dict[str, str] = {}
+    for assignment in plan["assignments"]:
+        if assignment["scope"] == "volumetric-region":
+            name = f"{assignment['part']}/{assignment['region']}"
+        else:
+            name = assignment["region"] or assignment["part"]
+        values[name] = materials[assignment["materialId"]]
+    return values
+
+
+def _check(name: str, passed: bool, observed, expected=None) -> dict:
     return {
-        name: item["color"].upper()
-        for name, item in values.items()
-        if isinstance(name, str)
-        and isinstance(item, dict)
-        and isinstance(item.get("color"), str)
-    } if isinstance(values, dict) else {}
+        "name": name,
+        "pass": bool(passed),
+        "observed": observed,
+        **({"expected": expected} if expected is not None else {}),
+    }
+
+
+def audit(report_path: Path, three_mf_path: Path, max_overlap: float) -> dict:
+    report_path = report_path.resolve()
+    three_mf_path = three_mf_path.resolve()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        raise ValueError("build report must contain an object")
+    archive = inspect_color_archive(str(three_mf_path))
+    archive_hash = sha256(three_mf_path.read_bytes()).hexdigest()
+    manifest_errors = audit_build(report_path)["errors"]
+    plan = report.get("materialPlan")
+    plan_errors = validate_material_plan(plan)
+    expected = _expected_colors(report) if not plan_errors else {}
+    inventory = archive.get("regions")
+    if not isinstance(inventory, list) or not inventory:
+        raise ValueError("3MF archive must expose non-empty volumetric regions")
+    observed = {
+        item["name"]: str(item.get("color") or "").upper()
+        for item in inventory
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    backend = report.get("backend")
+    package_mode = plan.get("packageMode") if isinstance(plan, dict) else None
+    assignments = plan.get("assignments", []) if isinstance(plan, dict) else []
+    expected_part_count = len({
+        item.get("part") for item in assignments if isinstance(item, dict)
+    })
+    build_items = archive.get("build_items", [])
+    artifact = report.get("artifacts", {}).get("3mf", {})
+
+    checks = [
+        _check(
+            "build_report",
+            report.get("schema") == BUILD_SCHEMA
+            and backend in SUPPORTED_BACKENDS
+            and report.get("pass") is True,
+            {"backend": backend, "pass": report.get("pass"), "schema": report.get("schema")},
+            {"backends": sorted(SUPPORTED_BACKENDS), "schema": BUILD_SCHEMA},
+        ),
+        _check("build_manifest", not manifest_errors, manifest_errors, []),
+        _check("material_plan", not plan_errors, plan_errors, {"schema": MATERIAL_PLAN_SCHEMA}),
+        _check(
+            "archive_provenance",
+            artifact.get("sha256") == archive_hash
+            and artifact.get("verified") is True
+            and artifact.get("validator") == "lib3mf"
+            and artifact.get("coordinateFrame") == "plate-print",
+            {
+                "coordinateFrame": artifact.get("coordinateFrame"),
+                "sha256": archive_hash,
+                "validator": artifact.get("validator"),
+                "verified": artifact.get("verified"),
+            },
+            "hash-bound plate-print 3MF independently verified by lib3mf",
+        ),
+        _check("print_package_mode", archive.get("package_mode") == package_mode, archive.get("package_mode"), package_mode),
+        _check(
+            "print_package_build_items",
+            (
+                package_mode == "co_print_body"
+                and archive.get("build_item_count") == 1
+                and len(build_items) == 1
+                and build_items[0].get("object_kind") == "components"
+                and archive.get("component_object_count") == 1
+            )
+            or (package_mode == "separate_parts" and archive.get("build_item_count") == expected_part_count)
+            and all(
+                item.get("object_kind") in {"components", "mesh"}
+                for item in build_items
+            ),
+            {
+                "build_item_count": archive.get("build_item_count"),
+                "top_level_kinds": [item.get("object_kind") for item in build_items],
+            },
+            {
+                "build_item_count": 1 if package_mode == "co_print_body" else expected_part_count,
+                "top_level_kinds": ["components"],
+            },
+        ),
+        _check("region_names", set(observed) == set(expected), sorted(observed), sorted(expected)),
+        _check("region_colors", observed == expected, observed, expected),
+    ]
+
+    backend_data = report.get("backendData", {})
+    overlaps = backend_data.get("overlapsMm3")
+    if backend == "hybrid-mesh":
+        overlaps = backend_data.get("assembly", {}).get("overlapsMm3")
+    if isinstance(overlaps, dict):
+        for pair, volume in overlaps.items():
+            checks.append(_check(
+                f"overlap:{pair}",
+                isinstance(volume, (int, float)) and not isinstance(volume, bool) and float(volume) <= max_overlap,
+                volume,
+                f"<= {max_overlap}",
+            ))
+    coverage = backend_data.get("parentCoverage")
+    if isinstance(coverage, dict):
+        error = coverage.get("error_mm3")
+        checks.append(_check(
+            "parent_coverage",
+            isinstance(error, (int, float)) and float(error) <= max_overlap,
+            error,
+            f"<= {max_overlap}",
+        ))
+
+    return {
+        "archive": archive,
+        "checks": checks,
+        "pass": all(check["pass"] for check in checks),
+        "requiresManualSlicerAssignment": plan.get("requiresManualSlicerAssignment") if isinstance(plan, dict) else None,
+        "schema": "evidence-assembly-audit/v1",
+    }
 
 
 def main() -> int:
@@ -43,166 +164,12 @@ def main() -> int:
     parser.add_argument("--max-overlap", type=float, default=0.01)
     parser.add_argument("--out")
     args = parser.parse_args()
-
-    report = json.loads(Path(args.report).read_text(encoding="utf-8"))
-    archive = inspect_color_archive(args.three_mf)
-    archive_hash = sha256(Path(args.three_mf).read_bytes()).hexdigest()
-    expected = _expected_colors(report)
-    region_inventory = archive.get("regions") or archive.get("objects", [])
-    observed = {
-        item["name"]: (item["color"] or "").upper() for item in region_inventory
-    }
-    package_mode = report.get(
-        "print_package_mode",
-        "separate_parts"
-        if report.get("schema") == UNIFIED_ASSEMBLY_SCHEMA
-        else "co_print_body",
-    )
-    build_items = archive.get("build_items", [])
-    checks = [
-        {
-            "name": "build_report_schema",
-            "pass": report.get("schema") in {
-                COLOR_BUILD_SCHEMA,
-                UNIFIED_ASSEMBLY_SCHEMA,
-            },
-            "expected": [COLOR_BUILD_SCHEMA, UNIFIED_ASSEMBLY_SCHEMA],
-            "observed": report.get("schema"),
-        },
-        {
-            "name": "archive_provenance",
-            "pass": report.get("artifacts", {}).get("3mf", {}).get("sha256")
-            == archive_hash,
-            "expected": report.get("artifacts", {}).get("3mf", {}).get("sha256"),
-            "observed": archive_hash,
-        },
-        {
-            "name": "print_package_mode",
-            "pass": archive.get("package_mode") == package_mode,
-            "expected": package_mode,
-            "observed": archive.get("package_mode"),
-        },
-        {
-            "name": "print_package_co_print_build_item",
-            "pass": package_mode != "co_print_body"
-            or (
-                archive.get("build_item_count") == 1
-                and bool(build_items)
-                and build_items[0].get("object_kind") == "mesh"
-            ),
-            "expected": (
-                "single top-level mesh build item"
-                if package_mode == "co_print_body"
-                else "separate top-level part build items allowed"
-            ),
-            "observed": {
-                "build_item_count": archive.get("build_item_count"),
-                "top_level_kinds": [
-                    item.get("object_kind")
-                    for item in build_items
-                ],
-            },
-        },
-        {
-            "name": "print_package_separate_part_build_items",
-            "pass": package_mode != "separate_parts"
-            or (
-                archive.get("build_item_count") == len(expected)
-                and bool(build_items)
-                and all(
-                    item.get("object_kind") == "mesh" for item in build_items
-                )
-            ),
-            "expected": (
-                {
-                    "build_item_count": len(expected),
-                    "top_level_kind": "mesh",
-                }
-                if package_mode == "separate_parts"
-                else "co-print package"
-            ),
-            "observed": {
-                "build_item_count": archive.get("build_item_count"),
-                "top_level_kinds": [
-                    item.get("object_kind") for item in build_items
-                ],
-            },
-        },
-        {
-            "name": "region_names",
-            "pass": set(expected) == set(observed),
-            "expected": sorted(expected),
-            "observed": sorted(observed),
-        },
-        {
-            "name": "region_colors",
-            "pass": expected == observed,
-            "expected": expected,
-            "observed": observed,
-        },
-    ]
-    for pair, volume in report.get("overlaps_mm3", {}).items():
-        checks.append({
-            "name": f"overlap:{pair}",
-            "pass": float(volume) <= args.max_overlap,
-            "observed": volume,
-            "expected": f"<= {args.max_overlap}",
-        })
-    coverage = report.get("parent_coverage")
-    if coverage:
-        checks.append({
-            "name": "parent_coverage",
-            "pass": float(coverage["error_mm3"]) <= args.max_overlap,
-            "observed": coverage["error_mm3"],
-            "expected": f"<= {args.max_overlap}",
-        })
-
-    material = report.get("material_semantics")
-    checks.append({
-        "name": "material_plan_present",
-        "pass": isinstance(material, dict),
-        "expected": "evidence-color-material-plan/v1",
-        "observed": material.get("schema") if isinstance(material, dict) else None,
-    })
-    if isinstance(material, dict):
-        checks.append({
-            "name": "material_plan_schema",
-            "pass": material.get("schema") == "evidence-color-material-plan/v1",
-            "expected": "evidence-color-material-plan/v1",
-            "observed": material.get("schema"),
-        })
-        material_regions = {
-            item.get("name"): item for item in material.get("regions", [])
-        }
-        checks.append({
-            "name": "material_region_names",
-            "pass": set(material_regions) == set(expected),
-            "expected": sorted(expected),
-            "observed": sorted(material_regions),
-        })
-        checks.append({
-            "name": "material_region_colors",
-            "pass": all(
-                str(material_regions[name].get("color", "")).upper() == color
-                for name, color in expected.items()
-                if name in material_regions
-            ),
-            "expected": expected,
-            "observed": {
-                name: str(item.get("color", "")).upper()
-                for name, item in material_regions.items()
-            },
-        })
-
-    result = {
-        "archive": archive,
-        "checks": checks,
-        "pass": all(check["pass"] for check in checks),
-        "requires_manual_slicer_assignment": bool(
-            material and material.get("requires_manual_slicer_assignment")
-        ),
-        "schema": "color-assembly-audit/v4",
-    }
+    try:
+        result = audit(Path(args.report), Path(args.three_mf), args.max_overlap)
+    except Exception as error:
+        result = {"error": str(error), "pass": False}
+        print(json.dumps(result, indent=2))
+        return 2
     payload = json.dumps(result, indent=2)
     if args.out:
         Path(args.out).write_text(payload + "\n", encoding="utf-8")
@@ -211,4 +178,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

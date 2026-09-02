@@ -1,4 +1,4 @@
-"""Fail-closed build runtime for evidence-driven single-material CAD.
+"""Fail-closed BRep backend for the unified evidence-driven CAD workflow.
 
 Generated part scripts use this module to make failed booleans and silent
 finish degradation observable. Exports carry hashes that tie geometry back to
@@ -7,7 +7,6 @@ the source and intent contract used in the current run.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from hashlib import sha256
 import importlib.util
 import json
@@ -53,6 +52,40 @@ INTENT_SCHEMA = _intent_contract.INTENT_SCHEMA
 validate_coordinate_system = _intent_contract.validate_coordinate_system
 validate_color_regions = _intent_contract.validate_color_regions
 validate_manufacturing = _intent_contract.validate_manufacturing
+
+_coordinate_frames = _load_local_module(
+    "_text_a3d_coordinate_frames_for_cad_helpers",
+    "coordinate_frames.py",
+)
+rigid_transform = _coordinate_frames.rigid_transform
+
+_build_manifest = _load_local_module(
+    "_text_a3d_build_manifest_for_cad_helpers",
+    "build_manifest.py",
+)
+artifact_record = _build_manifest.artifact_record
+bind_inputs = _build_manifest.bind_inputs
+new_run_id = _build_manifest.new_run_id
+semantic_assembly_record = _build_manifest.semantic_assembly_record
+utc_timestamp = _build_manifest.utc_timestamp
+validate_manifest = _build_manifest.validate_manifest
+
+_export_audit = _load_local_module(
+    "_text_a3d_export_audit_for_cad_helpers",
+    "export_audit.py",
+)
+audit_exports = _export_audit.audit_exports
+ExportAuditError = _export_audit.ExportAuditError
+export_geometry_record = _export_audit.geometry_record
+
+_material_plan = _load_local_module(
+    "_text_a3d_material_plan_for_cad_helpers",
+    "material_plan.py",
+)
+build_material_plan = _material_plan.build_material_plan
+material_record = _material_plan.material_record
+source_binding = _material_plan.source_binding
+validate_material_sources = _material_plan.validate_material_sources
 
 _plate_layout = _load_local_module(
     "_text_a3d_plate_layout_for_cad_helpers",
@@ -201,6 +234,10 @@ def _part_color_plan(
         raise BuildInvariantError(
             "part_colors keys must exactly match exported assembly part names"
         )
+    if not isinstance(declared, list):
+        raise BuildInvariantError(
+            "BRep assembly part_colors require matching intent color_regions"
+        )
     normalized: dict[str, str] = {}
     for part_name, color in part_colors.items():
         if not isinstance(color, str) or not _HEX_COLOR.fullmatch(color):
@@ -209,7 +246,11 @@ def _part_color_plan(
             )
         normalized[part_name] = color.upper()
 
-    color_errors = validate_color_regions(declared, intent_data.get("manufacturing"))
+    color_errors = validate_color_regions(
+        declared,
+        intent_data.get("manufacturing"),
+        intent_data.get("part"),
+    )
     if color_errors:
         raise BuildInvariantError(
             "invalid unified color intent: " + "; ".join(color_errors)
@@ -219,14 +260,21 @@ def _part_color_plan(
         for item in declared
         if isinstance(item, dict) and isinstance(item.get("name"), str)
     }
+    if set(declared_by_name) != part_names or any(
+        declared_by_name[part_name].get("part") != part_name
+        for part_name in part_names
+        if part_name in declared_by_name
+    ):
+        raise BuildInvariantError(
+            "BRep assembly part_colors require exactly one whole-part intent "
+            "color region per exported part, with region name equal to its owner"
+        )
     for part_name, color in normalized.items():
         if str(declared_by_name[part_name].get("hex", "")).upper() != color:
             raise BuildInvariantError(
                 f"intent color for {part_name!r} does not match part_colors"
             )
-    package_mode = intent_data.get("printability", {}).get(
-        "print_package_mode", "separate_parts"
-    )
+    package_mode = intent_data.get("printability", {}).get("print_package_mode")
     if package_mode != "separate_parts":
         raise BuildInvariantError(
             "part-colored multipart assemblies require separate_parts 3MF output"
@@ -234,13 +282,24 @@ def _part_color_plan(
 
     materials = []
     for part_name in normalized:
-        material = declared_by_name[part_name].get("material") or {}
-        materials.append({
-            "color": normalized[part_name],
-            "filament": material.get("filament"),
-            "name": part_name,
-            "transmission": material.get("transmission", "opaque"),
-        })
+        declared_region = declared_by_name[part_name]
+        raw_material = declared_region.get("material")
+        material = raw_material if isinstance(raw_material, dict) else {}
+        materials.append(
+            material_record(
+                part_name,
+                normalized[part_name],
+                filament=material.get("filament"),
+                transmission=material.get("transmission"),
+                color_status="declared",
+                filament_status=(
+                    "declared" if "filament" in material else "proposed"
+                ),
+                transmission_status=(
+                    "declared" if "transmission" in material else "proposed"
+                ),
+            )
+        )
     return normalized, materials
 
 
@@ -292,6 +351,17 @@ def _stats(shape) -> dict:
     }
 
 
+def _manifest_geometry_record(stats: dict) -> dict:
+    """Translate kernel-specific measurements into the shared build schema."""
+    return {
+        "bodyCount": stats["solid_count"],
+        "boundsMm": stats["bbox_mm"],
+        "isVolume": bool(stats["valid"] and stats["solid_count"] > 0),
+        "valid": stats["valid"],
+        "volumeMm3": stats["volume_mm3"],
+    }
+
+
 def _translate(shape, x: float, y: float, z: float):
     return Pos(x, y, z) * shape
 
@@ -303,61 +373,11 @@ def _rotate(shape, rx: float, ry: float, rz: float):
 def _print_part(shape):
     box = shape.bounding_box()
     transform = [-box.min.X, -box.min.Y, -box.min.Z]
-    return _translate(shape, *transform), {
-        "from": "assembly",
-        "scale": 1.0,
-        "to": "part-print",
-        "translate_mm": [round(float(value), 5) for value in transform],
-    }
-
-
-def _profile_from_intent(intent_data: dict | None, intent_path: Path | None) -> dict | None:
-    if intent_data is None or intent_path is None:
-        return None
-    reference = intent_data.get("printability", {}).get("profile", {})
-    raw_path = reference.get("path") if isinstance(reference, dict) else None
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        return None
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = intent_path.parent / path
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def _bound_plate_profile(
-    intent_data: dict,
-    intent_path: Path,
-) -> dict | None:
-    """Resolve and verify the profile when the intent binds one."""
-    printability = intent_data.get("printability")
-    if not isinstance(printability, dict) or "profile" not in printability:
-        return None
-    reference = printability.get("profile")
-    if not isinstance(reference, dict):
-        raise BuildInvariantError(
-            "printability.profile must bind a readable printer profile"
-        )
-    raw_path = reference.get("path")
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise BuildInvariantError("printability.profile.path is required")
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = intent_path.parent / path
-    if not path.is_file():
-        raise BuildInvariantError(f"bound printer profile not found: {path}")
-    expected_digest = reference.get("sha256")
-    if not isinstance(expected_digest, str) or _digest(path) != expected_digest:
-        raise BuildInvariantError("bound printer profile hash does not match")
-    profile = _profile_from_intent(intent_data, intent_path)
-    if profile is None:
-        raise BuildInvariantError("bound printer profile could not be read")
-    if profile.get("schema") != "evidence-bambu-printer-profile/v1":
-        raise BuildInvariantError("bound printer profile schema is unsupported")
-    return profile
+    return _translate(shape, *transform), rigid_transform(
+        "assembly-semantic",
+        "part-print",
+        translate_mm=[round(float(value), 5) for value in transform],
+    )
 
 
 def _rectangle_bounds(polygon) -> tuple[float, float, float, float] | None:
@@ -375,10 +395,8 @@ def _rectangle_bounds(polygon) -> tuple[float, float, float, float] | None:
 def _footprint_fits(
     width: float,
     depth: float,
-    profile: dict | None,
+    profile: dict,
 ) -> tuple[bool, dict]:
-    if profile is None:
-        return True, {"reason": "no profile available during export"}
     tool = profile.get("machine", {}).get("selected_tool", {})
     bounds = _rectangle_bounds(tool.get("polygon_mm", []))
     height_limit = tool.get("height_mm")
@@ -398,9 +416,7 @@ def _footprint_fits(
     }
 
 
-def _uniform_scale_to_fit_profile(dimensions: list[float], profile: dict | None) -> dict:
-    if profile is None:
-        return {"available": False, "reason": "no profile available during export"}
+def _uniform_scale_to_fit_profile(dimensions: list[float], profile: dict) -> dict:
     tool = profile.get("machine", {}).get("selected_tool", {})
     bounds = _rectangle_bounds(tool.get("polygon_mm", []))
     height_limit = tool.get("height_mm")
@@ -618,45 +634,12 @@ def _orientation_candidates(
     return results
 
 
-def _identity_print_orientation(shape) -> dict:
-    box = shape.bounding_box()
-    dimensions = [
-        float(box.max.X - box.min.X),
-        float(box.max.Y - box.min.Y),
-        float(box.max.Z - box.min.Z),
-    ]
-    translate = [
-        round(float(-box.min.X), 5),
-        round(float(-box.min.Y), 5),
-        round(float(-box.min.Z), 5),
-    ]
-    selected = {
-        "bed_contact_semantic_face": "bottom",
-        "bed_fit": {"reason": "no profile available during export"},
-        "dimensions_mm": [round(value, 5) for value in dimensions],
-        "fits_profile": True,
-        "height_fits": True,
-        "name": "identity",
-        "protected_contact_face_penalty": 0,
-        "rotate_degrees_xyz": [0.0, 0.0, 0.0],
-        "score": [0, 0.0, 0, 0, 0.0, 0.0, 0, round(dimensions[2], 5), 0],
-        "translate_mm": translate,
-    }
-    return {
-        "candidates": [selected],
-        "selected": selected,
-        "strategy": "identity-no-profile",
-    }
-
-
 def _select_print_orientation(
     shape,
-    profile: dict | None,
+    profile: dict,
     *,
     intent_data: dict | None = None,
 ) -> dict:
-    if profile is None:
-        return _identity_print_orientation(shape)
     candidates = _orientation_candidates(shape, profile, intent_data=intent_data)
     selected = min(candidates, key=lambda item: item["score"])
     return {
@@ -678,64 +661,21 @@ def _apply_print_orientation(shape, orientation: dict):
 
 def _orientation_transform(orientation: dict) -> dict:
     selected = orientation["selected"]
-    return {
-        "from": "semantic",
-        "rotate_degrees_xyz": selected["rotate_degrees_xyz"],
-        "to": "part-print",
-        "translate_mm": selected["translate_mm"],
-    }
-
-
-def _serial_print_plate(parts: dict[str, object], spacing_mm: float = 5.0):
-    """Compatibility layout when a lightweight intent has no printer profile."""
-    placed = {}
-    transforms = {}
-    cursor = 0.0
-    for part_name, shape in parts.items():
-        box = shape.bounding_box()
-        placed_shape = _translate(shape, cursor - box.min.X, -box.min.Y, -box.min.Z)
-        placed[part_name] = placed_shape
-        transforms[part_name] = {
-            "from": "assembly",
-            "scale": 1.0,
-            "to": "plate-print",
-            "translate_mm": [
-                round(float(cursor - box.min.X), 5),
-                round(float(-box.min.Y), 5),
-                round(float(-box.min.Z), 5),
-            ],
-        }
-        placed_box = placed_shape.bounding_box()
-        cursor = placed_box.max.X + spacing_mm
-    return Compound(children=list(placed.values())), placed, transforms, {
-        "auto_scale": False,
-        "bed": None,
-        "bbox_overlaps": [],
-        "fits": None,
-        "order": list(parts),
-        "parts": {
-            part_name: {"translate_mm": transform["translate_mm"]}
-            for part_name, transform in transforms.items()
-        },
-        "scale": 1.0,
-        "spacing_mm": round(float(spacing_mm), 5),
-        "strategy": "serial-x-unbounded-no-profile",
-        "transforms": {
-            part_name: transform["translate_mm"]
-            for part_name, transform in transforms.items()
-        },
-    }
+    return rigid_transform(
+        "semantic",
+        "part-print",
+        rotate_degrees_xyz=selected["rotate_degrees_xyz"],
+        translate_mm=selected["translate_mm"],
+    )
 
 
 def _print_plate(
     parts: dict[str, object],
     spacing_mm: float = 5.0,
     *,
-    profile: dict | None = None,
+    profile: dict,
 ):
     """Arrange parts using rigid translations and a profile-bound shelf pack."""
-    if profile is None:
-        return _serial_print_plate(parts, spacing_mm)
     bboxes = {}
     for part_name, shape in parts.items():
         box = shape.bounding_box()
@@ -757,12 +697,11 @@ def _print_plate(
     for part_name, shape in parts.items():
         translate = layout["transforms"][part_name]
         placed[part_name] = _translate(shape, *translate)
-        transforms[part_name] = {
-            "from": "assembly",
-            "scale": 1.0,
-            "to": "plate-print",
-            "translate_mm": translate,
-        }
+        transforms[part_name] = rigid_transform(
+            "assembly-semantic",
+            "plate-print",
+            translate_mm=translate,
+        )
     return Compound(children=list(placed.values())), placed, transforms, layout
 
 
@@ -895,40 +834,6 @@ def checked_chamfer(
     )
 
 
-def _source_record(source_path: str | None) -> dict | None:
-    source = Path(source_path or sys.argv[0]).resolve()
-    return {"path": str(source), "sha256": _digest(source)} if source.is_file() else None
-
-
-def _read_intent(intent_path: str | None) -> tuple[Path | None, dict | None]:
-    if intent_path is None:
-        return None, None
-    intent = Path(intent_path).resolve()
-    if not intent.is_file():
-        raise BuildInvariantError(f"intent contract not found: {intent}")
-    try:
-        intent_data = json.loads(intent.read_text(encoding="utf-8"))
-    except Exception as error:
-        raise BuildInvariantError(f"could not read intent contract: {error}") from error
-    if not isinstance(intent_data, dict) or intent_data.get("schema") != INTENT_SCHEMA:
-        raise BuildInvariantError(f"intent contract must use {INTENT_SCHEMA}")
-    coordinate_errors = validate_coordinate_system(
-        intent_data.get("coordinate_system")
-    )
-    if coordinate_errors:
-        raise BuildInvariantError(
-            "invalid coordinate system: " + "; ".join(coordinate_errors)
-        )
-    return intent, intent_data
-
-
-def _intent_record(intent_path: str | None) -> tuple[Path | None, dict | None]:
-    intent, _ = _read_intent(intent_path)
-    if intent is None:
-        return None, None
-    return intent, {"path": str(intent), "sha256": _digest(intent)}
-
-
 def _validate_assembly_intent(
     intent_path: Path,
     name: str,
@@ -1007,8 +912,9 @@ def export_part(
     name: str,
     out_dir: str = ".",
     *,
-    intent_path: str | None = None,
-    source_path: str | None = None,
+    intent_path: str,
+    scene_path: str,
+    source_path: str,
 ) -> dict:
     """Export printable STL, display GLB, assembly STEP, and build evidence."""
     stats = _stats(shape)
@@ -1019,13 +925,22 @@ def export_part(
 
     output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
     output.mkdir(parents=True, exist_ok=True)
-    intent_path_resolved, intent_data = _read_intent(intent_path)
-    intent = (
-        {"path": str(intent_path_resolved), "sha256": _digest(intent_path_resolved)}
-        if intent_path_resolved is not None
-        else None
-    )
-    profile = _profile_from_intent(intent_data, intent_path_resolved)
+    try:
+        intent_data, scene_data, profile, inputs = bind_inputs(
+            intent_path=intent_path,
+            scene_path=scene_path,
+            expected_parts={name},
+            source_path=source_path,
+        )
+    except ValueError as error:
+        raise BuildInvariantError(str(error)) from error
+    if intent_data.get("part") != name:
+        raise BuildInvariantError("intent part does not match the export name")
+    if intent_data.get("manufacturing", {}).get("mode") != "single-part":
+        raise BuildInvariantError(
+            "export_part requires manufacturing.mode='single-part' in the intent"
+        )
+    intent_path_resolved = Path(intent_path).resolve()
     print_orientation = _select_print_orientation(
         shape,
         profile,
@@ -1033,7 +948,7 @@ def export_part(
     )
     print_shape = _apply_print_orientation(shape, print_orientation)
     print_stats = _stats(print_shape)
-    assemble_step_path = output / f"{name}-assemble.step"
+    assemble_step_path = output / f"{name}.step"
     display_glb_path = output / f"{name}-display.glb"
     stl_path = output / f"{name}.stl"
     report_path = output / f"{name}_report.json"
@@ -1045,38 +960,104 @@ def export_part(
     _export_display_glb(((name, shape, _DISPLAY_TINTS[0]),), display_glb_path)
     export_stl(print_shape, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
 
-    report = {
-        "artifacts": {
-            "stl": {"path": str(stl_path.resolve()), "sha256": _digest(stl_path)},
-            "step:assemble": {
-                "path": str(assemble_step_path.resolve()),
-                "sha256": _digest(assemble_step_path),
+    try:
+        export_audit = audit_exports(
+            stls={
+                f"stl:{name}": (stl_path, export_geometry_record(print_shape)),
             },
-            "glb:display": {
-                "path": str(display_glb_path.resolve()),
-                "sha256": _digest(display_glb_path),
+            steps={
+                f"step:{name}": (assemble_step_path, export_geometry_record(shape)),
             },
-        },
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "coordinates": {
-            "print": ["stl"],
-            "assembly": ["step:assemble"],
-            "display": ["glb:display"],
-        },
-        "events": list(_EVENTS),
-        "features": dict(_FEATURES),
-        "intent": intent,
-        "parameters": dict(_PARAMETERS),
-        "part": name,
-        "print": {
-            **print_stats,
-            "transform": _orientation_transform(print_orientation),
-        },
-        "print_orientation": print_orientation,
-        "schema": "evidence-cad-build/v4",
-        "shape": stats,
-        "source": _source_record(source_path),
+            glb=(display_glb_path, [name]),
+        )
+    except ExportAuditError as error:
+        raise BuildInvariantError(f"export read-back audit failed: {error}") from error
+    export_audit_path = output / f"{name}_export-audit.json"
+    export_audit_path.write_text(
+        json.dumps(export_audit, indent=2) + "\n", encoding="utf-8"
+    )
+
+    matrix = _orientation_transform(print_orientation)["matrix"]
+    part_records = {
+        name: {
+            "print": _manifest_geometry_record(print_stats),
+            "representationMaster": "brep",
+            "semantic": _manifest_geometry_record(stats),
+        }
     }
+    try:
+        semantic_assembly = semantic_assembly_record(
+            part_records, inputs["intent"]["sha256"], intent_data
+        )
+    except ValueError as error:
+        raise BuildInvariantError(str(error)) from error
+    report = {
+        "artifactMatrix": {
+            "parts": {
+                name: {"glb": "required", "step": "required", "stl": "required", "threeMf": "not-applicable"}
+            }
+        },
+        "artifacts": {
+            f"stl:{name}": artifact_record(stl_path, coordinateFrame="part-print"),
+            f"step:{name}": artifact_record(
+                assemble_step_path, coordinateFrame="semantic"
+            ),
+            "glb:display": artifact_record(
+                display_glb_path, coordinateFrame="semantic"
+            ),
+            "exportAudit": artifact_record(export_audit_path),
+        },
+        "autoScale": False,
+        "backend": "brep-part",
+        "backendData": {
+            "exportAudit": export_audit,
+            "parameters": dict(_PARAMETERS),
+            "printOrientation": print_orientation,
+            "semanticAssembly": semantic_assembly,
+        },
+        "builtAt": utc_timestamp(),
+        "coordinateFrames": {
+            "semantic": {
+                "scale": 1.0,
+                "units": "mm",
+                "up": scene_data["coordinateSystem"]["up"],
+            },
+            "part-print": {
+                "partTransforms": {name: matrix},
+                "scale": 1.0,
+                "units": "mm",
+            },
+            "plate-print": {
+                "partTransforms": {name: matrix},
+                "scale": 1.0,
+                "units": "mm",
+            },
+        },
+        "events": [
+            {**event, "part": event.get("part", name)} for event in _EVENTS
+        ],
+        "features": {
+            feature_id: {**record, "part": record.get("part", name)}
+            for feature_id, record in _FEATURES.items()
+        },
+        "inputs": inputs,
+        "part": name,
+        "parts": part_records,
+        "pass": bool(
+            stats["valid"] and print_stats["valid"] and export_audit["pass"]
+        ),
+        "revision": scene_data["revision"],
+        "runId": new_run_id(),
+        "scale": 1.0,
+        "schema": "evidence-a3d-build/v1",
+        "warnings": [],
+    }
+    manifest_errors = validate_manifest(report)
+    if manifest_errors:
+        raise BuildInvariantError(
+            "exporter produced an invalid build manifest: "
+            + "; ".join(manifest_errors)
+        )
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return report
@@ -1088,7 +1069,8 @@ def export_assembly(
     out_dir: str = ".",
     *,
     intent_path: str,
-    source_path: str | None = None,
+    scene_path: str,
+    source_path: str,
     max_overlap_mm3: float = 0.01,
     part_colors: dict[str, str] | None = None,
 ) -> dict:
@@ -1123,13 +1105,16 @@ def export_assembly(
             )
         normalized[part_name] = (shape, stats)
 
-    intent_path_resolved, intent_data = _read_intent(intent_path)
-    if intent_path_resolved is None or intent_data is None:
-        raise BuildInvariantError("export_assembly requires an intent contract")
-    intent = {
-        "path": str(intent_path_resolved),
-        "sha256": _digest(intent_path_resolved),
-    }
+    try:
+        intent_data, scene_data, plate_profile, inputs = bind_inputs(
+            intent_path=intent_path,
+            scene_path=scene_path,
+            expected_parts=set(normalized),
+            source_path=source_path,
+        )
+    except ValueError as error:
+        raise BuildInvariantError(str(error)) from error
+    intent_path_resolved = Path(intent_path).resolve()
     manufacturing = _validate_assembly_intent(
         intent_path_resolved, name, set(normalized)
     )
@@ -1138,7 +1123,6 @@ def export_assembly(
         intent_data,
         set(normalized),
     )
-    plate_profile = _bound_plate_profile(intent_data, intent_path_resolved)
     _validate_assembly_evidence(set(normalized))
     _validate_interface_evidence(manufacturing)
     output = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", out_dir))
@@ -1163,8 +1147,6 @@ def export_assembly(
                 )
 
     # Prove the profile-bound plate layout before writing export artifacts.
-    # Lightweight legacy/test intents without printability evidence retain the
-    # old unbounded serial arrangement, explicitly marked as unproven.
     print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
         {part_name: shape for part_name, (shape, _) in normalized.items()},
         profile=plate_profile,
@@ -1174,6 +1156,8 @@ def export_assembly(
         raise BuildInvariantError("print plate geometry is invalid")
 
     artifacts = {}
+    audit_stls = {}
+    audit_steps = {}
     children = []
     print_parts = {}
     for part_name, (shape, stats) in normalized.items():
@@ -1184,10 +1168,24 @@ def export_assembly(
             "path": str(path.resolve()),
             "sha256": _digest(path),
         }
+        audit_stls[f"stl:{part_name}"] = (
+            path,
+            export_geometry_record(print_shape),
+        )
         print_parts[part_name] = {
             **_stats(print_shape),
             "transform": print_transform,
         }
+        step_path = output / f"{name}-{part_name}.step"
+        export_step(shape, str(step_path), unit=Unit.MM)
+        artifacts[f"step:{part_name}"] = {
+            "path": str(step_path.resolve()),
+            "sha256": _digest(step_path),
+        }
+        audit_steps[f"step:{part_name}"] = (
+            step_path,
+            export_geometry_record(shape),
+        )
         try:
             shape.label = part_name
         except Exception:
@@ -1204,6 +1202,7 @@ def export_assembly(
         "path": str(stl_path.resolve()),
         "sha256": _digest(stl_path),
     }
+    audit_stls["stl"] = (stl_path, export_geometry_record(print_plate))
 
     assemble_step_path = output / f"{name}-assemble.step"
     display_glb_path = output / f"{name}-display.glb"
@@ -1223,16 +1222,21 @@ def export_assembly(
         ),
         display_glb_path,
     )
-    artifacts["step:assemble"] = {
+    artifacts["step:assembly"] = {
         "path": str(assemble_step_path.resolve()),
         "sha256": _digest(assemble_step_path),
     }
+    audit_steps["step:assembly"] = (
+        assemble_step_path,
+        export_geometry_record(assembly_shape),
+    )
     artifacts["glb:display"] = {
         "path": str(display_glb_path.resolve()),
         "sha256": _digest(display_glb_path),
     }
 
     color_fields = {}
+    material_plan = None
     if normalized_colors is not None and material_regions is not None:
         internal_plate_dir = output / ".amagine3d-internal" / name / "plate"
         internal_plate_dir.mkdir(parents=True, exist_ok=True)
@@ -1247,113 +1251,205 @@ def export_assembly(
                 "scale": 1.0,
                 "sha256": _digest(path),
             }
+            artifacts[f"plate-stl:{part_name}"] = {
+                "coordinateFrame": "plate-print",
+                "path": str(path.resolve()),
+                "sha256": _digest(path),
+            }
+            audit_stls[f"plate-stl:{part_name}"] = (
+                path,
+                export_geometry_record(shape),
+            )
             entries.append((str(path), normalized_colors[part_name], part_name))
 
         archive_path = output / f"{name}.3mf"
         three_mf = _write_part_color_archive(entries, archive_path, name)
         artifacts["3mf"] = {
-            "coordinate_frame": "plate-print",
+            "coordinateFrame": "plate-print",
             "path": str(archive_path.resolve()),
             "scale": 1.0,
             "sha256": _digest(archive_path),
+            "validator": "lib3mf",
+            "verified": True,
         }
 
-        material_plan = {
-            "archive_encodes": ["part_name", "rgb"],
-            "archive_omits": ["filament", "transmission"],
-            "color_scope": "part",
-            "coordinate_frame": "plate-print",
-            "part": name,
-            "regions": material_regions,
-            "requires_manual_slicer_assignment": any(
-                item["filament"] for item in material_regions
-            ),
-            "scale": 1.0,
-            "schema": "evidence-color-material-plan/v1",
-        }
+        assignments = [
+            {
+                "materialId": material["id"],
+                "part": material["id"],
+                "region": None,
+                "scope": "whole-part",
+            }
+            for material in material_regions
+        ]
+        material_plan = build_material_plan(
+            part=name,
+            package_mode="separate_parts",
+            materials=material_regions,
+            assignments=assignments,
+            source_bindings=[
+                source_binding(
+                    material=material,
+                    part=material["id"],
+                    region=None,
+                    scope="whole-part",
+                    source_id=material["id"],
+                    source_kind="intent-color-region",
+                )
+                for material in material_regions
+            ],
+        )
+        source_errors = validate_material_sources(
+            material_plan, intent_data, scene_data
+        )
+        if source_errors:
+            raise BuildInvariantError(
+                "invalid material provenance: " + "; ".join(source_errors)
+            )
         material_plan_path = output / f"{name}_material-plan.json"
         material_plan_path.write_text(
             json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
         )
-        artifacts["material_plan"] = {
+        artifacts["materialPlan"] = {
             "path": str(material_plan_path.resolve()),
             "sha256": _digest(material_plan_path),
         }
         color_fields = {
-            "internal_part_meshes": {"plate-print": internal_plate_meshes},
-            "material_semantics": material_plan,
-            "part_colors": normalized_colors,
-            "print_package_mode": "separate_parts",
-            "three_mf": three_mf,
+            "internalPartMeshes": {"plate-print": internal_plate_meshes},
+            "partColors": normalized_colors,
+            "printPackageMode": "separate_parts",
+            "threeMf": three_mf,
         }
 
+    try:
+        export_audit = audit_exports(
+            stls=audit_stls,
+            steps=audit_steps,
+            glb=(display_glb_path, list(normalized)),
+        )
+    except ExportAuditError as error:
+        raise BuildInvariantError(f"export read-back audit failed: {error}") from error
+    export_audit_path = output / f"{name}_export-audit.json"
+    export_audit_path.write_text(
+        json.dumps(export_audit, indent=2) + "\n", encoding="utf-8"
+    )
+    artifacts["exportAudit"] = {
+        "path": str(export_audit_path.resolve()),
+        "sha256": _digest(export_audit_path),
+    }
+
+    manifest_artifacts = {}
+    for key, record in artifacts.items():
+        if key == "step:assembly" or key.startswith("step:") or key == "glb:display":
+            frame = "semantic"
+        elif key.startswith("stl:"):
+            frame = "part-print"
+        elif key in {"stl", "3mf"}:
+            frame = "plate-print"
+        else:
+            frame = None
+        manifest_artifacts[key] = {
+            **{
+                field: value
+                for field, value in record.items()
+                if field not in {"coordinate_frame", "scale"}
+            },
+            **({"coordinateFrame": frame} if frame is not None else {}),
+        }
+    part_print_matrices = {
+        part_name: record["transform"]["matrix"]
+        for part_name, record in print_parts.items()
+    }
+    plate_print_matrices = {
+        part_name: transform["matrix"]
+        for part_name, transform in plate_transforms.items()
+    }
+    part_records = {
+        part_name: {
+            "print": _manifest_geometry_record(print_parts[part_name]),
+            "representationMaster": "brep",
+            "semantic": _manifest_geometry_record(stats),
+        }
+        for part_name, (_, stats) in normalized.items()
+    }
+    try:
+        semantic_assembly = semantic_assembly_record(
+            part_records, inputs["intent"]["sha256"], intent_data
+        )
+    except ValueError as error:
+        raise BuildInvariantError(str(error)) from error
     report = {
-        "auto_scale": False,
-        "assembly": {
-            "max_overlap_mm3": float(max_overlap_mm3),
-            "shape": assembly_stats,
+        "artifactMatrix": {
+            "parts": {
+                part_name: {
+                    "glb": "required",
+                    "step": "required",
+                    "stl": "required",
+                    "threeMf": (
+                        "required" if normalized_colors is not None else "not-applicable"
+                    ),
+                }
+                for part_name in normalized
+            }
         },
-        "artifacts": artifacts,
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "coordinates": {
-            "print": [
-                "stl",
-                *[f"stl:{part_name}" for part_name in normalized],
-                *(["3mf"] if normalized_colors is not None else []),
-            ],
-            "assembly": ["step:assemble"],
-            "display": ["glb:display"],
+        "artifacts": manifest_artifacts,
+        "autoScale": False,
+        "backend": "brep-assembly",
+        "backendData": {
+            "assembly": {
+                "maxOverlapMm3": float(max_overlap_mm3),
+                "shape": assembly_stats,
+            },
+            "overlapsMm3": overlaps,
+            "exportAudit": export_audit,
+            "parameters": dict(_PARAMETERS),
+            "printPlate": {
+                **_manifest_geometry_record(print_plate_stats),
+                "layout": plate_layout,
+            },
+            "semanticAssembly": semantic_assembly,
+            **color_fields,
         },
-        "coordinate_frames": {
-            "assembly-semantic": {
-                "artifacts": ["step:assemble", "glb:display"],
+        "builtAt": utc_timestamp(),
+        "coordinateFrames": {
+            "semantic": {
                 "scale": 1.0,
+                "units": "mm",
+                "up": scene_data["coordinateSystem"]["up"],
             },
             "part-print": {
-                "artifacts": [f"stl:{part_name}" for part_name in normalized],
+                "partTransforms": part_print_matrices,
                 "scale": 1.0,
-                "transforms": {
-                    part_name: record["transform"]
-                    for part_name, record in print_parts.items()
-                },
+                "units": "mm",
             },
             "plate-print": {
-                "artifacts": [
-                    "stl",
-                    *(["3mf"] if normalized_colors is not None else []),
-                ],
-                "part_transforms": plate_transforms,
+                "layout": plate_layout,
+                "partTransforms": plate_print_matrices,
+                "profileId": plate_profile.get("id"),
                 "scale": 1.0,
+                "units": "mm",
             },
         },
         "events": list(_EVENTS),
         "features": dict(_FEATURES),
-        "intent": intent,
-        "manufacturing": manufacturing,
-        "overlaps_mm3": overlaps,
-        "parameters": dict(_PARAMETERS),
+        "inputs": inputs,
+        "materialPlan": material_plan,
         "part": name,
-        "parts": {part_name: stats for part_name, (_, stats) in normalized.items()},
-        "print_parts": print_parts,
-        "print_plate": {
-            **print_plate_stats,
-            "layout": plate_layout,
-            "part_transforms": plate_transforms,
-        },
-        "schema": "evidence-cad-assembly-build/v3",
+        "parts": part_records,
+        "pass": export_audit["pass"],
+        "revision": scene_data["revision"],
+        "runId": new_run_id(),
         "scale": 1.0,
-        "source": _source_record(source_path),
-        **color_fields,
+        "schema": "evidence-a3d-build/v1",
+        "warnings": [],
     }
+    manifest_errors = validate_manifest(report)
+    if manifest_errors:
+        raise BuildInvariantError(
+            "exporter produced an invalid build manifest: "
+            + "; ".join(manifest_errors)
+        )
     report_path = output / f"{name}_report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return report
-
-
-# Old sources remain editable; new sources use the fail-closed names above.
-safe_cut = checked_cut
-safe_fillet = checked_fillet
-safe_chamfer = checked_chamfer
-measure = observe
-finalize = export_part

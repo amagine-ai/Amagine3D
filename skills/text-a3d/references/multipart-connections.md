@@ -109,6 +109,12 @@ is on negative Z and the receiver grows toward positive Z. Rigidly rotate the
 full group for side-access or bottom-access screws. The helper returns no screw
 solid; its hardware record is explicitly non-manufactured.
 
+In a semantic-scene fastener record, `receiver.minimumRootEmbedMm` is the
+minimum positive-Z depth over which the compiled receiver must contain the boss
+wall and fuse it into the receiver body. The boss never protrudes across the
+mating plane into the negative-Z cover volume. `rootOverlapMm` is not a valid
+field.
+
 ## Intent and scene records
 
 Declare the assembly target as `connection: "self-tapping-screw"`. Its

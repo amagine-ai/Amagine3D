@@ -2,6 +2,23 @@
 
 Color is a geometry and assembly decision, not a renderer decoration.
 
+The root `evidence-cad-intent/v4` document is the authority for region IDs,
+owners, colors, and any explicitly selected filament or optical transmission.
+Region IDs are globally unique. `part` names the owning physical part; it does
+not imply that a multipart model has only one region per part. Hybrid scenes
+must reproduce the exact region-ID set for every mesh part and may omit intent
+material metadata only so the compiler can propagate it. Conflicting scene
+metadata is an error. Unspecified intent material fields remain explicitly
+`proposed` in the material plan.
+
+Every material assignment is traceable through exactly one `sourceBindings[]`
+record. Declared manufactured color uses `intent-color-region` and the exact
+intent region name. A whole-part color that exists only in the mutable scene is
+proposed and uses either `scene-part-material` with the part's explicit material
+ID or `scene-part-appearance` with the real part ID when no material is bound.
+The build fails if those sources are missing, duplicated, unknown, or disagree
+with the hash-bound intent/scene.
+
 ## Region topology
 
 Use one of these interface patterns deliberately:
@@ -67,16 +84,25 @@ display visual is not part of the purge plan.
 
 `export_regions()` checks region validity, overlap, parent coverage,
 cross-checks the intent's region names/colors, exports `NAME.stl`,
-`NAME.3mf`, `NAME-assemble.step`, `NAME-display.glb`, the material plan, and
-artifact hashes. It may write hidden internal print-pose region meshes for 3MF
-packing and debugging plus semantic-pose region meshes for colored visual
-review, but they are not user deliverables.
-The default `NAME.3mf` package mode is `co_print_body`: one top-level mesh
-build item stores the named color regions with per-triangle colors and region
-metadata. Use `separate_parts` only for real separately printed components with
-physical assembly interfaces.
-`export_3mf.py` stores a shared palette, writes region metadata, and reads the
-archive XML back.
+`NAME.3mf`, `NAME.step`, `NAME-display.glb`, the material plan, and one unified
+build manifest. It also writes hidden internal print-pose and semantic-pose
+region meshes; each is hash-bound in the manifest even though it is not a user
+deliverable.
+The `NAME.3mf` package mode is `co_print_body`: every permanent material region
+is an independent closed child MeshObject with one object-level palette
+assignment. One parent ComponentsObject references exactly those regions and
+is the archive's only build item. It is one co-printed physical body, not a
+collection of separately installable parts. Per-triangle coloring is forbidden
+for this package mode. Real separately printed components use root
+`export_assembly()` and `separate_parts`; `export_regions()` rejects that mode.
+`export_3mf.py` stores a shared palette, writes exact region-to-object metadata,
+and independently imports the archive with lib3mf. Readback must prove the
+component graph, region names, object IDs, colors, closed topology, and material
+mapping. Missing metadata or an empty region inventory is an error; inspection
+never falls back to generic object inventory. Both its Python writer and CLI
+require the package mode explicitly; use `package_mode=...` in Python or
+`--package-mode co_print_body|separate_parts` on the CLI. Inspection and QA do
+not infer a missing mode from archive structure or a build-report fallback.
 `assembly_check.py` compares the expected region names/colors against what is
 actually stored in the 3MF. Optical transmission remains region metadata
 because RGB readback cannot prove real material behavior.
@@ -87,7 +113,7 @@ engraving, recess, relief, raised texture, or an intentional shallow groove.
 Do not fill an identity-bearing recess completely with a color insert if the
 STL fallback is expected to show the recess.
 
-Use `step_check.py` on `NAME-assemble.step` for OCCT-backed master validation.
+Use the root `step_check.py` on `NAME.step` for OCCT-backed master validation.
 That check proves CAD readability and shape structure; it does not prove Bambu
 print placement, display color, or support behavior.
 

@@ -145,6 +145,10 @@ class InterfaceRecipeTests(unittest.TestCase):
         self.assertAlmostEqual(evidence["cover"]["clearance_diameter_mm"], 3.4)
         self.assertAlmostEqual(evidence["receiver"]["pilot_diameter_mm"], 2.6)
         self.assertAlmostEqual(evidence["receiver"]["boss_wall_mm"], 2.45)
+        self.assertAlmostEqual(
+            evidence["receiver"]["minimum_root_embed_mm"], 0.4
+        )
+        self.assertAlmostEqual(pair.receiver_boss.bounding_box().min.Z, 0.0)
         self.assertEqual(
             evidence["screw"]["manufacturing"],
             "purchased-hardware-excluded",

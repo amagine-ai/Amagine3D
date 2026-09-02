@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { strict as assert } from 'node:assert';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,6 +27,10 @@ test('persists images under a session-scoped generated filename', async () => {
     );
 
     assert.deepEqual(await readFile(saved.path), bytes);
+    assert.equal(
+      saved.sha256,
+      createHash('sha256').update(bytes).digest('hex'),
+    );
     assert.match(
       saved.path,
       /uploads\/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93\/[0-9a-f-]+\.png$/,

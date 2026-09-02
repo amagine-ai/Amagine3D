@@ -40,8 +40,18 @@ INTERFACE_CONNECTIONS = {
 ASSEMBLY_AXES = {"+X", "+Y", "+Z", "-X", "-Y", "-Z"}
 INTENT_SCHEMA = "evidence-cad-intent/v4"
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
+FEATURE_ID_PATTERN = re.compile(
+    r"[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*"
+    r"(?:/[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*)*"
+)
 HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 MATERIAL_TRANSMISSIONS = {"opaque", "translucent", "transparent"}
+REGION_CONTINUITY = {
+    "continuous-core",
+    "not-applicable",
+    "separate-part",
+    "surface-detail",
+}
 FEATURE_KINDS = {
     "additive",
     "button",
@@ -252,7 +262,7 @@ def _validate_self_tapping_fastening(
             pair_features: list[str] = []
             for key in ("male_feature", "female_feature"):
                 feature_id = locator.get(key)
-                if not isinstance(feature_id, str) or not ID_PATTERN.fullmatch(feature_id):
+                if not isinstance(feature_id, str) or not FEATURE_ID_PATTERN.fullmatch(feature_id):
                     errors.append(f"{locator_prefix}.{key} is invalid")
                 else:
                     pair_features.append(feature_id)
@@ -295,7 +305,7 @@ def _validate_self_tapping_fastening(
         local_features: list[str] = []
         for key in required_feature_keys:
             feature_id = fastener.get(key)
-            if not isinstance(feature_id, str) or not ID_PATTERN.fullmatch(feature_id):
+            if not isinstance(feature_id, str) or not FEATURE_ID_PATTERN.fullmatch(feature_id):
                 errors.append(f"{fastener_prefix}.{key} is invalid")
             else:
                 local_features.append(feature_id)
@@ -329,6 +339,7 @@ def _validate_self_tapping_fastening(
 def validate_manufacturing(
     manufacturing,
     feature_ids: set[str] | None = None,
+    feature_owners: dict[str, str] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(manufacturing, dict):
@@ -445,7 +456,7 @@ def validate_manufacturing(
                         f"manufacturing.interfaces[{index}].features must reference modeled connector feature IDs"
                     )
                 elif not all(
-                    isinstance(item, str) and ID_PATTERN.fullmatch(item)
+                    isinstance(item, str) and FEATURE_ID_PATTERN.fullmatch(item)
                     for item in interface_features
                 ):
                     errors.append(
@@ -458,6 +469,23 @@ def validate_manufacturing(
                         "manufacturing.interfaces"
                         f"[{index}].features reference unknown feature IDs"
                     )
+                elif (
+                    feature_owners is not None
+                    and isinstance(between, list)
+                    and len(between) == 2
+                    and all(isinstance(item, str) for item in between)
+                ):
+                    wrong_owner = sorted(
+                        feature_id
+                        for feature_id in interface_features
+                        if feature_owners.get(feature_id) not in set(between)
+                    )
+                    if wrong_owner:
+                        errors.append(
+                            "manufacturing.interfaces"
+                            f"[{index}].features must be owned by a part named in "
+                            f"between: {', '.join(wrong_owner)}"
+                        )
                 if (
                     not isinstance(interface.get("acceptance"), str)
                     or not interface["acceptance"].strip()
@@ -478,24 +506,30 @@ def validate_manufacturing(
     return errors
 
 
-def validate_color_regions(color_regions, manufacturing) -> list[str]:
-    """Validate optional one-color-per-physical-part declarations.
-
-    The unified BRep multipart exporter uses these records as the intent-side
-    source for ``part_colors``.  Region names therefore match physical part
-    names exactly; arbitrary within-part color partitions remain the color
-    mode's ``export_regions`` workflow.
-    """
+def validate_color_regions(
+    color_regions,
+    manufacturing,
+    intent_part: str | None = None,
+) -> list[str]:
+    """Validate globally named material regions owned by physical parts."""
     if color_regions is None:
         return []
     errors: list[str] = []
-    if not isinstance(manufacturing, dict) or manufacturing.get("mode") != "multipart":
-        errors.append("color_regions in the unified intent require manufacturing.mode multipart")
+    if not isinstance(manufacturing, dict) or manufacturing.get("mode") not in MANUFACTURING_MODES:
+        errors.append("color_regions require a valid manufacturing.mode")
         return errors
-    if not isinstance(color_regions, list) or not color_regions:
-        return ["color_regions must be a non-empty list when declared"]
+    if not isinstance(color_regions, list) or len(color_regions) < 2:
+        return ["color_regions must contain at least two regions when declared"]
 
     names: list[str] = []
+    owners: list[str] = []
+    declared_parts = {
+        item.get("name")
+        for item in manufacturing.get("parts", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    if manufacturing.get("mode") == "single-part" and isinstance(intent_part, str):
+        declared_parts = {intent_part}
     for index, region in enumerate(color_regions):
         prefix = f"color_regions[{index}]"
         if not isinstance(region, dict):
@@ -506,15 +540,28 @@ def validate_color_regions(color_regions, manufacturing) -> list[str]:
             errors.append(f"{prefix}.name is invalid")
         else:
             names.append(name)
+        owner = region.get("part")
+        if not isinstance(owner, str) or not ID_PATTERN.fullmatch(owner):
+            errors.append(f"{prefix}.part is required")
+        elif owner not in declared_parts:
+            errors.append(f"{prefix}.part must reference the owning physical part")
+        else:
+            owners.append(owner)
         color = region.get("hex")
         if not isinstance(color, str) or not HEX_COLOR_PATTERN.fullmatch(color):
             errors.append(f"{prefix}.hex must be #RRGGBB")
-        for key in ("evidence", "acceptance"):
+        for key in ("purpose", "boundary", "evidence"):
             value = region.get(key)
-            if value is not None and (
-                not isinstance(value, str) or not value.strip()
-            ):
-                errors.append(f"{prefix}.{key} must be a non-empty string when present")
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{prefix}.{key} is required")
+        acceptance = region.get("acceptance")
+        if acceptance is not None and (
+            not isinstance(acceptance, str) or not acceptance.strip()
+        ):
+            errors.append(f"{prefix}.acceptance must be a non-empty string when present")
+        continuity = region.get("continuity")
+        if continuity is not None and continuity not in REGION_CONTINUITY:
+            errors.append(f"{prefix}.continuity is invalid")
         material = region.get("material")
         if material is not None and not isinstance(material, dict):
             errors.append(f"{prefix}.material must be an object")
@@ -532,13 +579,6 @@ def validate_color_regions(color_regions, manufacturing) -> list[str]:
 
     if len(names) != len(set(names)):
         errors.append("color region names must be unique")
-    declared_parts = {
-        item.get("name")
-        for item in manufacturing.get("parts", [])
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
-    }
-    if declared_parts and set(names) != declared_parts:
-        errors.append("color region names must exactly match multipart part names")
     return errors
 
 
@@ -590,6 +630,90 @@ def validate_feature_semantics(feature: dict, index: int) -> list[str]:
     return errors
 
 
+def validate_feature_ownership(
+    features,
+    manufacturing,
+    intent_part: str | None,
+) -> tuple[list[str], dict[str, str]]:
+    """Make feature ownership explicit for multipart intent v4 contracts."""
+
+    errors: list[str] = []
+    owners: dict[str, str] = {}
+    if not isinstance(features, list) or not isinstance(manufacturing, dict):
+        return errors, owners
+    mode = manufacturing.get("mode")
+    part_names = {
+        item.get("name")
+        for item in manufacturing.get("parts", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    for index, feature in enumerate(features):
+        if not isinstance(feature, dict):
+            continue
+        feature_id = feature.get("id")
+        owner = feature.get("part")
+        if mode == "multipart":
+            if not isinstance(owner, str) or not ID_PATTERN.fullmatch(owner):
+                errors.append(f"features[{index}].part is required for multipart")
+                continue
+            if part_names and owner not in part_names:
+                errors.append(
+                    f"features[{index}].part must reference manufacturing.parts"
+                )
+                continue
+        elif mode == "single-part":
+            if owner is None:
+                owner = intent_part
+            elif owner != intent_part:
+                errors.append(
+                    f"features[{index}].part must equal the top-level intent part"
+                )
+                continue
+        if (
+            isinstance(feature_id, str)
+            and feature_id.strip()
+            and isinstance(owner, str)
+            and owner.strip()
+        ):
+            owners[feature_id] = owner
+    return errors, owners
+
+
+def physical_part_names(data: dict) -> set[str]:
+    """Return the physical part identity set of a validated v4 intent."""
+    manufacturing = data.get("manufacturing")
+    if not isinstance(manufacturing, dict):
+        return set()
+    if manufacturing.get("mode") == "single-part":
+        part = data.get("part")
+        return {part} if isinstance(part, str) and part else set()
+    if manufacturing.get("mode") == "multipart":
+        return {
+            item["name"]
+            for item in manufacturing.get("parts", [])
+            if isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item["name"]
+        }
+    return set()
+
+
+def feature_owner_map(data: dict) -> dict[str, str]:
+    """Return feature-to-physical-part ownership for a validated v4 intent."""
+    parts = physical_part_names(data)
+    single_owner = next(iter(parts)) if len(parts) == 1 else None
+    owners: dict[str, str] = {}
+    for feature in data.get("features", []):
+        if not isinstance(feature, dict) or not isinstance(feature.get("id"), str):
+            continue
+        owner = feature.get("part")
+        if owner is None:
+            owner = single_owner
+        if isinstance(owner, str):
+            owners[feature["id"]] = owner
+    return owners
+
+
 def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     if not isinstance(data, dict):
         return ["intent must contain a JSON object"]
@@ -634,7 +758,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(f"features[{index}].{key} is required")
             feature_id = feature.get("id")
             if isinstance(feature_id, str) and feature_id.strip():
-                if not ID_PATTERN.fullmatch(feature_id):
+                if not FEATURE_ID_PATTERN.fullmatch(feature_id):
                     errors.append(f"features[{index}].id is invalid")
                 ids.append(feature_id)
             errors.extend(validate_feature_semantics(feature, index))
@@ -647,13 +771,35 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     )
 
     manufacturing = data.get("manufacturing")
-    errors.extend(validate_manufacturing(manufacturing, feature_ids))
-    errors.extend(validate_color_regions(data.get("color_regions"), manufacturing))
+    ownership_errors, feature_owners = validate_feature_ownership(
+        features,
+        manufacturing,
+        data.get("part") if isinstance(data.get("part"), str) else None,
+    )
+    errors.extend(ownership_errors)
+    errors.extend(
+        validate_manufacturing(
+            manufacturing,
+            feature_ids,
+            feature_owners,
+        )
+    )
+    errors.extend(
+        validate_color_regions(
+            data.get("color_regions"),
+            manufacturing,
+            data.get("part") if isinstance(data.get("part"), str) else None,
+        )
+    )
+    if data.get("color_regions") is not None and not isinstance(
+        data.get("palette_reduction"), dict
+    ):
+        errors.append("palette_reduction decision is required when color_regions are declared")
 
     visual = data.get("visual")
-    if not isinstance(visual, dict) or not isinstance(visual.get("required"), bool):
-        errors.append("visual.required must be boolean")
-    elif visual["required"]:
+    if not isinstance(visual, dict) or visual.get("required") is not True:
+        errors.append("visual.required must be true for CAD work")
+    else:
         if visual.get("reference_view") not in {
             "bottom", "front", "isometric", "side", "top",
         }:
@@ -701,11 +847,19 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 "printability.critical_features must reference declared feature IDs"
             )
         if data.get("color_regions") is not None:
-            package_mode = printability.get("print_package_mode", "separate_parts")
-            if package_mode != "separate_parts":
+            manufacturing_mode = (
+                manufacturing.get("mode") if isinstance(manufacturing, dict) else None
+            )
+            package_mode = printability.get("print_package_mode")
+            expected_package_mode = (
+                "co_print_body"
+                if manufacturing_mode == "single-part"
+                else "separate_parts"
+            )
+            if package_mode != expected_package_mode:
                 errors.append(
-                    "multipart part colors require printability.print_package_mode "
-                    "separate_parts"
+                    f"{manufacturing_mode} colors require "
+                    f"printability.print_package_mode {expected_package_mode}"
                 )
     return errors
 

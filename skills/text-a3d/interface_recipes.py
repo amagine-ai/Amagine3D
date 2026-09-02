@@ -345,7 +345,7 @@ def self_tapping_screw_pair(
     pilot_tip_clearance_mm: float = 0.8,
     closed_end_mm: float = 1.2,
     minimum_boss_wall_mm: float = 1.8,
-    boss_root_overlap_mm: float = 0.4,
+    minimum_root_embed_mm: float = 0.4,
     head_recess_diameter_mm: float | None = None,
     head_recess_depth_mm: float | None = None,
     minimum_cover_land_mm: float = 0.8,
@@ -374,7 +374,7 @@ def self_tapping_screw_pair(
     )
     closed_end = _positive("closed_end_mm", closed_end_mm)
     minimum_wall = _positive("minimum_boss_wall_mm", minimum_boss_wall_mm)
-    root_overlap = _non_negative("boss_root_overlap_mm", boss_root_overlap_mm)
+    root_embed = _positive("minimum_root_embed_mm", minimum_root_embed_mm)
     minimum_cover_land = _positive(
         "minimum_cover_land_mm", minimum_cover_land_mm
     )
@@ -440,9 +440,16 @@ def self_tapping_screw_pair(
         align=(Align.CENTER, Align.CENTER, Align.MIN),
     )
     boss_height = pilot_depth + closed_end
-    receiver_boss = Pos(0, 0, -root_overlap) * Cylinder(
+    if root_embed > boss_height:
+        raise InterfaceRecipeError(
+            "minimum_root_embed_mm cannot exceed the receiver boss height"
+        )
+    # The mating plane separates the two printed parts.  The receiver boss may
+    # not cross into the negative-Z cover volume; its positive-Z root is fused
+    # into the receiver body and verified after compilation instead.
+    receiver_boss = Cylinder(
         boss_outer / 2,
-        boss_height + root_overlap,
+        boss_height,
         align=(Align.CENTER, Align.CENTER, Align.MIN),
     )
     under_head_cover_stack = cover_thickness - (recess_depth or 0.0)
@@ -488,7 +495,7 @@ def self_tapping_screw_pair(
                 "boss_height_mm": boss_height,
                 "boss_wall_mm": boss_wall,
                 "closed_end_mm": closed_end,
-                "root_overlap_mm": root_overlap,
+                "minimum_root_embed_mm": root_embed,
             },
             "calibration": {
                 "pilot_to_nominal_ratio": pilot / nominal,

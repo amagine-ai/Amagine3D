@@ -1,1 +1,1 @@
-"""Namespaced runtime for the unified text-a3d color manufacturing mode."""
+"""Internal manufactured-color backend for the unified text-a3d workflow."""

@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -15,6 +16,8 @@ import trimesh
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "text-a3d"
+if str(SKILL) not in sys.path:
+    sys.path.insert(0, str(SKILL))
 
 
 def load_module(name: str, path: Path):
@@ -28,6 +31,7 @@ def load_module(name: str, path: Path):
 plate_layout = load_module("plate_layout_regression", SKILL / "plate_layout.py")
 cad_helpers = load_module("cad_helpers_plate_regression", SKILL / "cad_helpers.py")
 bambu_profile = load_module("bambu_profile_plate_regression", SKILL / "bambu_profile.py")
+from tests.python.intent_fixture import write_intent as write_fixture_intent  # noqa: E402
 
 
 COORDINATE_SYSTEM = {
@@ -41,6 +45,47 @@ COORDINATE_SYSTEM = {
     "y_positive": "back",
     "z_positive": "top",
 }
+
+
+def _write_scene(root: Path, intent_path: Path) -> Path:
+    scene_path = root / "shelf-case_scene.json"
+    scene_path.write_text(json.dumps({
+        "schema": "evidence-semantic-scene/v1",
+        "revision": "plate-layout-test-001",
+        "intentRef": {
+            "path": str(intent_path),
+            "schema": "evidence-cad-intent/v4",
+            "sha256": sha256(intent_path.read_bytes()).hexdigest(),
+        },
+        "units": "mm",
+        "coordinateSystem": {"handedness": "right", "up": "Z"},
+        "materials": [],
+        "parts": [
+            {"id": name, "representationMaster": "brep"}
+            for name in ("large", "medium")
+        ],
+        "nodes": [
+            {
+                "id": feature_id,
+                "partId": owner,
+                "featureId": feature_id,
+                "role": "solid",
+                "operation": "union",
+                "recipe": {
+                    "kind": "roundedBox",
+                    "parameters": {"sizeMm": [1, 1, 1], "radiusMm": 0.0},
+                },
+            }
+            for feature_id, owner in (
+                ("large-envelope", "large"),
+                ("large-face", "large"),
+                ("medium-envelope", "medium"),
+                ("medium-face", "medium"),
+            )
+        ],
+        "interfaces": [],
+    }), encoding="utf-8")
+    return scene_path
 
 
 class PlateLayoutAlgorithmTests(unittest.TestCase):
@@ -127,11 +172,7 @@ class ExportAssemblyPlateLayoutTests(unittest.TestCase):
             profile_path.write_text(
                 bambu_profile.serialize(profile), encoding="utf-8"
             )
-            intent = {
-                "schema": "evidence-cad-intent/v4",
-                "part": "shelf-case",
-                "coordinate_system": COORDINATE_SYSTEM,
-                "manufacturing": {
+            manufacturing = {
                     "mode": "multipart",
                     "parts": [
                         {"name": "large", "role": "shell", "acceptance": "solid"},
@@ -149,16 +190,25 @@ class ExportAssemblyPlateLayoutTests(unittest.TestCase):
                             "acceptance": "flat faces align for assembly",
                         }
                     ],
-                },
-                "printability": {
-                    "profile": {
-                        "path": str(profile_path),
-                        "sha256": sha256(profile_path.read_bytes()).hexdigest(),
-                    }
-                },
             }
-            intent_path = root / "shelf-case_intent.json"
+            intent_path, intent = write_fixture_intent(
+                root,
+                part="shelf-case",
+                feature_owners={
+                    "large-envelope": "large",
+                    "large-face": "large",
+                    "medium-envelope": "medium",
+                    "medium-face": "medium",
+                },
+                manufacturing=manufacturing,
+                dimensions_mm=(290.0, 70.0, 5.0),
+            )
+            intent["printability"]["profile"] = {
+                "path": str(profile_path),
+                "sha256": sha256(profile_path.read_bytes()).hexdigest(),
+            }
             intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            scene_path = _write_scene(root, intent_path)
 
             large = Box(100, 70, 5, align=(Align.MIN, Align.MIN, Align.MIN))
             medium = Pos(200, 0, 0) * Box(
@@ -178,17 +228,18 @@ class ExportAssemblyPlateLayoutTests(unittest.TestCase):
                     "shelf-case",
                     str(root),
                     intent_path=str(intent_path),
+                    scene_path=str(scene_path),
                     source_path=__file__,
                 )
 
-            layout = report["print_plate"]["layout"]
+            layout = report["coordinateFrames"]["plate-print"]["layout"]
             self.assertEqual(layout["strategy"], "deterministic-bbox-shelf")
             self.assertEqual(layout["bed"]["size_mm"], [180.0, 180.0])
             self.assertEqual(layout["bbox_overlaps"], [])
             self.assertEqual(report["scale"], 1.0)
             self.assertTrue(all(
-                transform["scale"] == 1.0
-                for transform in report["print_plate"]["part_transforms"].values()
+                len(transform) == 4 and transform[3] == [0.0, 0.0, 0.0, 1.0]
+                for transform in report["coordinateFrames"]["plate-print"]["partTransforms"].values()
             ))
 
             plate_mesh = trimesh.load(root / "shelf-case.stl", force="mesh")

@@ -18,7 +18,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/Node.js-20.19%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 20.19+" />
+  <img src="https://img.shields.io/badge/Node.js-22.19.0%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 22.19.0+" />
   <img src="https://img.shields.io/badge/Vite-7.3.6-646CFF.svg?logo=vite&amp;logoColor=white" alt="Vite 7.3.6" />
   <img src="https://img.shields.io/badge/Runtime-build123d%20%2B%20OCP-5B5BD6.svg" alt="build123d + OCP" />
 </p>
@@ -33,13 +33,13 @@
 
 ## From Requirements to Editable Hardware Structures
 
-Parametric CAD is the first 3D capability delivered in Amagine3D. It currently focuses on intelligent hardware enclosures and related structures, creating complete parametric designs from natural-language requirements, reference images, and dimensions.
+Amagine3D currently focuses on printable intelligent-hardware enclosures and related structures, creating complete designs from natural-language requirements, reference images, dimensions, and existing geometry.
 
 The design process starts with internal components, arranging mounts and interfaces before creating the enclosure, controls, and thermal-management structures. When a design needs multiple parts, covers, hinges, or latches are developed together with assembly clearances and printing tolerances. For rigid mechanisms such as hinged or sliding covers, the system can also check collisions and operating clearances along a defined motion path.
 
-Every generation preserves the complete Python and build123d source code. Key dimensions appear in the workbench, where they can be adjusted and written back to the source without calling the model again. Single-color designs can be exported as STEP and STL, while multi-color designs can produce color-aware 3MF files and separate STL files for each color region.
+Every generation records one semantic scene containing its parts, features, interfaces, materials, and representation masters. Dimension-driven parts retain editable Python and build123d source and export genuine STEP; freeform mesh-master parts retain their canonical mesh instead of pretending to be parametric CAD. The same workflow emits STL, display GLB, and a profile-bound 3MF package when required, including permanent color regions inside a physical part.
 
-Behind the scenes, the 3D-native Agent first organizes the requirements into a design brief, then runs the source in the browser geometry runtime to build the actual model. The Agent can see the model's real dimensions and receives check results for part connectivity, interference, and motion. Exported model files are read back as well. It uses these results to decide whether to keep revising or accept the current version.
+Behind the scenes, the 3D-native Agent turns the request into an immutable intent and one mutable semantic scene. Internal BRep, mesh, mixed-geometry, and color backends compile that scene into one evidence contract. The Agent sees measured dimensions and checks for feature ownership, print orientation, plate fit, connectivity, interference, and exported-file readback, then renders and reads the latest result before accepting it.
 
 <a id="example"></a>
 
@@ -96,13 +96,13 @@ Each iteration of the autonomous inner loop starts from the current design state
 
 Once a candidate design meets the checks for the current task, it enters the commit stage. The system compares the candidate with the user constraints and the previous design version. If the checks pass, the candidate is saved as the new baseline, together with its source code and manufacturing files. If the change introduces a new problem, the system preserves the previous result and lets the Agent continue correcting the candidate. Changes to confirmed structures or overwrites of existing artifacts can require user approval.
 
-The current public release implements the first stage of this process with parametric CAD. The Agent generates build123d source code from a design brief, builds the geometry in the browser, and then revises or accepts the candidate according to the check results. For now, source code remains the primary design state, and tasks advance through predefined stages. The next stage will record parts and their spatial relationships directly in a continuously updated 3D world-model state. The Agent will then be able to modify local structures or switch geometry representations within that state without reconstructing the entire design from conversation and source code each time.
+The current release uses a semantic scene as that design state. It records physical parts, feature ownership, interfaces, materials, representation masters, and artifact bindings while keeping the original intent immutable. A part can be BRep-master, mesh-master, or participate in a mixed assembly; these are internal compiler choices rather than separate Agent workflows. Every backend publishes the same build-report schema and explicit semantic-to-print coordinate transforms.
 
 ## Beyond CAD
 
 CAD is the starting point for Amagine3D. Complete hardware creation also requires an understanding of physical components, spatial relationships, and existing assets, so 3D information from different sources can continue flowing between design and manufacturing.
 
-In the next stage, Amagine3D will progressively build a shared 3D context for each hardware project. The system will know whether a model represents a screen, battery, PCB, or connector. It will understand how the component is mounted, which spaces must remain clear, and which openings and enclosure dimensions it affects, then update related structures when the component changes.
+Amagine3D will continue enriching this shared 3D context with component semantics. The system should know whether a model represents a screen, battery, PCB, or connector, how it is mounted, which spaces must remain clear, and which openings and enclosure dimensions it affects, then update related structures when the component changes.
 
 The paths into 3D will also expand from natural-language generation to meshes, images, scans, and point clouds. Precise structures can continue to use parametric CAD, exterior forms can come from generative meshes, and physical objects can enter the project through 3D reconstruction. The Agent will choose the representation that fits the task while sharing parts, scale, position, and design intent across them.
 
@@ -114,7 +114,7 @@ Our goal is to let a hardware concept begin with reference images, physical comp
 
 ### Requirements
 
-- Node.js 20.19 or newer
+- Node.js 22.19.0 or newer
 - Python 3.10 through 3.13
 - npm
 - A modern desktop browser
@@ -150,7 +150,8 @@ TAVILY_API_KEY=... # optional; enables the Web refs control
 
 PORT=6161
 WEB_PORT=6160
-AGENT_RUN_TIMEOUT_MS=1800000
+AGENT_RUN_IDLE_TIMEOUT_MS=1800000
+AGENT_RUN_HARD_TIMEOUT_MS=7200000
 ```
 
 These values are read only by the local Express server. When
@@ -159,7 +160,12 @@ Enabling it for a turn requires Amagine3D Agent to search before CAD mutations,
 returns ranked dimension/specification sources, and passes up to three
 available reference images to the multimodal model. Missing images do not block
 the CAD Skill workflow. Do not expose API keys through client-side environment
-variables or commit `.env`.
+variables or commit `.env`. The idle timeout is refreshed by non-empty model
+output. Each active tool keeps its own start/output/end activity deadline, so a
+noisy parallel tool cannot hide another tool that has been silent for 30 minutes.
+The hard timeout is an absolute per-run safety cap. A CAD run that has not
+started its first compiler invocation after ten minutes receives one steering
+reminder; it does not fail the run or advance a server-owned workflow stage.
 
 ## System Architecture
 
@@ -179,8 +185,8 @@ Amagine3D/
 │   └── app.ts, index.ts             Express startup, static hosting, and runtime wiring
 ├── packages/a3d-runtime/src/          3D-native Agent model/session adapter, skill loading, and write guards
 ├── skills/
-│   └── text-a3d/                  Unified single-material and color-aware CAD workflow
-│       └── color/MODE.md          Internal color-region, palette, and 3MF mode
+│   └── text-a3d/                  Unified semantic-scene CAD workflow and compilers
+│       └── color/BACKEND.md       Internal color-region, material, and 3MF backend
 ├── bundled-projects/                  Read-only example projects shown in the workbench
 ├── workspace/sessions/<sessionId>/   Generated source, models, reports, and previews
 ├── .amagine-state/                   Agent sessions, uploads, and local runtime state
@@ -188,18 +194,18 @@ Amagine3D/
 └── tests/                             Server, runtime, artifact, and UI-logic tests
 ```
 
-The Agent runtime exposes only the `text-a3d` skill. It selects
-`single-material` or `color` mode internally from permanent colors on
-manufactured geometry; non-manufactured display content does not trigger a
-color print by itself. Both implementations are colocated under
-`skills/text-a3d/`; the color runtime, examples, and references live under
-`skills/text-a3d/color/` and have no independent skill manifest.
+The Agent runtime exposes only the `text-a3d` skill and one semantic-scene
+workflow. Each physical part declares a BRep or mesh representation master;
+internal compilers handle mixed geometry, permanent color regions, material
+planning, and 3MF packaging. Display-only content never enters manufacturing
+geometry. Color backend utilities live under `skills/text-a3d/color/` and have
+no independent intent contract or skill manifest.
 
 Each Agent session uses its own workspace. CAD scripts run with the server-managed Python environment, while the browser renders generated models with Three.js. Model credentials remain on the server. For more detail, see the [threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
 
 ## Project Status
 
-Amagine3D is under active development. The current public release focuses on single-color and multi-color parametric CAD for intelligent hardware enclosures. The complete workflow has been tested in desktop Chrome and Edge.
+Amagine3D is under active development. The current public release focuses on single- and multi-color printable geometry that combines parametric mechanical structure with freeform mesh surfaces. The complete workflow has been tested in desktop Chrome and Edge.
 
 ## Contributing
 

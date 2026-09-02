@@ -20,28 +20,15 @@ if str(SKILL) not in sys.path:
 
 import scene_contract  # noqa: E402
 import shape_consistency  # noqa: E402
-
-
-def _intent_ref(root: Path) -> dict:
-    path = root / "device_intent.json"
-    path.write_text(
-        json.dumps({"schema": "evidence-cad-intent/v4", "part": "device"}),
-        encoding="utf-8",
-    )
-    return {
-        "path": path.name,
-        "schema": "evidence-cad-intent/v4",
-        "sha256": sha256(path.read_bytes()).hexdigest(),
-    }
+from tests.python.intent_fixture import bind_scene_intent  # noqa: E402
 
 
 def _scene(root: Path) -> dict:
-    return {
+    scene = {
         "schema": "evidence-semantic-scene/v1",
         "revision": "rev-001",
-        "intentRef": _intent_ref(root),
         "units": "mm",
-        "coordinateSystem": {"handedness": "right", "up": "Y"},
+        "coordinateSystem": {"handedness": "right", "up": "Z"},
         "parts": [
             {"id": "base", "representationMaster": "brep"},
             {"id": "button", "representationMaster": "mesh"},
@@ -88,8 +75,15 @@ def _scene(root: Path) -> dict:
                 "operation": "none",
                 "physicalFeatureRef": "button-guide",
                 "recipe": {
-                    "kind": "darkAperture",
-                    "parameters": {"diameterMm": 3.35},
+                    "kind": "displayComponent",
+                    "parameters": {
+                        "sourceMesh": "guide-appearance.ply",
+                        "appearance": {
+                            "baseColor": "#111417",
+                            "metallic": 0.0,
+                            "roughness": 0.28,
+                        },
+                    },
                 },
             },
         ],
@@ -116,6 +110,26 @@ def _scene(root: Path) -> dict:
             }
         ],
     }
+    manufacturing = {
+        "mode": "multipart",
+        "parts": [
+            {"name": "base", "role": "housing", "acceptance": "base remains physical"},
+            {"name": "button", "role": "control", "acceptance": "button remains physical"},
+        ],
+        "interfaces": [
+            {
+                "id": "button-fit",
+                "between": ["button", "base"],
+                "connection": "pin-socket",
+                "assembly_axis": "+Z",
+                "clearance_mm": 0.35,
+                "engagement_mm": 3.0,
+                "features": ["button-stem", "button-guide"],
+                "acceptance": "button stem enters its guide",
+            }
+        ],
+    }
+    return bind_scene_intent(root, scene, manufacturing=manufacturing)
 
 
 def _self_tapping_scene(root: Path) -> dict:
@@ -227,14 +241,13 @@ def _self_tapping_scene(root: Path) -> dict:
                 "engagementMm": 6.0,
                 "closedEndMm": 1.2,
                 "minimumBossWallMm": 1.8,
-                "rootOverlapMm": 0.4,
+                "minimumRootEmbedMm": 0.4,
                 "tipClearanceMm": 0.8,
             },
         })
-    return {
+    scene = {
         "schema": "evidence-semantic-scene/v1",
         "revision": "rev-fastener-001",
-        "intentRef": _intent_ref(root),
         "units": "mm",
         "coordinateSystem": {"handedness": "right", "up": "Z"},
         "parts": [
@@ -268,6 +281,60 @@ def _self_tapping_scene(root: Path) -> dict:
             },
         ],
     }
+    intent_fasteners = [
+        {
+            "id": item["id"],
+            "clearance_feature": item["cover"]["featureId"],
+            "pilot_feature": item["receiver"]["featureId"],
+            "boss_feature": item["receiver"]["bossFeatureId"],
+        }
+        for item in fasteners
+    ]
+    interface_features = ["base-collar", "housing-socket", "base-shell"] + [
+        feature
+        for item in intent_fasteners
+        for feature in (
+            item["clearance_feature"],
+            item["pilot_feature"],
+            item["boss_feature"],
+        )
+    ]
+    manufacturing = {
+        "mode": "multipart",
+        "parts": [
+            {"name": "housing", "role": "housing", "acceptance": "one housing"},
+            {"name": "base", "role": "base", "acceptance": "one service base"},
+        ],
+        "interfaces": [
+            {
+                "id": "housing-base-service-joint",
+                "between": ["base", "housing"],
+                "connection": "self-tapping-screw",
+                "assembly_axis": "+Y",
+                "clearance_mm": 0.4,
+                "engagement_mm": 6.0,
+                "features": interface_features,
+                "acceptance": "two screw axes and a locator retain the base",
+                "fastening": {
+                    "screw_family": "M3 plastic thread-forming/self-tapping",
+                    "nominal_diameter_mm": 3.0,
+                    "pilot_diameter_mm": 2.6,
+                    "clearance_diameter_mm": 3.4,
+                    "boss_outer_diameter_mm": 7.5,
+                    "closed_end_mm": 1.2,
+                    "locator_pairs": [
+                        {
+                            "id": "housing-base-locator",
+                            "male_feature": "base-collar",
+                            "female_feature": "housing-socket",
+                        }
+                    ],
+                    "fasteners": intent_fasteners,
+                },
+            }
+        ],
+    }
+    return bind_scene_intent(root, scene, manufacturing=manufacturing)
 
 
 class SemanticSceneContractTests(unittest.TestCase):
@@ -276,6 +343,87 @@ class SemanticSceneContractTests(unittest.TestCase):
             root = Path(directory)
             data = _scene(root)
             self.assertEqual(scene_contract.validate(data, root), [])
+
+    def test_referenced_intent_must_pass_the_complete_v4_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            intent_path = root / data["intentRef"]["path"]
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            intent["visual"]["required"] = False
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("intentRef: visual.required must be true" in item for item in errors),
+                errors,
+            )
+
+    def test_scene_parts_and_physical_features_are_hard_bound_to_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            data["parts"].append({"id": "unrelated", "representationMaster": "mesh"})
+            data["nodes"].append({
+                "id": "unrelated-detail",
+                "partId": "unrelated",
+                "featureId": "unrelated-detail",
+                "role": "solid",
+                "operation": "union",
+                "recipe": {"kind": "roundedBox", "parameters": {"sizeMm": [1, 1, 1]}},
+            })
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(any("scene parts must exactly match" in item for item in errors), errors)
+            self.assertTrue(any("featureId is not declared" in item for item in errors), errors)
+
+            data = _scene(root)
+            data["nodes"][0]["partId"] = "button"
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("must match immutable intent owner 'base'" in item for item in errors),
+                errors,
+            )
+
+    def test_display_reference_must_share_the_intent_feature_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            data["nodes"][3]["partId"] = "button"
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any(
+                    "physicalFeatureRef 'button-guide'" in item
+                    and "intent owner 'base'" in item
+                    for item in errors
+                ),
+                errors,
+            )
+
+    def test_single_part_intent_maps_to_exactly_its_top_level_part(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scene = {
+                "schema": "evidence-semantic-scene/v1",
+                "revision": "single-part-001",
+                "units": "mm",
+                "coordinateSystem": {"handedness": "right", "up": "Z"},
+                "parts": [{"id": "device", "representationMaster": "mesh"}],
+                "nodes": [{
+                    "id": "device-shell",
+                    "partId": "device",
+                    "featureId": "device-shell",
+                    "role": "solid",
+                    "operation": "union",
+                    "recipe": {"kind": "roundedBox", "parameters": {"sizeMm": [1, 1, 1]}},
+                }],
+                "interfaces": [],
+            }
+            bind_scene_intent(root, scene, part="device")
+            self.assertEqual(scene_contract.validate(scene, root), [])
+            scene["parts"][0]["id"] = "unrelated"
+            scene["nodes"][0]["partId"] = "unrelated"
+            errors = scene_contract.validate(scene, root)
+            self.assertTrue(any("expected ['device']" in item for item in errors), errors)
 
     def test_rejects_role_drift_proxy_drift_and_interface_arithmetic_drift(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -306,9 +454,13 @@ class SemanticSceneContractTests(unittest.TestCase):
             text = "\n".join(errors)
             self.assertIn("physicalFeatureRef is required", text)
             self.assertIn("sourceMesh is required", text)
+            self.assertIn("appearance is required", text)
 
             display["physicalFeatureRef"] = "base-shell"
             display["recipe"]["parameters"]["sourceMesh"] = "screen-plane.ply"
+            display["recipe"]["parameters"]["appearance"] = {
+                "baseColor": "#111417"
+            }
             errors = scene_contract.validate(data, root)
             self.assertTrue(
                 any("displayComponent must reference a cutter" in item for item in errors),
@@ -337,6 +489,24 @@ class SemanticSceneContractTests(unittest.TestCase):
             }
             errors = scene_contract.validate(data, root)
             self.assertTrue(any("axis 0 must have unit scale" in item for item in errors))
+
+    def test_brep_step_is_optional_in_source_scene_but_required_when_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            self.assertEqual(scene_contract.validate(data, root), [])
+            data["parts"][0]["artifacts"] = {
+                "manufacturingStl": {
+                    "path": "base.stl",
+                    "revision": "rev-001",
+                    "scale": 1.0,
+                }
+            }
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any("masterStep is required once a brep part is bound" in item for item in errors),
+                errors,
+            )
 
     def test_self_tapping_scene_uses_one_axis_for_each_hole_pair(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -392,6 +562,38 @@ class SemanticSceneContractTests(unittest.TestCase):
             data["interfaces"][0]["locatorInterfaceIds"].append(
                 "housing-base-locator-right"
             )
+            intent_path = root / data["intentRef"]["path"]
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            intent["features"].extend([
+                {
+                    "id": "base-pin-right",
+                    "part": "base",
+                    "kind": "detail",
+                    "evidence": "fixture adds a second locator pin",
+                    "acceptance": "scene binds the pin to the base",
+                },
+                {
+                    "id": "housing-pin-socket-right",
+                    "part": "housing",
+                    "kind": "detail",
+                    "evidence": "fixture adds a second locator socket",
+                    "acceptance": "scene binds the socket to the housing",
+                },
+            ])
+            fastening = intent["manufacturing"]["interfaces"][0]["fastening"]
+            fastening["locator_pairs"].append({
+                "id": "housing-base-locator-right",
+                "male_feature": "base-pin-right",
+                "female_feature": "housing-pin-socket-right",
+            })
+            intent["manufacturing"]["interfaces"][0]["features"].extend(
+                ["base-pin-right", "housing-pin-socket-right"]
+            )
+            intent["printability"]["critical_features"].extend(
+                ["base-pin-right", "housing-pin-socket-right"]
+            )
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
             self.assertEqual(scene_contract.validate(data, root), [])
 
             data["interfaces"][0]["locatorInterfaceIds"].append("missing-locator")
@@ -485,46 +687,7 @@ class SemanticSceneContractTests(unittest.TestCase):
             root = Path(directory)
             data = _self_tapping_scene(root)
             intent_path = root / data["intentRef"]["path"]
-            intent_fasteners = []
-            for side in ("left", "right"):
-                intent_fasteners.append({
-                    "id": f"side-{side}",
-                    "clearance_feature": f"base-clearance-{side}",
-                    "pilot_feature": f"housing-pilot-{side}",
-                    "boss_feature": f"housing-boss-{side}",
-                })
-            intent = {
-                "schema": "evidence-cad-intent/v4",
-                "part": "device",
-                "manufacturing": {
-                    "mode": "multipart",
-                    "interfaces": [
-                        {
-                            "id": "housing-base-service-joint",
-                            "connection": "self-tapping-screw",
-                            "engagement_mm": 6.0,
-                            "fastening": {
-                                "screw_family": "M3 plastic thread-forming/self-tapping",
-                                "nominal_diameter_mm": 3.0,
-                                "pilot_diameter_mm": 2.6,
-                                "clearance_diameter_mm": 3.4,
-                                "boss_outer_diameter_mm": 7.5,
-                                "closed_end_mm": 1.2,
-                                "locator_pairs": [
-                                    {
-                                        "id": "housing-base-locator",
-                                        "male_feature": "base-collar",
-                                        "female_feature": "housing-socket",
-                                    }
-                                ],
-                                "fasteners": intent_fasteners,
-                            },
-                        }
-                    ],
-                },
-            }
-            intent_path.write_text(json.dumps(intent), encoding="utf-8")
-            data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
             self.assertEqual(scene_contract.validate(data, root), [])
 
             locator_pairs = intent["manufacturing"]["interfaces"][0]["fastening"][
@@ -542,7 +705,7 @@ class SemanticSceneContractTests(unittest.TestCase):
 
             intent["manufacturing"]["interfaces"][0]["fastening"][
                 "locator_pairs"
-            ][0]["male_feature"] = "housing-socket"
+            ][0]["male_feature"] = "base-shell"
             intent_path.write_text(json.dumps(intent), encoding="utf-8")
             data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
             errors = scene_contract.validate(data, root)
@@ -594,8 +757,13 @@ class ShapeConsistencyTests(unittest.TestCase):
             body = trimesh.creation.box(extents=[10, 8, 6])
             glb = root / "device.glb"
             stl = root / "base.stl"
+            step = root / "base.step"
             self._write_physical_glb(glb, body)
             body.export(stl)
+            step.write_text(
+                "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n",
+                encoding="ascii",
+            )
 
             data = _scene(root)
             data["parts"][0]["artifacts"] = {
@@ -609,6 +777,12 @@ class ShapeConsistencyTests(unittest.TestCase):
                     "path": stl.name,
                     "revision": "rev-001",
                     "scale": 1.0,
+                },
+                "masterStep": {
+                    "path": step.name,
+                    "revision": "rev-001",
+                    "scale": 1.0,
+                    "sha256": sha256(step.read_bytes()).hexdigest(),
                 },
             }
             report = shape_consistency.compare_manifest(

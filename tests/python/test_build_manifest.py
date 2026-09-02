@@ -1,0 +1,610 @@
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SKILL = ROOT / "skills" / "text-a3d"
+if str(SKILL) not in sys.path:
+    sys.path.insert(0, str(SKILL))
+
+from build_check import audit  # noqa: E402
+from build_manifest import (  # noqa: E402
+    artifact_record,
+    bind_inputs,
+    identity_matrix,
+    semantic_assembly_record,
+    validate_manifest,
+)
+from tests.python.intent_fixture import (  # noqa: E402
+    intent_ref,
+    write_intent,
+)
+from material_plan import (  # noqa: E402
+    build_material_plan,
+    material_record,
+    source_binding,
+    validate_material_plan,
+    validate_material_sources,
+)
+
+
+def _valid_report(root: Path) -> dict:
+    geometry = {
+        "bodyCount": 1,
+        "boundsMm": {"max": [1, 1, 1], "min": [0, 0, 0], "size": [1, 1, 1]},
+        "isVolume": True,
+        "valid": True,
+        "volumeMm3": 1,
+    }
+    inputs = {}
+    for name, schema in (
+        ("intent", "evidence-cad-intent/v4"),
+        ("scene", "evidence-semantic-scene/v1"),
+        ("profile", "evidence-bambu-printer-profile/v1"),
+    ):
+        path = root / f"{name}.json"
+        payload = {"schema": schema}
+        if name == "intent":
+            payload["dimensions_mm"] = {
+                axis: {"confidence": "high", "source": "user", "value": 1}
+                for axis in "xyz"
+            }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        inputs[name] = {
+            **artifact_record(path),
+            "schema": schema,
+            **({"revision": "rev-1"} if name == "scene" else {}),
+        }
+    source = root / "part.py"
+    source.write_text("# parametric source\n", encoding="utf-8")
+    inputs["source"] = {
+        **artifact_record(source),
+        "schema": "python-source/v1",
+    }
+    artifacts = {}
+    for key, filename in (
+        ("stl:part", "part.stl"),
+        ("step:part", "part.step"),
+        ("glb:display", "part-display.glb"),
+    ):
+        path = root / filename
+        if not path.exists():
+            path.write_bytes(filename.encode("ascii"))
+        frame = (
+            "semantic"
+            if key in {"step:part", "glb:display"}
+            else "part-print" if key == "stl:part" else "plate-print"
+        )
+        artifacts[key] = artifact_record(path, coordinateFrame=frame)
+    export_audit = {
+        "artifacts": {
+            key: {
+                "errors": [],
+                "pass": True,
+                "path": record["path"],
+                "sha256": record["sha256"],
+                "type": (
+                    "glb" if key == "glb:display" else "step"
+                    if key.startswith("step:") else "stl"
+                ),
+            }
+            for key, record in artifacts.items()
+        },
+        "errors": [],
+        "pass": True,
+        "schema": "evidence-export-audit/v1",
+    }
+    audited_geometry = {
+        key: value
+        for key, value in geometry.items()
+        if key != "isVolume"
+    }
+    for key, record in export_audit["artifacts"].items():
+        if key == "glb:display":
+            continue
+        record["expected"] = deepcopy(audited_geometry)
+        record["observed"] = deepcopy(audited_geometry)
+        if key.startswith("stl:"):
+            record["observed"].update({
+                "faceCount": 12,
+                "vertexCount": 8,
+                "watertight": True,
+                "windingConsistent": True,
+            })
+    export_audit_path = root / "part_export-audit.json"
+    export_audit_path.write_text(json.dumps(export_audit), encoding="utf-8")
+    artifacts["exportAudit"] = artifact_record(export_audit_path)
+    return {
+        "artifactMatrix": {
+            "parts": {
+                "part": {
+                    "glb": "required",
+                    "step": "required",
+                    "stl": "required",
+                    "threeMf": "not-applicable",
+                }
+            }
+        },
+        "artifacts": artifacts,
+        "autoScale": False,
+        "backend": "brep-part",
+        "backendData": {
+            "exportAudit": export_audit,
+            "parameters": {},
+            "printOrientation": {
+                "candidates": [{"name": "identity"}],
+                "selected": {"name": "identity"},
+                "strategy": "fixture-rigid-orientation",
+            },
+            "semanticAssembly": {
+                "boundsMm": deepcopy(geometry["boundsMm"]),
+                "intentSha256": inputs["intent"]["sha256"],
+            },
+        },
+        "builtAt": "2026-09-01T00:00:00+00:00",
+        "coordinateFrames": {
+            "semantic": {"scale": 1.0, "units": "mm", "up": "Z"},
+            "part-print": {"partTransforms": {"part": identity_matrix()}},
+            "plate-print": {"partTransforms": {"part": identity_matrix()}},
+        },
+        "events": [],
+        "features": {},
+        "inputs": inputs,
+        "part": "part",
+        "parts": {
+            "part": {
+                "print": deepcopy(geometry),
+                "representationMaster": "brep",
+                "semantic": deepcopy(geometry),
+            }
+        },
+        "pass": True,
+        "revision": "rev-1",
+        "runId": "run-1",
+        "scale": 1.0,
+        "schema": "evidence-a3d-build/v1",
+        "warnings": [],
+    }
+
+
+class BuildManifestTests(unittest.TestCase):
+    def _bound_brep_inputs(self, root: Path) -> tuple[Path, Path, Path]:
+        intent_path, _ = write_intent(
+            root,
+            part="part",
+            feature_owners={"part-body": "part"},
+        )
+        scene_path = root / "part_scene.json"
+        scene_path.write_text(json.dumps({
+            "schema": "evidence-semantic-scene/v1",
+            "revision": "bind-inputs-001",
+            "intentRef": intent_ref(intent_path),
+            "units": "mm",
+            "coordinateSystem": {"handedness": "right", "up": "Z"},
+            "materials": [],
+            "parts": [{"id": "part", "representationMaster": "brep"}],
+            "nodes": [{
+                "id": "part-body",
+                "partId": "part",
+                "featureId": "part-body",
+                "role": "solid",
+                "operation": "union",
+                "recipe": {
+                    "kind": "roundedBox",
+                    "parameters": {"sizeMm": [1, 1, 1], "radiusMm": 0.0},
+                },
+            }],
+            "interfaces": [],
+        }), encoding="utf-8")
+        source_path = root / "part.py"
+        source_path.write_text("# fixture source\n", encoding="utf-8")
+        return intent_path, scene_path, source_path
+
+    def test_bind_inputs_revalidates_intent_scene_and_exported_part_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            intent_path, scene_path, source_path = self._bound_brep_inputs(root)
+            intent, scene, _, _ = bind_inputs(
+                intent_path=str(intent_path),
+                scene_path=str(scene_path),
+                expected_parts={"part"},
+                source_path=str(source_path),
+            )
+            self.assertEqual(intent["part"], "part")
+            self.assertEqual({item["id"] for item in scene["parts"]}, {"part"})
+
+            with self.assertRaisesRegex(ValueError, "intent parts do not match exported"):
+                bind_inputs(
+                    intent_path=str(intent_path),
+                    scene_path=str(scene_path),
+                    expected_parts={"unrelated"},
+                    source_path=str(source_path),
+                )
+
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            intent["visual"]["required"] = False
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            scene = json.loads(scene_path.read_text(encoding="utf-8"))
+            scene["intentRef"]["sha256"] = artifact_record(intent_path)["sha256"]
+            scene_path.write_text(json.dumps(scene), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "invalid intent contract"):
+                bind_inputs(
+                    intent_path=str(intent_path),
+                    scene_path=str(scene_path),
+                    expected_parts={"part"},
+                    source_path=str(source_path),
+                )
+
+    def test_valid_manifest_and_bound_files_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            path = root / "part_report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertEqual(validate_manifest(report), [])
+            self.assertTrue(audit(path)["pass"])
+
+    def test_mesh_master_cannot_claim_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["backend"] = "hybrid-mesh"
+            report["parts"]["part"]["representationMaster"] = "mesh"
+            errors = validate_manifest(report)
+            self.assertTrue(any("step must be not-applicable" in item for item in errors))
+            self.assertTrue(any("step:part is forbidden" in item for item in errors))
+
+    def test_hybrid_cannot_omit_print_package_and_material_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["backend"] = "hybrid-mesh"
+            report["parts"]["part"]["representationMaster"] = "mesh"
+            report["artifactMatrix"]["parts"]["part"]["step"] = "not-applicable"
+            report["artifacts"].pop("step:part")
+            errors = validate_manifest(report)
+            self.assertTrue(
+                any("hybrid-mesh requires 3MF" in item for item in errors),
+                errors,
+            )
+
+    def test_scaled_print_transform_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["coordinateFrames"]["part-print"]["partTransforms"]["part"][0][0] = 2
+            errors = validate_manifest(report)
+            self.assertTrue(any("scaling is forbidden" in item for item in errors))
+
+    def test_file_audit_detects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            path = root / "part_report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            (root / "part.stl").write_text("tampered", encoding="utf-8")
+            result = audit(path)
+            self.assertFalse(result["pass"])
+            self.assertTrue(any("sha256 does not match" in item for item in result["errors"]))
+
+    def test_file_audit_rejects_a_failed_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            report["pass"] = False
+            path = root / "part_report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            result = audit(path)
+            self.assertFalse(result["pass"])
+            self.assertIn(
+                "build report pass must be true before delivery",
+                result["errors"],
+            )
+
+    def test_every_input_requires_a_file_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["inputs"]["scene"].pop("path")
+            self.assertIn(
+                "inputs.scene.path must be a non-empty string",
+                validate_manifest(report),
+            )
+
+    def test_hybrid_forbids_an_invented_python_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["backend"] = "hybrid-mesh"
+            report["parts"]["part"]["representationMaster"] = "mesh"
+            report["artifactMatrix"]["parts"]["part"].update(
+                {"step": "not-applicable", "threeMf": "required"}
+            )
+            report["artifacts"].pop("step:part")
+            three_mf = Path(directory) / "part.3mf"
+            material_plan = Path(directory) / "part_material-plan.json"
+            three_mf.write_bytes(b"3MF")
+            material_plan.write_text("{}", encoding="utf-8")
+            report["artifacts"]["3mf"] = artifact_record(three_mf)
+            report["artifacts"]["materialPlan"] = artifact_record(material_plan)
+            report["materialPlan"] = {}
+            errors = validate_manifest(report)
+            self.assertTrue(
+                any("inputs must contain exactly" in item for item in errors),
+                errors,
+            )
+
+    def test_legacy_schema_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = deepcopy(_valid_report(Path(directory)))
+            report["schema"] = "evidence-cad-build/v4"
+            self.assertIn(
+                "schema must be evidence-a3d-build/v1",
+                validate_manifest(report),
+            )
+
+    def test_unknown_top_level_and_artifact_fields_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["legacyPayload"] = {"schema": "evidence-cad-build/v4"}
+            report["artifacts"]["legacyReport"] = {
+                "path": report["artifacts"]["glb:display"]["path"],
+                "sha256": report["artifacts"]["glb:display"]["sha256"],
+            }
+            errors = validate_manifest(report)
+            self.assertTrue(any("top-level fields must be exactly" in item for item in errors))
+            self.assertTrue(any("artifacts must contain exactly" in item for item in errors))
+
+    def test_backend_data_and_part_fields_are_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["backendData"]["legacyPayload"] = {"acceptedByOldReaders": True}
+            report["parts"]["part"]["legacyPayload"] = {"acceptedByOldReaders": True}
+            errors = validate_manifest(report)
+            self.assertTrue(any("backendData fields must be exactly" in item for item in errors))
+            self.assertTrue(any("parts.part fields must be exactly" in item for item in errors))
+
+    def test_semantic_assembly_is_required_and_must_equal_part_union(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            report["backendData"].pop("semanticAssembly")
+            self.assertTrue(any(
+                "semanticAssembly" in item for item in validate_manifest(report)
+            ))
+
+            report = _valid_report(Path(directory))
+            report["backendData"]["semanticAssembly"]["boundsMm"] = {
+                "max": [2, 1, 1],
+                "min": [0, 0, 0],
+                "size": [2, 1, 1],
+            }
+            self.assertTrue(any(
+                "union of parts" in item for item in validate_manifest(report)
+            ))
+
+            report = _valid_report(Path(directory))
+            report["backendData"]["semanticAssembly"]["legacyBounds"] = {}
+            self.assertTrue(any(
+                "semanticAssembly fields must be exactly" in item
+                for item in validate_manifest(report)
+            ))
+
+            report = _valid_report(Path(directory))
+            report["backendData"]["semanticAssembly"]["intentSha256"] = "0" * 64
+            self.assertTrue(any(
+                "must match inputs.intent.sha256" in item
+                for item in validate_manifest(report)
+            ))
+
+    def test_semantic_envelope_tolerance_is_closed_at_half_a_millimeter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parts = _valid_report(Path(directory))["parts"]
+            digest = "a" * 64
+            accepted_intent = {
+                "dimensions_mm": {
+                    axis: {"value": value}
+                    for axis, value in zip("xyz", (1.5, 1.0, 1.0), strict=True)
+                }
+            }
+            self.assertEqual(
+                semantic_assembly_record(parts, digest, accepted_intent)["boundsMm"]["size"],
+                [1.0, 1.0, 1.0],
+            )
+            rejected_intent = deepcopy(accepted_intent)
+            rejected_intent["dimensions_mm"]["x"]["value"] = 1.5001
+            with self.assertRaisesRegex(ValueError, "differs from intent"):
+                semantic_assembly_record(parts, digest, rejected_intent)
+
+    def test_build_check_rejects_brep_semantic_bounds_that_miss_step_readback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            changed = {
+                "max": [1.06, 1, 1],
+                "min": [0, 0, 0],
+                "size": [1.06, 1, 1],
+            }
+            report["parts"]["part"]["semantic"]["boundsMm"] = deepcopy(changed)
+            report["backendData"]["semanticAssembly"]["boundsMm"] = deepcopy(changed)
+            report_path = root / "wrong-step-bounds_report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            result = audit(report_path)
+            self.assertFalse(result["pass"])
+            self.assertTrue(any(
+                "does not match its hash-bound STEP readback" in item
+                for item in result["errors"]
+            ))
+
+    def test_build_check_rejects_semantic_envelope_that_misses_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            intent_path = Path(report["inputs"]["intent"]["path"])
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+            intent["dimensions_mm"]["x"]["value"] = 2
+            intent_path.write_text(json.dumps(intent), encoding="utf-8")
+            digest = artifact_record(intent_path)["sha256"]
+            report["inputs"]["intent"]["sha256"] = digest
+            report["backendData"]["semanticAssembly"]["intentSha256"] = digest
+            report_path = root / "wrong-envelope_report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            result = audit(report_path)
+            self.assertFalse(result["pass"])
+            self.assertTrue(any(
+                "semantic envelope dimension x differs from intent" in item
+                for item in result["errors"]
+            ))
+
+    def test_parameter_descriptors_are_closed_and_numerically_valid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = _valid_report(Path(directory))
+            descriptor = {
+                "affects": ["part-body"],
+                "default": 2.0,
+                "group": "Envelope",
+                "group_zh": "外形",
+                "label": "Width",
+                "label_zh": "宽度",
+                "maximum": 4.0,
+                "minimum": 1.0,
+                "step": 0.5,
+                "unit": "mm",
+                "value": 2.5,
+            }
+            report["backendData"]["parameters"] = {"overall-width": descriptor}
+            self.assertEqual(validate_manifest(report), [])
+
+            descriptor["legacyDefault"] = 2.0
+            self.assertTrue(any(
+                "unsupported or missing fields" in item
+                for item in validate_manifest(report)
+            ))
+            descriptor.pop("legacyDefault")
+            descriptor["value"] = 2.25
+            self.assertTrue(any(
+                ".value must align with step" in item
+                for item in validate_manifest(report)
+            ))
+            descriptor["value"] = float("inf")
+            self.assertTrue(any(
+                "numeric fields must be finite" in item
+                for item in validate_manifest(report)
+            ))
+
+    def test_material_source_bindings_are_exact_and_provenance_checked(self):
+        declared = material_record(
+            "orange",
+            "#F05A35",
+            filament=None,
+            transmission=None,
+            color_status="declared",
+            filament_status="proposed",
+            transmission_status="proposed",
+        )
+        assignment = {
+            "materialId": "orange",
+            "part": "part",
+            "region": "accent",
+            "scope": "brep-region",
+        }
+        plan = build_material_plan(
+            part="part",
+            package_mode="co_print_body",
+            materials=[declared],
+            assignments=[assignment],
+            source_bindings=[source_binding(
+                material=declared,
+                part="part",
+                region="accent",
+                scope="brep-region",
+                source_id="accent",
+                source_kind="intent-color-region",
+            )],
+        )
+        intent = {"color_regions": [{
+            "hex": "#F05A35",
+            "name": "accent",
+            "part": "part",
+        }]}
+        scene = {"materials": [], "parts": [{"id": "part"}]}
+        self.assertEqual(validate_material_sources(plan, intent, scene), [])
+
+        old = deepcopy(plan)
+        old["intentBindings"] = old.pop("sourceBindings")
+        self.assertTrue(validate_material_plan(old))
+        unknown = deepcopy(plan)
+        unknown["sourceBindings"][0]["sourceId"] = "not-declared"
+        self.assertTrue(any(
+            "unknown intent color region" in item
+            for item in validate_material_sources(unknown, intent, scene)
+        ))
+
+    def test_scene_material_and_appearance_sources_are_distinct(self):
+        def proposed(material_id: str, color: str) -> dict:
+            return material_record(
+                material_id,
+                color,
+                filament=None,
+                transmission=None,
+                color_status="proposed",
+                filament_status="proposed",
+                transmission_status="proposed",
+            )
+
+        for source_kind, source_id, material_id, scene in (
+            (
+                "scene-part-material",
+                "mat",
+                "mat",
+                {
+                    "materials": [{"color": "#ABCDEF", "id": "mat"}],
+                    "parts": [{"id": "part", "materialId": "mat"}],
+                },
+            ),
+            (
+                "scene-part-appearance",
+                "part",
+                "proposed-part",
+                {
+                    "materials": [],
+                    "parts": [{"color": "#123456", "id": "part"}],
+                },
+            ),
+        ):
+            color = "#ABCDEF" if material_id == "mat" else "#123456"
+            material = proposed(material_id, color)
+            plan = build_material_plan(
+                part="part",
+                package_mode="co_print_body",
+                materials=[material],
+                assignments=[{
+                    "materialId": material_id,
+                    "part": "part",
+                    "region": None,
+                    "scope": "whole-part",
+                }],
+                source_bindings=[source_binding(
+                    material=material,
+                    part="part",
+                    region=None,
+                    scope="whole-part",
+                    source_id=source_id,
+                    source_kind=source_kind,
+                )],
+            )
+            self.assertEqual(validate_material_sources(plan, {}, scene), [])
+
+            wrong_kind = deepcopy(plan)
+            wrong_kind["sourceBindings"][0]["sourceKind"] = (
+                "scene-part-appearance"
+                if source_kind == "scene-part-material"
+                else "scene-part-material"
+            )
+            self.assertTrue(validate_material_sources(wrong_kind, {}, scene))
+
+
+if __name__ == "__main__":
+    unittest.main()

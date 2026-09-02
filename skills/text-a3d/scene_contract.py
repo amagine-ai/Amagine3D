@@ -17,9 +17,15 @@ import re
 import sys
 from typing import Any
 
+from intent_contract import (
+    feature_owner_map as intent_feature_owner_map,
+    physical_part_names as intent_physical_part_names,
+    validate as validate_intent,
+)
+
 
 SCENE_SCHEMA = "evidence-semantic-scene/v1"
-INTENT_SCHEMAS = {"evidence-cad-intent/v4", "evidence-color-intent/v3"}
+INTENT_SCHEMAS = {"evidence-cad-intent/v4"}
 REPRESENTATION_MASTERS = {"brep", "mesh"}
 ROLES = {"solid", "cutter", "separate", "display-only"}
 DISPLAY_COMPONENT_KIND = "displayComponent"
@@ -44,6 +50,8 @@ FEATURE_ID_PATTERN = re.compile(
 TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._/-]*")
 REVISION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+HEX_COLOR_PATTERN = re.compile(r"#[0-9A-Fa-f]{6}")
+MATERIAL_TRANSMISSIONS = {"opaque", "translucent", "transparent"}
 INTENT_ONLY_FIELDS = {
     "assumptions",
     "dimensions_mm",
@@ -158,6 +166,7 @@ def _validate_intent_ref(
     if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
         errors.append("intentRef.sha256 must be a lowercase SHA-256 digest")
     if base_dir is None:
+        errors.append("base_dir is required to validate the referenced intent")
         return None
 
     path = Path(raw_path)
@@ -174,6 +183,10 @@ def _validate_intent_ref(
             errors.append("intentRef.sha256 does not match the referenced intent")
     if not isinstance(intent, dict) or intent.get("schema") != schema:
         errors.append("intentRef.schema does not match the referenced intent")
+        return None
+    intent_errors = validate_intent(intent, path.resolve().parent)
+    errors.extend(f"intentRef: {error}" for error in intent_errors)
+    if intent_errors:
         return None
     return intent
 
@@ -210,6 +223,56 @@ def _validate_artifact(
             raise ValueError(f"{path}.nodeNames must be a non-empty string list")
         if len(names) != len(set(names)):
             raise ValueError(f"{path}.nodeNames must be unique")
+
+
+def _validate_file_binding(
+    artifact: Any,
+    path: str,
+    base_dir: Path | None,
+    errors: list[str],
+) -> None:
+    """Require a content-addressed existing artifact when paths are resolvable."""
+
+    if not isinstance(artifact, dict):
+        return
+    digest = artifact.get("sha256")
+    if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+        errors.append(f"{path}.sha256 must be a lowercase SHA-256 digest")
+        return
+    if base_dir is None:
+        return
+    raw_path = artifact.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return
+    resolved = Path(raw_path)
+    if not resolved.is_absolute():
+        resolved = base_dir / resolved
+    try:
+        payload = resolved.read_bytes()
+    except OSError as error:
+        errors.append(f"{path} cannot be read: {error}")
+        return
+    if sha256(payload).hexdigest() != digest:
+        errors.append(f"{path}.sha256 does not match the referenced artifact")
+
+
+def _validate_source_mesh_spec(value: Any, path: str, errors: list[str]) -> None:
+    if isinstance(value, str):
+        if not value.strip():
+            errors.append(f"{path} must not be empty")
+        return
+    if not isinstance(value, dict):
+        errors.append(f"{path} must be a path or object")
+        return
+    raw_path = value.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        errors.append(f"{path}.path is required")
+    scale = value.get("scale", 1.0)
+    if not _number(scale) or abs(float(scale) - 1.0) > 1e-12:
+        errors.append(f"{path}.scale must be 1; scaling is forbidden")
+    transform = value.get("toCanonicalTransform")
+    if transform is not None:
+        _validate_transform(transform, f"{path}.toCanonicalTransform", errors)
 
 
 def _dimensions(value: Any, path: str, errors: list[str]) -> dict[str, float]:
@@ -537,10 +600,14 @@ def _validate_self_tapping_scene_interface(
         ):
             if not _positive_number(receiver.get(key)):
                 errors.append(f"{fastener_path}.receiver.{key} must be positive")
-        root_overlap = receiver.get("rootOverlapMm")
-        if not _number(root_overlap) or float(root_overlap) < 0:
+        if "rootOverlapMm" in receiver:
             errors.append(
-                f"{fastener_path}.receiver.rootOverlapMm must be non-negative"
+                f"{fastener_path}.receiver.rootOverlapMm is unsupported; "
+                "use minimumRootEmbedMm"
+            )
+        if not _positive_number(receiver.get("minimumRootEmbedMm")):
+            errors.append(
+                f"{fastener_path}.receiver.minimumRootEmbedMm must be positive"
             )
 
         clearance_feature = cover.get("featureId")
@@ -956,14 +1023,48 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     else:
         if coordinate_system.get("handedness") != "right":
             errors.append("coordinateSystem.handedness must be right")
-        if coordinate_system.get("up") not in {"Y", "Z"}:
-            errors.append("coordinateSystem.up must be Y or Z")
+        if coordinate_system.get("up") != "Z":
+            errors.append("coordinateSystem.up must be Z")
 
     for field in sorted(INTENT_ONLY_FIELDS.intersection(data)):
         errors.append(
             f"{field} belongs in the immutable intent contract, not the mutable scene graph"
         )
     intent_data = _validate_intent_ref(data.get("intentRef"), base_dir, errors)
+
+    materials = data.get("materials", [])
+    material_ids: list[str] = []
+    if not isinstance(materials, list):
+        errors.append("materials must be a list")
+    else:
+        for index, material in enumerate(materials):
+            path = f"materials[{index}]"
+            if not isinstance(material, dict):
+                errors.append(f"{path} must be an object")
+                continue
+            material_id = material.get("id")
+            if not _valid_id(material_id):
+                errors.append(f"{path}.id is invalid")
+            else:
+                material_ids.append(material_id)
+            color = material.get("color")
+            if not isinstance(color, str) or not HEX_COLOR_PATTERN.fullmatch(color):
+                errors.append(f"{path}.color must be #RRGGBB")
+            filament = material.get("filament")
+            if filament is not None and (
+                not isinstance(filament, str) or not filament.strip()
+            ):
+                errors.append(f"{path}.filament must be a non-empty string or null")
+            transmission = material.get("transmission")
+            if (
+                transmission is not None
+                and transmission not in MATERIAL_TRANSMISSIONS
+            ):
+                errors.append(
+                    f"{path}.transmission must be opaque, translucent, transparent, or null"
+                )
+        if len(material_ids) != len(set(material_ids)):
+            errors.append("material ids must be unique")
 
     parts = data.get("parts")
     part_ids: list[str] = []
@@ -986,15 +1087,54 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 errors.append(
                     f"{path}.representationMaster must be brep or mesh"
                 )
+            representation_master = part.get("representationMaster")
+            material_id = part.get("materialId")
+            if material_id is not None and material_id not in material_ids:
+                errors.append(f"{path}.materialId references an unknown material")
+            color_regions = part.get("colorRegions", [])
+            region_ids: list[str] = []
+            if not isinstance(color_regions, list):
+                errors.append(f"{path}.colorRegions must be a list")
+            else:
+                if color_regions and representation_master != "mesh":
+                    errors.append(
+                        f"{path}.colorRegions is only supported for mesh-master parts"
+                    )
+                for region_index, region in enumerate(color_regions):
+                    region_path = f"{path}.colorRegions[{region_index}]"
+                    if not isinstance(region, dict):
+                        errors.append(f"{region_path} must be an object")
+                        continue
+                    region_id = region.get("id")
+                    if not _valid_id(region_id):
+                        errors.append(f"{region_path}.id is invalid")
+                    else:
+                        region_ids.append(region_id)
+                    if region.get("materialId") not in material_ids:
+                        errors.append(
+                            f"{region_path}.materialId references an unknown material"
+                        )
+                    _validate_source_mesh_spec(
+                        region.get("sourceMesh"),
+                        f"{region_path}.sourceMesh",
+                        errors,
+                    )
+                if len(region_ids) != len(set(region_ids)):
+                    errors.append(f"{path}.colorRegions ids must be unique")
             artifacts = part.get("artifacts")
             if artifacts is not None:
                 if not isinstance(artifacts, dict):
                     errors.append(f"{path}.artifacts must be an object")
                 else:
-                    unknown = set(artifacts) - {"physicalGlb", "manufacturingStl"}
+                    unknown = set(artifacts) - {
+                        "masterStep",
+                        "physicalGlb",
+                        "manufacturingStl",
+                    }
                     for key in sorted(unknown):
                         errors.append(f"{path}.artifacts.{key} is unsupported")
                     for key, suffixes, allow_names in (
+                        ("masterStep", (".step", ".stp"), False),
                         ("physicalGlb", (".glb", ".gltf"), True),
                         ("manufacturingStl", (".stl",), False),
                     ):
@@ -1011,6 +1151,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                             )
                         except (TypeError, ValueError) as error:
                             errors.append(str(error))
+                        if key == "masterStep":
+                            _validate_file_binding(
+                                artifacts[key], artifact_path, base_dir, errors
+                            )
                         transform = (
                             artifacts[key].get("toCanonicalTransform")
                             if isinstance(artifacts[key], dict)
@@ -1022,8 +1166,46 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                                 f"{artifact_path}.toCanonicalTransform",
                                 errors,
                             )
+            master_step = (
+                artifacts.get("masterStep")
+                if isinstance(artifacts, dict)
+                else None
+            )
+            if (
+                representation_master == "brep"
+                and isinstance(artifacts, dict)
+                and any(
+                    key in artifacts
+                    for key in ("manufacturingStl", "physicalGlb")
+                )
+                and not isinstance(master_step, dict)
+            ):
+                errors.append(
+                    f"{path}.artifacts.masterStep is required once a brep part is bound"
+                )
+            if representation_master == "mesh" and isinstance(master_step, dict):
+                errors.append(
+                    f"{path}.artifacts.masterStep is forbidden for a mesh master"
+                )
         if len(part_ids) != len(set(part_ids)):
             errors.append("part ids must be unique")
+
+    intent_parts = (
+        intent_physical_part_names(intent_data)
+        if isinstance(intent_data, dict)
+        else set()
+    )
+    scene_parts = set(part_ids)
+    if intent_parts and scene_parts != intent_parts:
+        errors.append(
+            "scene parts must exactly match immutable intent physical parts: "
+            f"expected {sorted(intent_parts)}, observed {sorted(scene_parts)}"
+        )
+    intent_feature_owners = (
+        intent_feature_owner_map(intent_data)
+        if isinstance(intent_data, dict)
+        else {}
+    )
 
     nodes = data.get("nodes")
     node_ids: list[str] = []
@@ -1069,6 +1251,16 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     physical_parts.add(part_id)
                 if role != "display-only" and isinstance(feature_id, str):
                     physical_features.add(feature_id)
+                    expected_owner = intent_feature_owners.get(feature_id)
+                    if expected_owner is None:
+                        errors.append(
+                            f"{path}.featureId is not declared by immutable intent"
+                        )
+                    elif part_id != expected_owner:
+                        errors.append(
+                            f"{path}.partId must match immutable intent owner "
+                            f"{expected_owner!r} for feature {feature_id!r}"
+                        )
 
             recipe = node.get("recipe")
             if not isinstance(recipe, dict):
@@ -1094,7 +1286,12 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                         errors.append(f"{path}.physicalFeatureRef is invalid")
                     else:
                         display_references.append((index, physical_ref, recipe_kind))
-                if recipe_kind == DISPLAY_COMPONENT_KIND:
+                if recipe_kind != DISPLAY_COMPONENT_KIND:
+                    errors.append(
+                        f"{path}.recipe.kind must be {DISPLAY_COMPONENT_KIND} "
+                        "for display-only nodes"
+                    )
+                else:
                     if physical_ref is None:
                         errors.append(
                             f"{path}.physicalFeatureRef is required for "
@@ -1118,6 +1315,34 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                             f"{path}.recipe.parameters.sourceMesh is required for "
                             "recipe.kind displayComponent"
                         )
+                    appearance = (
+                        parameters.get("appearance")
+                        if isinstance(parameters, dict)
+                        else None
+                    )
+                    if not isinstance(appearance, dict):
+                        errors.append(
+                            f"{path}.recipe.parameters.appearance is required for "
+                            "recipe.kind displayComponent"
+                        )
+                    else:
+                        base_color = appearance.get("baseColor")
+                        if not isinstance(base_color, str) or not HEX_COLOR_PATTERN.fullmatch(
+                            base_color
+                        ):
+                            errors.append(
+                                f"{path}.recipe.parameters.appearance.baseColor "
+                                "must be #RRGGBB"
+                            )
+                        for field in ("metallic", "roughness"):
+                            value = appearance.get(field)
+                            if value is not None and (
+                                not _number(value) or not 0 <= float(value) <= 1
+                            ):
+                                errors.append(
+                                    f"{path}.recipe.parameters.appearance.{field} "
+                                    "must be between 0 and 1"
+                                )
             elif physical_ref is not None:
                 errors.append(
                     f"{path}.physicalFeatureRef is only valid for display-only nodes"
@@ -1139,6 +1364,17 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                         f"nodes[{index}].physicalFeatureRef for recipe.kind "
                         "displayComponent must reference a cutter"
                     )
+            expected_owner = intent_feature_owners.get(feature_ref)
+            display_node = nodes[index]
+            if expected_owner is None:
+                errors.append(
+                    f"nodes[{index}].physicalFeatureRef is not declared by immutable intent"
+                )
+            elif display_node.get("partId") != expected_owner:
+                errors.append(
+                    f"nodes[{index}].partId must match immutable intent owner "
+                    f"{expected_owner!r} for physicalFeatureRef {feature_ref!r}"
+                )
         for part_id in part_ids:
             if part_id not in physical_parts:
                 errors.append(

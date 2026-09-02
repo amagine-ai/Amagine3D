@@ -18,7 +18,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/Node.js-20.19%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 20.19+" />
+  <img src="https://img.shields.io/badge/Node.js-22.19.0%2B-339933.svg?logo=node.js&amp;logoColor=white" alt="Node.js 22.19.0+" />
   <img src="https://img.shields.io/badge/Vite-7.3.6-646CFF.svg?logo=vite&amp;logoColor=white" alt="Vite 7.3.6" />
   <img src="https://img.shields.io/badge/Runtime-build123d%20%2B%20OCP-5B5BD6.svg" alt="build123d + OCP" />
 </p>
@@ -33,13 +33,13 @@
 
 ## 从需求到可编辑的硬件结构
 
-参数化 CAD 是 Amagine3D 已经落地的第一种 3D 能力。目前它聚焦智能硬件外壳及相关结构，可以从自然语言、参考图片和尺寸出发，建立完整的参数化设计。
+Amagine3D 目前聚焦可打印的智能硬件外壳及相关结构，可以从自然语言、参考图片、尺寸与已有几何出发，建立完整设计。
 
 设计会从内部元器件出发安排安装位和接口，再完成外壳、控制件与散热结构。需要分件时，盖体、铰链或卡扣会连同装配间隙和打印公差一起进入设计。对于铰链或滑盖这样的刚性结构，系统还可以沿设定的运动路径检查碰撞与运行间隙。
 
-每次生成都会保留完整的 Python 与 build123d 源码。关键尺寸会出现在工作台中，可以直接调整并回写到源码，无需重新调用模型。单色设计可以导出 STEP 和 STL，多色设计可以生成带颜色信息的 3MF 与分区 STL。
+每次生成都会记录同一份语义场景，其中包含零件、特征、接口、材料和表示主数据。尺寸驱动的零件保留可编辑 Python 与 build123d 源码，并导出真实 STEP；自由曲面由 canonical mesh 作为主数据，不伪装成参数化 CAD。相同工作流会生成 STL、显示用 GLB，以及按打印机 profile 验证的 3MF 包，并支持一个物理零件内部的永久颜色分区。
 
-在背后，3D-native Agent 会先把需求整理成设计简报，再把源码放入浏览器几何运行时真正构建模型。Agent 能看到模型的实际尺寸，也会收到关于零件连接、干涉和运动的检查结果。导出的模型文件同样会被重新读取。它根据这些结果决定继续修改，还是接受当前版本。
+在背后，3D-native Agent 会先把需求整理为不可变 intent，再建立唯一的可变语义场景。内部 BRep、mesh、混合几何与颜色后端把该场景编译为同一种证据协议。Agent 会读取实测尺寸、特征归属、打印方向、铺盘、连接、干涉和导出文件回读结果，并在接受候选版本前渲染和读取最新模型。
 
 <a id="example"></a>
 
@@ -96,13 +96,13 @@ Amagine3D 将 3D-native Agent 定义为一套以三维设计状态为核心的 A
 
 当候选设计满足当前任务的检查条件后，它才会进入提交环节。系统会把候选结果与用户约束和上一版设计进行比较。检查通过后，候选设计会被保存为新的基线，源码和制造文件也随之归档；如果修改引入了新的问题，系统会保留上一版结果，并让 Agent 继续修正。需要改变已确认结构或覆盖现有产物时，可以要求用户确认。
 
-当前公开版本已经用参数化 CAD 实现了这套流程的第一阶段：Agent 根据设计简报生成 build123d 源码，在浏览器中构建几何，再依据检查结果修订或接受候选版本。目前，源码仍然是主要的设计状态，任务也按照预设阶段推进。下一阶段会把零件及其空间关系直接记录为持续更新的 3D 世界模型状态。届时，Agent 可以在这个状态上修改局部结构或切换几何表示，而不必每次都从对话和源码中重新理解整个设计。
+当前版本已经把语义场景作为这份设计状态。它记录物理零件、特征归属、接口、材料、表示主数据与产物绑定，同时保持原始 intent 不变。一个零件可以由 BRep 或 mesh 作为主数据，也可以参与混合装配；这些只是内部编译选择，不是 Agent 面前的多套工作流。所有后端输出同一种 build report，并明确记录 semantic 到 print 坐标系的刚性变换。
 
 ## Beyond CAD
 
 CAD 是 Amagine3D 的起点。完整的硬件创造还需要理解现实中的器件、空间关系和已有资产，让不同来源的 3D 信息在设计与制造之间持续流动。
 
-下一阶段，Amagine3D 会逐步建立硬件项目的共同 3D 上下文。系统将知道一个模型代表屏幕、电池、PCB 还是连接器，理解它如何安装、需要避让什么、会影响哪些开孔和外壳尺寸，并在器件变化时更新相关结构。
+Amagine3D 会继续丰富这份共同 3D 上下文中的器件语义：让系统知道一个模型代表屏幕、电池、PCB 还是连接器，理解它如何安装、需要避让什么、会影响哪些开孔和外壳尺寸，并在器件变化时更新相关结构。
 
 3D 的入口也会从自然语言生成扩展到 mesh、图片、扫描和点云。精确结构可以继续使用参数化 CAD，外观形态可以来自生成式 mesh，现实物体可以通过三维重建进入项目；Agent 根据任务选择合适的表示，并让它们共享零件、尺度、位置和设计意图。
 
@@ -114,7 +114,7 @@ CAD 是 Amagine3D 的起点。完整的硬件创造还需要理解现实中的�
 
 ### 环境要求
 
-- Node.js 20.19 或更新版本
+- Node.js 22.19.0 或更新版本
 - Python 3.10 至 3.13
 - npm
 - 现代桌面浏览器
@@ -149,14 +149,19 @@ TAVILY_API_KEY=... # 可选；启用“联网参考”开关
 
 PORT=6161
 WEB_PORT=6160
-AGENT_RUN_TIMEOUT_MS=1800000
+AGENT_RUN_IDLE_TIMEOUT_MS=1800000
+AGENT_RUN_HARD_TIMEOUT_MS=7200000
 ```
 
 这些值只由本地 Express 服务端读取。配置 `TAVILY_API_KEY` 后，输入区会显示
 “联网参考”开关。为某轮开启后，Amagine3D Agent 必须先搜索再执行 CAD 写入或
 构建；搜索会返回靠前的尺寸与规格来源，并尽力向多模态模型提供最多三张参考图。
 缺少合适图片不会阻断原有 CAD Skill 流程。请勿通过客户端环境变量暴露 API
-密钥，也不要提交 `.env`。
+密钥，也不要提交 `.env`。连续无活动超时会由非空模型输出刷新；每个活动工具分别
+记录开始、输出与结束进度，因此一个持续输出的并行工具不能掩盖另一个已静默 30 分钟
+的工具。整轮硬超时是独立的绝对安全上限。
+CAD 任务若在十分钟后仍未启动首次正式编译，只会收到一次 steer 软提醒；它不会令
+任务失败，也不会推进任何服务端工作流阶段。
 
 ## 系统架构
 
@@ -176,8 +181,8 @@ Amagine3D/
 │   └── app.ts, index.ts             Express 启动、静态托管与运行时组装
 ├── packages/a3d-runtime/src/          3D-native Agent 模型/会话适配、Skill 加载与写入限制
 ├── skills/
-│   └── text-a3d/                  统一的单材料与彩色 CAD 工作流
-│       └── color/MODE.md          内部颜色分区、配色与 3MF 模式
+│   └── text-a3d/                  统一语义场景 CAD 工作流与内部编译器
+│       └── color/BACKEND.md       内部颜色分区、材料与 3MF 后端
 ├── bundled-projects/                  工作台内置的只读示例项目
 ├── workspace/sessions/<sessionId>/   生成的源码、模型、报告和预览图
 ├── .amagine-state/                   Agent 会话、上传文件和本地运行状态
@@ -185,16 +190,16 @@ Amagine3D/
 └── tests/                             服务端、运行时、产物与 UI 逻辑测试
 ```
 
-Agent 运行时只暴露 `text-a3d` 一个 Skill，并依据制造几何上的永久颜色需求在内部
-选择 `single-material` 或 `color` 模式；不参与制造的显示内容本身不会触发彩色打印。
-两套实现都位于 `skills/text-a3d/` 下；彩色模式的 runtime、examples 与 references
-集中在 `skills/text-a3d/color/`，且不包含独立 Skill 清单。
+Agent 运行时只暴露 `text-a3d` 一个 Skill 和一套语义场景工作流。每个物理零件声明
+BRep 或 mesh 表示主数据；内部编译器负责混合几何、永久颜色分区、材料计划与 3MF
+打包。仅用于显示的内容不会进入制造几何。颜色后端工具位于
+`skills/text-a3d/color/`，不再拥有独立 intent 契约或 Skill 清单。
 
 每个 Agent 会话使用独立工作区。CAD 脚本由服务端管理的 Python 环境执行，浏览器通过 Three.js 渲染生成模型，模型凭据仅保留在服务端。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
 
 ## 项目状态
 
-Amagine3D 正在持续迭代。当前公开版本聚焦智能硬件外壳的单色和多色参数化 CAD，完整工作流已在 Chrome 与 Edge 桌面浏览器中测试。
+Amagine3D 正在持续迭代。当前公开版本聚焦把参数化机械结构与自由曲面 mesh 结合为可单色或多色打印的几何，完整工作流已在 Chrome 与 Edge 桌面浏览器中测试。
 
 ## 参与贡献
 

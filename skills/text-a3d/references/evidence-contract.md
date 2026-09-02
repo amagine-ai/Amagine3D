@@ -69,6 +69,21 @@ Allowed task modes are `specification`, `reference-reproduction`,
 `reference-inspired`, `recognizable-form`, and `inspect`. Representations are
 `full-3d`, `orthographic-solid`, `relief`, and `surface-led`.
 
+`dimensions_mm` is the X/Y/Z size of the complete physical assembly envelope
+in semantic coordinates. It is not a per-part size and not the rotated or
+packed plate envelope. Build reports independently measure the final physical
+part union as `backendData.semanticAssembly.boundsMm`; they must never copy the
+intent target into that evidence. Each `parts[part].semantic.boundsMm` records
+only that physical part. Intent-to-semantic envelope comparison uses a
+0.5 mm tolerance, while representation readback of an exported STEP/STL uses a
+separate 0.05 mm tolerance.
+
+The parameter panel does not amend or regenerate this immutable intent. Direct
+parameter rebuilds are valid only while the complete semantic X/Y/Z envelope
+continues to satisfy `dimensions_mm`. A requested adjustment that changes that
+overall envelope starts a new CAD task with a new intent contract; do not hide
+it inside the existing report or consume the tolerance as a resize allowance.
+
 When the user asks to replicate, reproduce, or exactly match a named real,
 catalog, branded, or fictional object, preserve that identity as the target.
 Use `reference-reproduction` when supplied or discoverable evidence supports it.
@@ -157,6 +172,58 @@ Multipart contracts must declare every printed part and assembly interface:
 }
 ```
 
+Every `features[]` record in a multipart intent must include a `part` equal to
+one `manufacturing.parts[].name`. Interface feature owners must be one of the
+two parts named by that interface's `between` field. In a single-part intent,
+`features[].part` may be omitted or must equal the top-level `part`.
+
+## Color regions
+
+The same v4 intent owns color and material evidence. Do not create a separate
+color-intent document. Every `color_regions[]` record requires `name`, owning
+`part`, `hex`, `purpose`, `boundary`, and `evidence`; optional material data may
+declare `transmission` and a user-selected `filament`. Also record the
+`palette_reduction` decision.
+
+- For `single-part`, two or more regions may share the top-level physical part;
+  use `print_package_mode: "co_print_body"`.
+- For `multipart`, every region name is globally unique and `part` identifies
+  its owning physical part. A mesh-master part may own several volumetric
+  regions while another part owns one whole-part region. Use
+  `print_package_mode: "separate_parts"` for the physical-part package.
+
+When `color_regions` is present, `print_package_mode` is required explicitly.
+Writers, command-line entrypoints, and QA never infer it from manufacturing
+mode, archive topology, or a build report.
+
+```json
+"color_regions": [
+  {
+    "name": "body",
+    "part": "product",
+    "hex": "#E8E4DC",
+    "purpose": "continuous structural body",
+    "boundary": "parent volume excluding the shallow accent inset",
+    "evidence": "the requested body is warm ivory",
+    "continuity": "continuous-core",
+    "material": {"transmission": "opaque"}
+  },
+  {
+    "name": "accent",
+    "part": "product",
+    "hex": "#171A1D",
+    "purpose": "identity-bearing front accent",
+    "boundary": "shallow front inset",
+    "evidence": "the requested front accent is dark graphite",
+    "continuity": "surface-detail"
+  }
+],
+"palette_reduction": {
+  "applied": false,
+  "reason": "Two semantic colors map directly to two printable regions."
+}
+```
+
 Each multipart `parts[].name` becomes an exported STL suffix. By default a part
 has `"installation": "interface"` and must appear in at least one declared
 interface before geometry is written. Use `"installation": "adhesive"` or
@@ -169,102 +236,70 @@ unless their interfaces name modeled connector feature IDs.
 
 For a removable shell, cover, or base that uses direct fastening into printed
 plastic, declare `connection: "self-tapping-screw"` and read
-`multipart-connections.md`. Its required `fastening` object records nominal,
-pilot, clearance, boss, and closed-end dimensions; one or more ordered locator
-pairs; and one stable fastener ID mapped to a clearance, pilot, and boss feature
-for every screw. The scene models each locator pair as an independent interface
-referenced by `locatorInterfaceIds`. The intent records the target pairing but
-not duplicate hole coordinates. The mutable semantic scene owns one origin and
-unit direction per fastener ID, and all three geometry nodes select outputs from one
-`selfTappingScrewPair` procedural instance. The compiler generates and places
-that group once; independent fastener source meshes/transforms are invalid.
-This makes hole alignment a geometry-construction invariant rather than a
-visual estimate. Final hybrid QA uses full cylindrical and annular boolean
-witness volumes for the clearance, pilot, cover land, boss wall, and blind end;
-an unobstructed centerline alone is not acceptable evidence.
-Under the same conditions—a removable enclosure, ordinary driver access,
-purchased hardware accepted, and no user-selected alternative—the usual
-default is a collar/socket or spaced pin locator plus two symmetric M3
-self-tapping screw connections (two fastener axes). Other interface recipes
-remain valid when they better match the requested assembly behavior.
+`multipart-connections.md`. That conditional reference owns the complete
+fastening object, shared-axis geometry, M3 starting dimensions, positive
+serviceable-enclosure default, and acceptance evidence. Do not load those rules
+for multipart designs that use another connection.
 
 Non-manufactured installed components do not belong in `manufacturing.parts`.
-For an LED/LCD, declare the shell's visible aperture, rear module keepout/seat,
-and any printed retainer as physical intent features. In the mutable semantic
-scene, represent the glass/content as a `display-only` `displayComponent` linked
-through `physicalFeatureRef` to the aperture cutter. It is visible in
-`NAME-display.glb` but excluded from STEP/STL/3MF and manufacturing part counts.
-Use a real physical part only for an explicitly printable dummy, lens, or bezel.
+When the request contains an installed LED/LCD or another display component,
+read `installed-displays.md` for the physical aperture/keepout/retention and
+display-only scene rules.
 
-A screen fragment in the semantic scene should make the manufacturing/display
-split explicit:
-
-```json
-[
-  {
-    "id": "screen-window-cutter",
-    "partId": "housing",
-    "featureId": "screen/window",
-    "role": "cutter",
-    "operation": "subtract",
-    "recipe": {
-      "kind": "sourceMesh",
-      "parameters": {"sourceMesh": "screen-window-tool.stl"}
-    }
-  },
-  {
-    "id": "screen-module-keepout-cutter",
-    "partId": "housing",
-    "featureId": "screen/module-keepout",
-    "role": "cutter",
-    "operation": "subtract",
-    "recipe": {
-      "kind": "sourceMesh",
-      "parameters": {"sourceMesh": "screen-module-keepout-tool.stl"}
-    }
-  },
-  {
-    "id": "screen-active-surface",
-    "partId": "housing",
-    "featureId": "display/screen-active-surface",
-    "role": "display-only",
-    "operation": "none",
-    "physicalFeatureRef": "screen/window",
-    "recipe": {
-      "kind": "displayComponent",
-      "parameters": {
-        "sourceMesh": "screen-active-surface.ply",
-        "appearance": {"baseColor": "#111417", "roughness": 0.18}
-      }
-    }
-  }
-]
-```
-
-The two cutters and display plane share their center, normal, and component
-envelope parameters in source; the JSON fragment records their compiled roles.
+The scene is not allowed to broaden the immutable request. Its `intentRef` is
+hash checked and the referenced document must pass the complete root v4 intent
+validator. Scene `parts[].id` is an exact set match against the single top-level
+intent part or multipart `manufacturing.parts[].name` records. Every physical
+node `featureId` must exist in `intent.features[]`, and its `partId` must equal
+the resolved intent feature owner. A display component's
+`physicalFeatureRef` must name an intent-backed physical feature owned by the
+same part as the display node. Build input binding repeats these checks and
+also requires the exported part set to match both documents exactly.
 
 For a BRep multipart assembly whose colors follow physical part boundaries,
-keep color in the same `evidence-cad-intent/v4` document. Add one
-`color_regions` record per `manufacturing.parts[].name`, with matching `name`,
-`hex`, and optional `material.filament` / `material.transmission`. Set
-`printability.print_package_mode` to `separate_parts` when present, then bind
-the same values at export:
+keep color in the same `evidence-cad-intent/v4` document. This exporter is the
+deliberately narrower whole-part case: add exactly one `color_regions` record
+per `manufacturing.parts[].name`, with both `name` and `part` equal to the
+physical part name, plus `hex` and optional `material.filament` /
+`material.transmission`. Set `printability.print_package_mode` explicitly to
+`separate_parts`, then bind the same values at export:
 
 ```python
 export_assembly(
     {"lower-shell": lower_shell, "top-lid": top_lid},
     NAME,
     intent_path=INTENT,
+    scene_path=SCENE,
+    source_path=__file__,
     part_colors={"lower-shell": "#E8E0D4", "top-lid": "#20242A"},
 )
 ```
 
-This emits the normal part/plate STLs and semantic STEP/GLB plus a colored
-separate-parts 3MF and material plan. The 3MF is derived from the same
-plate-aligned BRep shapes; the GLB stays in semantic assembly coordinates.
-All reported transforms are rigid with `scale: 1.0`. Do not create a second
-color-only intent or import color helpers through a second `sys.path` entry.
+This emits one STL and one STEP per physical part, the required assembly STEP,
+the plate STL, semantic display GLB, colored separate-parts 3MF, material plan,
+and one `evidence-a3d-build/v1` manifest. The 3MF is derived from the same
+plate-aligned BRep shapes; STEP and GLB stay in semantic coordinates. All
+reported transforms are raw rigid 4x4 matrices with `scale: 1.0`. Do not create
+a second color-only intent or import color helpers through a second `sys.path`
+entry.
+
+The material plan uses `sourceBindings`, with exactly one binding for every
+assignment target. Each binding repeats the assignment and resolved material
+fields, then identifies its authority with `sourceKind` and `sourceId`:
+
+- `intent-color-region`: `sourceId` is the exact immutable
+  `color_regions[].name`; owner, region, color, and declared material fields
+  must agree.
+- `scene-part-material`: only for a proposed whole-part color without an intent
+  region; `sourceId` is the explicit `scene.parts[].materialId` and must resolve
+  in `scene.materials[]`.
+- `scene-part-appearance`: only when the scene part has no `materialId`;
+  `sourceId` is the exact scene part ID and the proposed color is derived from
+  its appearance or the deterministic fallback palette.
+
+The hash-bound intent and scene are re-read when validating these sources.
+Missing, duplicate, unknown, or semantically mismatched bindings invalidate the
+build; a material-plan record cannot make itself authoritative.
 
 ## Evidence rules
 
@@ -292,7 +327,8 @@ color-only intent or import color helpers through a second `sys.path` entry.
   failure. Bed exclusions and a 90-degree XY placement are considered.
 - For multipart assemblies, every `NAME-PART.stl` is audited as an individual
   printable body and `NAME.stl` is audited as the print-bed layout.
-- `NAME-assemble.step` is audited with OCCT for CAD readability, solid count,
+- Every `NAME-PART.step` and the required `NAME-assemble.step` are audited with
+  OCCT for CAD readability, solid count,
   and dimensions. STEP checks do not replace mesh printability checks.
 - `NAME-display.glb` is the user-visible assembly model. Its named physical
   nodes must match manufacturing geometry; explicitly tagged display-only
