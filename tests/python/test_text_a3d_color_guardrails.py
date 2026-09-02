@@ -1323,6 +1323,77 @@ class ColorContractTests(unittest.TestCase):
         self.assertEqual(observed["offenders"][0]["feature_id"], "charging-port")
         self.assertEqual(observed["offenders"][0]["adjacent_external_faces"], ["front"])
 
+    def test_plate_semantic_placement_uses_declared_owner_bounds(self):
+        intent = {
+            "part": "device",
+            "manufacturing": {"mode": "multipart"},
+            "features": [
+                {
+                    "id": "rear-port",
+                    "kind": "port",
+                    "part": "shell",
+                    "face": "back",
+                    "edge_crossing": "allowed",
+                }
+            ],
+        }
+        report = {
+            "part": "device",
+            "backendData": {
+                "semanticAssembly": {
+                    "boundsMm": {
+                        "min": [0, 0, 0],
+                        "max": [20, 30, 20],
+                        "size": [20, 30, 20],
+                    }
+                }
+            },
+            "parts": {
+                "shell": {
+                    "semantic": {
+                        "boundsMm": {
+                            "min": [0, 0, 0],
+                            "max": [20, 10, 20],
+                            "size": [20, 10, 20],
+                        }
+                    }
+                },
+                "base": {
+                    "semantic": {
+                        "boundsMm": {
+                            "min": [0, 0, 0],
+                            "max": [20, 30, 5],
+                            "size": [20, 30, 5],
+                        }
+                    }
+                },
+            },
+            "features": {},
+            "events": [
+                {
+                    "id": "rear-port",
+                    "kind": "cut",
+                    "part": "shell",
+                    "tool": {
+                        "bbox_mm": {
+                            "min": [5, 9.8, 5],
+                            "max": [10, 10.2, 10],
+                            "size": [5, 0.4, 5],
+                        }
+                    },
+                }
+            ],
+        }
+
+        observed = color_qa.semantic_placement_observation(intent, report)
+        self.assertEqual(observed["offenders"], [])
+        self.assertEqual(observed["observations"][0]["owner_part"], "shell")
+        report["parts"]["base"]["semantic"]["boundsMm"]["max"][1] = 40
+        self.assertEqual(
+            color_qa.semantic_placement_observation(intent, report)["offenders"],
+            [],
+        )
+
     def test_semantic_feature_placement_skips_non_opening_face_hints(self):
         intent = {
             "features": [

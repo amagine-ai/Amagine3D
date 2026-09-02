@@ -490,20 +490,28 @@ def _feature_records(
     report: dict,
     feature_id: str,
     part_name: str | None,
+    *,
+    allow_unowned: bool = False,
 ) -> list[dict]:
     records = []
     for event in report.get("events", []):
         if (
             isinstance(event, dict)
             and event.get("id") == feature_id
-            and _owned_by(event, part_name)
+            and (
+                _owned_by(event, part_name)
+                or (allow_unowned and event.get("part") is None)
+            )
         ):
             source = f"event:{event.get('kind', 'operation')}"
             bounds = _bbox_bounds(event.get("tool", {})) if event.get("kind") == "cut" else None
             if bounds is not None:
                 records.append({"bounds": bounds, "source": source})
     feature = report.get("features", {}).get(feature_id)
-    if isinstance(feature, dict) and _owned_by(feature, part_name):
+    if isinstance(feature, dict) and (
+        _owned_by(feature, part_name)
+        or (allow_unowned and feature.get("part") is None)
+    ):
         bounds = _bbox_bounds(feature)
         if bounds is not None:
             records.append({"bounds": bounds, "source": "feature"})
@@ -547,28 +555,28 @@ def semantic_placement_observation(
     tolerance: float = 0.25,
 ) -> dict:
     result = {
+        "blocked": [],
         "examined": 0,
+        "observations": [],
         "offenders": [],
         "passed_feature_ids": [],
+        "scope": "owner-part",
         "skipped": [],
         "tolerance_mm": tolerance,
     }
     if intent is None or report is None:
         return result
-    body_bounds = _body_bounds(report, part_name)
-    if body_bounds is None:
-        result["skipped"].append({
-            "feature_id": None,
-            "reason": "body bounds are unavailable",
-        })
-        return result
+    owners = _intent_feature_owners(intent)
+    multipart = intent.get("manufacturing", {}).get("mode") == "multipart"
+    report_parts = report.get("parts", {})
+    report_parts = report_parts if isinstance(report_parts, dict) else {}
     for feature in intent.get("features", []):
         if not isinstance(feature, dict):
             continue
         feature_id = feature.get("id")
         if (
             part_name is not None
-            and _intent_feature_owners(intent).get(feature_id) != part_name
+            and owners.get(feature_id) != part_name
         ):
             continue
         kind = feature.get("kind")
@@ -589,11 +597,44 @@ def semantic_placement_observation(
                 "reason": f"face {face!r} is not an auditable outside face",
             })
             continue
-        records = _feature_records(report, feature_id, part_name)
         result["examined"] += 1
+        owner_part = owners.get(feature_id)
+        if owner_part is None and not multipart:
+            declared_report_part = report.get("part")
+            if (
+                isinstance(declared_report_part, str)
+                and declared_report_part in report_parts
+            ):
+                owner_part = declared_report_part
+            elif len(report_parts) == 1:
+                owner_part = next(iter(report_parts))
+        if not isinstance(owner_part, str) or owner_part not in report_parts:
+            result["blocked"].append({
+                "blockedBy": "OWNER_UNRESOLVED",
+                "feature_id": feature_id,
+                "owner_part": owner_part,
+                "reason": "feature owner does not resolve to one report part",
+            })
+            continue
+        body_bounds = _body_bounds(report, owner_part)
+        if body_bounds is None:
+            result["blocked"].append({
+                "blockedBy": "OWNER_BOUNDS_UNAVAILABLE",
+                "feature_id": feature_id,
+                "owner_part": owner_part,
+                "reason": "owner semantic bounds are unavailable",
+            })
+            continue
+        records = _feature_records(
+            report,
+            feature_id,
+            owner_part,
+            allow_unowned=not multipart,
+        )
         if not records:
             result["offenders"].append({
                 "feature_id": feature_id,
+                "owner_part": owner_part,
                 "reason": "no observed feature or checked cut bounds",
             })
             continue
@@ -620,6 +661,17 @@ def semantic_placement_observation(
             or (edge_crossing == "forbidden" and not adjacent_faces)
             or (edge_crossing == "required" and bool(adjacent_faces))
         )
+        observation = {
+            "coordinate_frame": "semantic",
+            "edge_crossing": edge_crossing,
+            "expected_face": face,
+            "feature_id": feature_id,
+            "owner_bounds_mm": _rounded_bounds(body_bounds),
+            "owner_part": owner_part,
+            "records": record_results,
+            "touches_declared_face": touches_declared,
+        }
+        result["observations"].append(observation)
         if touches_declared and crossing_ok:
             result["passed_feature_ids"].append(feature_id)
         else:
@@ -629,6 +681,8 @@ def semantic_placement_observation(
                 "expected_face": face,
                 "feature_id": feature_id,
                 "kind": kind,
+                "owner_bounds_mm": _rounded_bounds(body_bounds),
+                "owner_part": owner_part,
                 "records": record_results,
             })
     return result
@@ -1161,10 +1215,10 @@ def main() -> int:
                     },
                 )
             semantic = semantic_placement_observation(intent, report, report_part)
-            if semantic["examined"] or semantic["offenders"]:
+            if semantic["examined"] or semantic["offenders"] or semantic["blocked"]:
                 audit.add(
                     "semantic_feature_placement",
-                    not semantic["offenders"],
+                    not semantic["offenders"] and not semantic["blocked"],
                     semantic,
                     "declared feature face and edge crossing",
                     category="geometry",
