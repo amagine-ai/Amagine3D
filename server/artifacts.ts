@@ -7,6 +7,7 @@ import type {
   ArtifactSummary,
   PreviewFormat,
 } from '../src/types.ts';
+import { isContainedRelativePath } from './path-safety.ts';
 
 const MODEL_EXTENSIONS = new Set(['.3mf', '.glb', '.step', '.stl', '.stp']);
 const IMAGE_EXTENSIONS = new Set(['.gif', '.jpeg', '.jpg', '.png', '.webp']);
@@ -110,20 +111,13 @@ export async function resolveArtifactPath(
   const root = await realpath(workspaceRoot);
   const candidate = resolve(root, requestedPath);
   const relativePath = relative(root, candidate);
-  if (
-    relativePath === '' ||
-    relativePath.startsWith(`..${sep}`) ||
-    relativePath === '..'
-  ) {
+  if (relativePath === '' || !isContainedRelativePath(relativePath)) {
     return undefined;
   }
   try {
     const canonical = await realpath(candidate);
     const canonicalRelative = relative(root, canonical);
-    if (
-      canonicalRelative.startsWith(`..${sep}`) ||
-      canonicalRelative === '..'
-    ) {
+    if (!isContainedRelativePath(canonicalRelative)) {
       return undefined;
     }
     const metadata = await stat(canonical);

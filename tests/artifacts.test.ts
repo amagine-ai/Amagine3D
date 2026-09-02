@@ -5,6 +5,15 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { resolveArtifactPath, scanArtifacts } from '../server/artifacts.ts';
+import { isContainedRelativePath } from '../server/path-safety.ts';
+
+test('relative containment rejects parent and Windows cross-volume paths', () => {
+  assert.equal(isContainedRelativePath('nested/model.step'), true);
+  assert.equal(isContainedRelativePath('nested\\model.step'), true);
+  assert.equal(isContainedRelativePath('../outside.step'), false);
+  assert.equal(isContainedRelativePath('..\\outside.step'), false);
+  assert.equal(isContainedRelativePath('D:\\outside\\model.step'), false);
+});
 
 test('discovers supported artifacts and keeps newest files first', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-artifacts-'));
