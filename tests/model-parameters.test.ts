@@ -121,7 +121,7 @@ async function writeEvidenceInputs(options: {
     },
     reference_files: [],
     representation: 'full-3d',
-    schema: 'evidence-cad-intent/v4',
+    schema: 'evidence-cad-intent/v5',
     task_mode: 'specification',
     visual: {
       landmarks: ['The generated envelope is visible in the preview.'],
@@ -130,6 +130,69 @@ async function writeEvidenceInputs(options: {
     },
   };
   const intentJson = JSON.stringify(intent);
+  const featureOwners = new Map(
+    features.map((feature) => [
+      feature.id,
+      feature.part ?? (parts.length === 1 ? parts[0] : undefined),
+    ]),
+  );
+  const declaredInterfaces = Array.isArray(manufacturing.interfaces)
+    ? (manufacturing.interfaces as Array<Record<string, unknown>>)
+    : [];
+  const sceneInterfaces = declaredInterfaces.flatMap((entry) => {
+    const interfaceFeatures = Array.isArray(entry.features)
+      ? entry.features.filter(
+          (value): value is string => typeof value === 'string',
+        )
+      : [];
+    if (
+      typeof entry.id !== 'string' ||
+      typeof entry.connection !== 'string' ||
+      interfaceFeatures.length !== 2
+    ) {
+      return [];
+    }
+    const [maleFeature, femaleFeature] = interfaceFeatures as [string, string];
+    const between = Array.isArray(entry.between)
+      ? entry.between.filter(
+          (value): value is string => typeof value === 'string',
+        )
+      : [];
+    const malePart = featureOwners.get(maleFeature) ?? between[0];
+    const femalePart = featureOwners.get(femaleFeature) ?? between[1];
+    if (!malePart || !femalePart) {
+      return [];
+    }
+    const clearances =
+      typeof entry.clearances_mm === 'object' && entry.clearances_mm !== null
+        ? (entry.clearances_mm as Record<string, unknown>)
+        : {};
+    const clearance =
+      typeof clearances.width === 'number' ? clearances.width : undefined;
+    return [
+      {
+        female: {
+          ...(clearance === undefined
+            ? {}
+            : {
+                derivedDimensionsMm: {
+                  width: { from: 'male.width', offsetMm: clearance },
+                },
+              }),
+          dimensionsMm: { width: dimensionsMm[0] + (clearance ?? 0) },
+          featureId: femaleFeature,
+          partId: femalePart,
+        },
+        id: entry.id,
+        kind: entry.connection,
+        male: {
+          dimensionsMm: { width: dimensionsMm[0] },
+          featureId: maleFeature,
+          partId: malePart,
+        },
+      },
+    ];
+  });
   await writeFile(intentPath, intentJson);
   await writeFile(
     scenePath,
@@ -137,10 +200,10 @@ async function writeEvidenceInputs(options: {
       coordinateSystem: { handedness: 'right', up: 'Z' },
       intentRef: {
         path: intentPath,
-        schema: 'evidence-cad-intent/v4',
+        schema: 'evidence-cad-intent/v5',
         sha256: sha256(intentJson),
       },
-      interfaces: [],
+      interfaces: sceneInterfaces,
       nodes: parts.map((part, index) => ({
         featureId:
           features.find((feature) => feature.part === part)?.id ??
@@ -299,7 +362,7 @@ report = {
     "events": [],
     "features": {},
     "inputs": {
-        "intent": {"path": str(intent), "schema": "evidence-cad-intent/v4", "sha256": digest(intent)},
+        "intent": {"path": str(intent), "schema": "evidence-cad-intent/v5", "sha256": digest(intent)},
         "profile": {"path": str(profile), "schema": "evidence-bambu-printer-profile/v1", "sha256": digest(profile)},
         "scene": {"path": str(scene), "revision": "parameter-fixture-r1", "schema": "evidence-semantic-scene/v1", "sha256": digest(scene)},
         "source": {"path": str(source), "schema": "python-source/v1", "sha256": digest(source)},
@@ -346,7 +409,7 @@ async function writeInitialBuild(root: string): Promise<void> {
     printability: {
       profile: { path: profilePath, sha256: sha256(profilePayload) },
     },
-    schema: 'evidence-cad-intent/v4',
+    schema: 'evidence-cad-intent/v5',
   });
   await writeFile(intentPath, intentPayload);
   await writeFile(
@@ -354,7 +417,7 @@ async function writeInitialBuild(root: string): Promise<void> {
     JSON.stringify({
       intentRef: {
         path: intentPath,
-        schema: 'evidence-cad-intent/v4',
+        schema: 'evidence-cad-intent/v5',
         sha256: sha256(intentPayload),
       },
       revision: 'parameter-fixture-r1',
@@ -835,7 +898,6 @@ test(
             acceptance: 'named parts form one case',
             assembly_axis: '+Z',
             between: ['lower-shell', 'top-lid'],
-            clearance_mm: 0,
             connection: 'glue-face',
             engagement_mm: 2,
             features: ['lower-shell', 'top-lid'],

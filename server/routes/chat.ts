@@ -82,12 +82,14 @@ function writeEvent(response: Response, event: AgentEvent): void {
 function toolActivity(toolName: string): string {
   const labels: Record<string, string> = {
     bash: '正在执行 CAD 命令',
+    cad_capabilities: '正在检查 CAD 能力',
     cad_compile: '正在编译并审计 CAD',
     edit: '正在修改参数化源码',
     find: '正在查找文件',
     grep: '正在检索工作区',
     ls: '正在检查输出目录',
     read: '正在读取文件或预览图',
+    reference_analyze: '正在分析参考图',
     web_search: '正在搜索网络资料',
     write: '正在写入生成文件',
   };
@@ -498,7 +500,6 @@ export function registerChatRoute(
               sha256,
             })),
             requireReferenceAnalysis: referenceAnalysisRequired,
-            skillsRoot: runtime.skillsRoot,
             turnStartedAtMs,
             workspaceRoot: visualWorkspaceRoot,
           }),

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -16,7 +17,6 @@ import { writeUnifiedBuildFixture } from './unified-build-fixture.ts';
 
 const SKILLS_ROOT = resolve(import.meta.dirname, '..', 'skills');
 const RENDER_SCRIPT = join(SKILLS_ROOT, 'text-a3d', 'render_preview.py');
-const REFERENCE_SCRIPT = join(SKILLS_ROOT, 'text-a3d', 'reference_analyze.py');
 const SHAPE_SCRIPT = join(SKILLS_ROOT, 'text-a3d', 'shape_consistency.py');
 
 function digest(value: string | Buffer): string {
@@ -61,14 +61,30 @@ function cadCompileResult(
   renderReport: string,
   pass = true,
   id = 'call-cad-compile',
+  runIdOverride?: string,
 ) {
+  const buildReport = renderReport.replace(/_render\.json$/u, '_report.json');
+  const buildReportBytes = readFileSync(buildReport);
+  const runId = (
+    JSON.parse(buildReportBytes.toString('utf8')) as { runId?: unknown }
+  ).runId;
   return {
     content: [{ text: pass ? 'CAD compile passed' : 'CAD compile failed', type: 'text' }],
     details: {
       artifacts: pass
-        ? { renderEvidence: { path: renderReport } }
+        ? {
+            buildReport: {
+              path: buildReport,
+              sha256: digest(buildReportBytes),
+            },
+            renderEvidence: {
+              path: renderReport,
+              sha256: digest(readFileSync(renderReport)),
+            },
+          }
         : {},
       pass,
+      runId: runIdOverride ?? runId,
       schema: 'evidence-cad-compile-result/v1',
       status: pass ? 'awaiting-visual-review' : 'failed',
     },
@@ -76,6 +92,30 @@ function cadCompileResult(
     role: 'toolResult',
     toolCallId: id,
     toolName: 'cad_compile',
+  };
+}
+
+function referenceAnalyzeResult(
+  reportPath: string,
+  reportSha256: string,
+  sourcePath: string,
+  sourceSha256: string,
+  id = 'call-reference',
+) {
+  return {
+    content: [{ text: 'Reference analysis passed', type: 'text' }],
+    details: {
+      artifacts: {
+        report: { path: reportPath, sha256: reportSha256 },
+      },
+      pass: true,
+      schema: 'evidence-reference-analysis-tool-result/v1',
+      source: { path: sourcePath, sha256: sourceSha256 },
+    },
+    isError: false,
+    role: 'toolResult',
+    toolCallId: id,
+    toolName: 'reference_analyze',
   };
 }
 
@@ -102,6 +142,7 @@ interface EvidenceFixture {
   preview: string;
   renderReport: string;
   root: string;
+  runId: string;
 }
 
 async function evidenceFixture(): Promise<EvidenceFixture> {
@@ -119,12 +160,14 @@ async function evidenceFixture(): Promise<EvidenceFixture> {
   const renderReport = join(root, 'part_render.json');
   const displayPayload = Buffer.from('glTF-display');
   const previewPayload = Buffer.from('fresh-png-evidence');
+  const runId = String(build.report.runId);
   await writeFile(preview, previewPayload);
   await writeFile(
     renderReport,
     JSON.stringify({
       meshes: [{ path: display, sha256: digest(displayPayload) }],
       preview: { path: preview, sha256: digest(previewPayload) },
+      runId,
       schema: 'evidence-render/v2',
     }),
   );
@@ -147,10 +190,11 @@ async function evidenceFixture(): Promise<EvidenceFixture> {
   return {
     display,
     messages,
-    options: { skillsRoot: SKILLS_ROOT, turnStartedAtMs, workspaceRoot: root },
+    options: { turnStartedAtMs, workspaceRoot: root },
     preview,
     renderReport,
     root,
+    runId,
   };
 }
 
@@ -172,13 +216,11 @@ test('visual validation instructions require a hash-bound render report', () => 
   assert.match(instruction, /Use the read tool/u);
   assert.doesNotMatch(instruction, /If cad_compile is unavailable/u);
   assert.doesNotMatch(instruction, /reference_analyze\.py/u);
-  assert.match(
-    visualValidationInstruction(true, true),
-    /reference_analyze\.py/u,
-  );
   const referencedInstruction = visualValidationInstruction(true, true);
+  assert.match(referencedInstruction, /structured reference_analyze tool/u);
+  assert.doesNotMatch(referencedInstruction, /reference_analyze\.py/u);
   assert.ok(
-    referencedInstruction.indexOf('reference_analyze.py') <
+    referencedInstruction.indexOf('reference_analyze tool') <
       referencedInstruction.indexOf('call cad_compile'),
   );
 });
@@ -393,13 +435,22 @@ test('a fresh render cannot reuse a build report from an earlier turn', async ()
           path: fixture.preview,
           sha256: digest(previewPayload),
         },
+        runId: fixture.runId,
         schema: 'evidence-render/v2',
       }),
     );
-    const audit = await auditMessages(fixture.messages, {
-      ...fixture.options,
-      turnStartedAtMs,
-    });
+    const audit = await auditMessages(
+      [
+        fixture.messages[0],
+        cadCompileResult(fixture.renderReport),
+        fixture.messages[2],
+        fixture.messages[3],
+      ],
+      {
+        ...fixture.options,
+        turnStartedAtMs,
+      },
+    );
     assert.equal(audit.renderReportValid, true);
     assert.equal(audit.previewRead, true);
     assert.equal(audit.buildBound, false);
@@ -487,7 +538,7 @@ test('read-time snapshot rejects a preview and report replaced after the read', 
       trail.entries,
       fixture.options,
     );
-    assert.equal(audit.renderReportValid, true);
+    assert.equal(audit.renderReportValid, false);
     assert.equal(audit.previewRead, false);
     assert.equal(audit.pass, false);
   } finally {
@@ -495,7 +546,26 @@ test('read-time snapshot rejects a preview and report replaced after the read', 
   }
 });
 
-test('render meshes must bind the newest passing build display path and hash', async () => {
+test('a display artifact replaced after compile and preview read fails closed', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+    await writeFile(fixture.display, 'replacement-display-after-read');
+    const audit = await auditCadVisualValidation(
+      trail.entries,
+      fixture.options,
+    );
+    assert.equal(audit.renderReportValid, true);
+    assert.equal(audit.previewRead, true);
+    assert.equal(audit.buildBound, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('render meshes bind the exact cad_compile build even if another report appears', async () => {
   const fixture = await evidenceFixture();
   try {
     await writeUnifiedBuildFixture({
@@ -509,6 +579,71 @@ test('render meshes must bind the newest passing build display path and hash', a
     );
     assert.equal(audit.renderReportValid, true);
     assert.equal(audit.previewRead, true);
+    assert.equal(audit.buildBound, true);
+    assert.equal(audit.pass, true);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('cad_compile evidence binds exact report bytes and compile runId', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const wrongRun = await auditMessages(
+      [
+        fixture.messages[0],
+        cadCompileResult(
+          fixture.renderReport,
+          true,
+          'call-cad-compile',
+          '11111111-1111-4111-8111-111111111111',
+        ),
+        fixture.messages[2],
+        fixture.messages[3],
+      ],
+      fixture.options,
+    );
+    assert.equal(wrongRun.renderReportValid, false);
+    assert.equal(wrongRun.buildBound, false);
+    assert.equal(wrongRun.pass, false);
+
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+    const buildReport = join(fixture.root, 'part_report.json');
+    const replacement = JSON.parse(
+      readFileSync(buildReport, 'utf8'),
+    ) as Record<string, unknown>;
+    replacement.runId = '22222222-2222-4222-8222-222222222222';
+    await writeFile(buildReport, JSON.stringify(replacement));
+    const overwritten = await auditCadVisualValidation(
+      trail.entries,
+      fixture.options,
+    );
+    assert.equal(overwritten.renderReportValid, true);
+    assert.equal(overwritten.buildBound, false);
+    assert.equal(overwritten.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('render evidence must carry the exact cad_compile runId', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const report = JSON.parse(
+      readFileSync(fixture.renderReport, 'utf8'),
+    ) as Record<string, unknown>;
+    report.runId = '22222222-2222-4222-8222-222222222222';
+    await writeFile(fixture.renderReport, JSON.stringify(report));
+    const messages = [
+      fixture.messages[0],
+      cadCompileResult(fixture.renderReport),
+      fixture.messages[2],
+      fixture.messages[3],
+    ];
+
+    const audit = await auditMessages(messages, fixture.options);
+    assert.equal(audit.renderReportValid, false);
     assert.equal(audit.buildBound, false);
     assert.equal(audit.pass, false);
   } finally {
@@ -516,11 +651,34 @@ test('render meshes must bind the newest passing build display path and hash', a
   }
 });
 
-test('reference CAD also requires a strict successful reference_analyze invocation', async () => {
+test('evidence files disappearing during audit fail closed', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+    await rm(fixture.renderReport);
+    assert.deepEqual(
+      await auditCadVisualValidation(trail.entries, fixture.options),
+      {
+        buildBound: false,
+        pass: false,
+        previewRead: false,
+        referenceAnalyzed: false,
+        renderCalled: true,
+        renderReportValid: false,
+      },
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('reference CAD requires hash-bound structured reference_analyze evidence before compile', async () => {
   const fixture = await evidenceFixture();
   try {
     const reference = join(fixture.root, 'reference.png');
     const referencePayload = Buffer.from('uploaded-reference-image');
+    const referenceSha256 = digest(referencePayload);
     const referenceReport = join(fixture.root, 'reference_analysis.json');
     await writeFile(reference, referencePayload);
     const withoutReference = await auditMessages(
@@ -528,7 +686,7 @@ test('reference CAD also requires a strict successful reference_analyze invocati
       {
         ...fixture.options,
         referenceImages: [
-          { path: reference, sha256: digest(referencePayload) },
+          { path: reference, sha256: referenceSha256 },
         ],
         requireReferenceAnalysis: true,
       },
@@ -536,29 +694,34 @@ test('reference CAD also requires a strict successful reference_analyze invocati
     assert.equal(withoutReference.pass, false);
     assert.equal(withoutReference.referenceAnalyzed, false);
 
-    await writeFile(
-      referenceReport,
-      JSON.stringify({
-        image: { sha256: digest(referencePayload) },
-        schema: 'evidence-reference-analysis/v1',
-        source: { path: reference, sha256: digest(referencePayload) },
-      }),
-    );
+    const referenceReportPayload = JSON.stringify({
+      image: { sha256: referenceSha256 },
+      schema: 'evidence-reference-analysis/v1',
+      source: { path: reference, sha256: referenceSha256 },
+    });
+    await writeFile(referenceReport, referenceReportPayload);
     const withReference = [
       assistantTool(
-        'bash',
+        'reference_analyze',
         {
-          command: `python "${REFERENCE_SCRIPT}" "${reference}" --out "${referenceReport}"`,
+          expected_sha256: referenceSha256,
+          image: 'reference.png',
+          report: 'reference_analysis.json',
         },
         'call-reference',
       ),
-      bashResult('call-reference'),
+      referenceAnalyzeResult(
+        referenceReport,
+        digest(referenceReportPayload),
+        reference,
+        referenceSha256,
+      ),
       ...fixture.messages,
     ];
     const referenceOptions = {
       ...fixture.options,
       referenceImages: [
-        { path: reference, sha256: digest(referencePayload) },
+        { path: reference, sha256: referenceSha256 },
       ],
       requireReferenceAnalysis: true,
     };
@@ -591,20 +754,90 @@ test('reference CAD also requires a strict successful reference_analyze invocati
     assert.equal(audit.referenceAnalyzed, true);
     assert.equal(audit.pass, true);
 
-    const missingReportFlag = structuredClone(withReference) as Array<{
-      content?: Array<{ arguments?: { command?: string } }>;
-    }>;
-    missingReportFlag[0]!.content![0]!.arguments!.command =
-      `python "${REFERENCE_SCRIPT}" "${reference}"`;
+    const mismatchedResultId = [
+      withReference[0],
+      referenceAnalyzeResult(
+        referenceReport,
+        digest(referenceReportPayload),
+        reference,
+        referenceSha256,
+        'call-reference-other',
+      ),
+      ...fixture.messages,
+    ];
     assert.equal(
       (
-        await auditMessages(missingReportFlag, {
+        await auditMessages(mismatchedResultId, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const wrongArtifactHash = [
+      withReference[0],
+      referenceAnalyzeResult(
+        referenceReport,
+        '0'.repeat(64),
+        reference,
+        referenceSha256,
+      ),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(wrongArtifactHash, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const wrongSourceHash = [
+      withReference[0],
+      referenceAnalyzeResult(
+        referenceReport,
+        digest(referenceReportPayload),
+        reference,
+        'f'.repeat(64),
+      ),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(wrongSourceHash, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const shellOnly = [
+      assistantTool(
+        'bash',
+        {
+          command: `python reference_analyze.py "${reference}" --out "${referenceReport}"`,
+        },
+        'call-reference-shell',
+      ),
+      bashResult('call-reference-shell'),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(shellOnly, {
           ...fixture.options,
           referenceImages: [
-            { path: reference, sha256: digest(referencePayload) },
+            { path: reference, sha256: referenceSha256 },
           ],
           requireReferenceAnalysis: true,
         })
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const afterCompile = [
+      ...fixture.messages.slice(0, 2),
+      ...withReference.slice(0, 2),
+      ...fixture.messages.slice(2),
+    ];
+    assert.equal(
+      (
+        await auditMessages(afterCompile, referenceOptions)
       ).referenceAnalyzed,
       false,
     );
@@ -618,18 +851,18 @@ test('a malformed earlier reference report does not poison a corrected repair', 
   try {
     const reference = join(fixture.root, 'reference.png');
     const referencePayload = Buffer.from('uploaded-reference-image');
+    const referenceSha256 = digest(referencePayload);
     const badReport = join(fixture.root, 'bad-reference.json');
     const goodReport = join(fixture.root, 'good-reference.json');
     await writeFile(reference, referencePayload);
-    await writeFile(badReport, '{}');
-    await writeFile(
-      goodReport,
-      JSON.stringify({
-        image: { sha256: digest(referencePayload) },
-        schema: 'evidence-reference-analysis/v1',
-        source: { path: reference, sha256: digest(referencePayload) },
-      }),
-    );
+    const badReportPayload = '{}';
+    const goodReportPayload = JSON.stringify({
+      image: { sha256: referenceSha256 },
+      schema: 'evidence-reference-analysis/v1',
+      source: { path: reference, sha256: referenceSha256 },
+    });
+    await writeFile(badReport, badReportPayload);
+    await writeFile(goodReport, goodReportPayload);
     const orderedAt = Date.now();
     await utimes(
       goodReport,
@@ -653,27 +886,43 @@ test('a malformed earlier reference report does not poison a corrected repair', 
     );
     const messages = [
       assistantTool(
-        'bash',
+        'reference_analyze',
         {
-          command: `python "${REFERENCE_SCRIPT}" "${reference}" --out "${badReport}"`,
+          expected_sha256: referenceSha256,
+          image: reference,
+          report: 'bad-reference.json',
         },
         'call-reference-bad',
       ),
-      bashResult('call-reference-bad'),
+      referenceAnalyzeResult(
+        badReport,
+        digest(badReportPayload),
+        reference,
+        referenceSha256,
+        'call-reference-bad',
+      ),
       assistantTool(
-        'bash',
+        'reference_analyze',
         {
-          command: `python "${REFERENCE_SCRIPT}" "${reference}" --out "${goodReport}"`,
+          expected_sha256: referenceSha256,
+          image: reference,
+          report: 'good-reference.json',
         },
         'call-reference-good',
       ),
-      bashResult('call-reference-good'),
+      referenceAnalyzeResult(
+        goodReport,
+        digest(goodReportPayload),
+        reference,
+        referenceSha256,
+        'call-reference-good',
+      ),
       ...fixture.messages,
     ];
     const audit = await auditMessages(messages, {
       ...fixture.options,
       referenceImages: [
-        { path: reference, sha256: digest(referencePayload) },
+        { path: reference, sha256: referenceSha256 },
       ],
       requireReferenceAnalysis: true,
     });
@@ -750,7 +999,8 @@ test('visual repair instruction names file evidence and attempt budget', () => {
     requireReferenceAnalysis: true,
   });
   assert.match(instruction, /attempt 2\/3/u);
-  assert.match(instruction, /reference_analyze\.py/u);
+  assert.match(instruction, /structured reference_analyze tool/u);
+  assert.doesNotMatch(instruction, /reference_analyze\.py/u);
   assert.match(instruction, /evidence-render\/v2/u);
   assert.match(instruction, /evidence-a3d-build\/v1/u);
   assert.match(instruction, /read tool/u);

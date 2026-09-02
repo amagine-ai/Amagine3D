@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+
+import { isContainedRelativePath } from './path-safety.ts';
 
 export const BUILD_REPORT_SCHEMA = 'evidence-a3d-build/v1';
 export const BUILD_BACKENDS = new Set([
@@ -12,10 +14,11 @@ export const BUILD_BACKENDS = new Set([
 ]);
 
 const SHA256 = /^[0-9a-f]{64}$/u;
+const MAX_BOUND_JSON_BYTES = 2 * 1024 * 1024;
 const SEMANTIC_ENVELOPE_TOLERANCE_MM = 0.5;
 const SEMANTIC_RECORD_TOLERANCE_MM = 0.0002;
 const INPUT_SCHEMAS = {
-  intent: 'evidence-cad-intent/v4',
+  intent: 'evidence-cad-intent/v5',
   profile: 'evidence-bambu-printer-profile/v1',
   scene: 'evidence-semantic-scene/v1',
 } as const;
@@ -73,6 +76,7 @@ export interface ValidatedBuildReport {
 }
 
 export interface ValidateBuildOptions {
+  expectedReportSha256?: string;
   maxBytes?: number;
   minimumArtifactModifiedAtMs?: number;
   minimumModifiedAtMs?: number;
@@ -313,27 +317,157 @@ function validMaterialPlan(
   );
 }
 
-async function sha256(path: string): Promise<string> {
-  return await new Promise<string>((resolveHash, reject) => {
-    const hash = createHash('sha256');
-    const stream = createReadStream(path);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.once('error', reject);
-    stream.once('end', () => resolveHash(hash.digest('hex')));
-  });
+function insideRoot(root: string, path: string): boolean {
+  return isContainedRelativePath(relative(root, path));
 }
 
-function insideRoot(root: string, path: string): boolean {
-  const value = relative(root, path);
-  return value === '' || (value !== '..' && !value.startsWith(`..${sep}`));
+interface StableBoundFileSnapshot {
+  bytes?: Buffer;
+  modifiedAtMs: number;
+  sha256: string;
+  size: number;
+}
+
+async function stableBoundFile(
+  path: string,
+  captureMaxBytes?: number,
+): Promise<StableBoundFileSnapshot | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      !Number.isSafeInteger(before.size) ||
+      (captureMaxBytes !== undefined && before.size > captureMaxBytes)
+    ) {
+      return undefined;
+    }
+    const hash = createHash('sha256');
+    let bytes: Buffer | undefined;
+    if (captureMaxBytes !== undefined) {
+      bytes = await handle.readFile();
+      if (bytes.length !== before.size) return undefined;
+      hash.update(bytes);
+    } else {
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      let position = 0;
+      while (position < before.size) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, before.size - position),
+          position,
+        );
+        if (bytesRead <= 0) return undefined;
+        hash.update(buffer.subarray(0, bytesRead));
+        position += bytesRead;
+      }
+    }
+    const after = await handle.stat();
+    const current = await lstat(path);
+    if (
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      before.dev !== current.dev ||
+      before.ino !== current.ino ||
+      before.size !== current.size ||
+      before.mtimeMs !== current.mtimeMs ||
+      before.ctimeMs !== current.ctimeMs
+    ) {
+      return undefined;
+    }
+    return {
+      bytes,
+      modifiedAtMs: before.mtimeMs,
+      sha256: hash.digest('hex'),
+      size: before.size,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+interface ResolvedBoundFile {
+  json?: unknown;
+  modifiedAtMs: number;
+  path: string;
+}
+
+async function readStableReport(
+  path: string,
+  maxBytes: number,
+): Promise<
+  | { bytes: Buffer; modifiedAtMs: number; sha256: string; size: number }
+  | undefined
+> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      before.size <= 0 ||
+      before.size > maxBytes
+    ) {
+      return undefined;
+    }
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    const current = await lstat(path);
+    if (
+      bytes.length !== before.size ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      before.dev !== current.dev ||
+      before.ino !== current.ino ||
+      before.size !== current.size ||
+      before.mtimeMs !== current.mtimeMs ||
+      before.ctimeMs !== current.ctimeMs
+    ) {
+      return undefined;
+    }
+    return {
+      bytes,
+      modifiedAtMs: before.mtimeMs,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: before.size,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 async function resolveBoundFile(
   workspaceRoot: string,
   reportPath: string,
   reference: BuildFileReference,
-  allowOutsideWorkspace = false,
-): Promise<string | undefined> {
+  options: { allowOutsideWorkspace?: boolean; parseJson?: boolean } = {},
+): Promise<ResolvedBoundFile | undefined> {
   if (!nonEmptyString(reference.path) || !SHA256.test(String(reference.sha256))) {
     return undefined;
   }
@@ -342,14 +476,33 @@ async function resolveBoundFile(
     : resolve(dirname(reportPath), reference.path);
   try {
     const metadata = await lstat(candidate);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) return undefined;
-    const canonical = await realpath(candidate);
-    if (!allowOutsideWorkspace && !insideRoot(workspaceRoot, canonical)) {
+    if (
+      !metadata.isFile() ||
+      metadata.isSymbolicLink() ||
+      metadata.nlink !== 1
+    ) {
       return undefined;
     }
-    return (await sha256(canonical)) === reference.sha256
-      ? canonical
-      : undefined;
+    const canonical = await realpath(candidate);
+    if (
+      !options.allowOutsideWorkspace &&
+      !insideRoot(workspaceRoot, canonical)
+    ) {
+      return undefined;
+    }
+    const snapshot = await stableBoundFile(
+      canonical,
+      options.parseJson ? MAX_BOUND_JSON_BYTES : undefined,
+    );
+    if (!snapshot || snapshot.sha256 !== reference.sha256) return undefined;
+    return {
+      json:
+        options.parseJson && snapshot.bytes
+          ? JSON.parse(snapshot.bytes.toString('utf8'))
+          : undefined,
+      modifiedAtMs: snapshot.modifiedAtMs,
+      path: canonical,
+    };
   } catch {
     return undefined;
   }
@@ -1269,16 +1422,6 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-async function jsonObjectFile(path: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const metadata = await stat(path);
-    if (!metadata.isFile() || metadata.size > 2 * 1024 * 1024) return undefined;
-    return objectRecord(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
-    return undefined;
-  }
-}
-
 function finiteVector3(value: unknown): value is number[] {
   return (
     Array.isArray(value) &&
@@ -1366,10 +1509,11 @@ function auditedGeometryMatches(
 async function validateBrepExportAudit(
   report: UnifiedBuildReport,
   artifactPaths: Record<string, string>,
+  artifactJson: Record<string, unknown>,
 ): Promise<boolean> {
   if (!String(report.backend).startsWith('brep-')) return true;
   const inlineAudit = objectRecord(objectRecord(report.backendData)?.exportAudit);
-  const fileAudit = await jsonObjectFile(artifactPaths.exportAudit ?? '');
+  const fileAudit = objectRecord(artifactJson.exportAudit);
   if (
     !inlineAudit ||
     !fileAudit ||
@@ -1708,10 +1852,11 @@ function validMaterialSources(
 async function validateInputChain(
   report: UnifiedBuildReport,
   inputPaths: Record<string, string>,
+  inputJson: Record<string, unknown>,
 ): Promise<boolean> {
-  const intent = await jsonObjectFile(inputPaths.intent ?? '');
-  const profile = await jsonObjectFile(inputPaths.profile ?? '');
-  const scene = await jsonObjectFile(inputPaths.scene ?? '');
+  const intent = objectRecord(inputJson.intent);
+  const profile = objectRecord(inputJson.profile);
+  const scene = objectRecord(inputJson.scene);
   if (
     intent?.schema !== INPUT_SCHEMAS.intent ||
     profile?.schema !== INPUT_SCHEMAS.profile ||
@@ -1760,19 +1905,16 @@ async function validateInputChain(
 async function validateHybridEvidence(
   report: UnifiedBuildReport,
   artifactPaths: Record<string, string>,
+  artifactJson: Record<string, unknown>,
 ): Promise<boolean> {
   if (report.backend !== 'hybrid-mesh') return true;
   const partIds = Object.keys(report.parts ?? {}).sort();
   const brepPartIds = partIds.filter(
     (partId) => report.parts?.[partId]?.representationMaster === 'brep',
   );
-  const boundScene = await jsonObjectFile(artifactPaths.boundScene ?? '');
-  const shapeConsistency = await jsonObjectFile(
-    artifactPaths.shapeConsistency ?? '',
-  );
-  const stepConsistency = await jsonObjectFile(
-    artifactPaths.stepConsistency ?? '',
-  );
+  const boundScene = objectRecord(artifactJson.boundScene);
+  const shapeConsistency = objectRecord(artifactJson.shapeConsistency);
+  const stepConsistency = objectRecord(artifactJson.stepConsistency);
   if (
     boundScene?.schema !== INPUT_SCHEMAS.scene ||
     boundScene.revision !== report.revision ||
@@ -1854,73 +1996,98 @@ export async function validateUnifiedBuildReport(
     const canonicalRoot = await realpath(workspaceRoot);
     const canonicalReport = await realpath(reportPath);
     if (!insideRoot(canonicalRoot, canonicalReport)) return undefined;
-    const reportMetadata = await stat(canonicalReport);
+    const reportSnapshot = await readStableReport(
+      canonicalReport,
+      options.maxBytes ?? 2 * 1024 * 1024,
+    );
     if (
-      !reportMetadata.isFile() ||
-      reportMetadata.size > (options.maxBytes ?? 2 * 1024 * 1024) ||
+      !reportSnapshot ||
+      (options.expectedReportSha256 !== undefined &&
+        (!SHA256.test(options.expectedReportSha256) ||
+          reportSnapshot.sha256 !== options.expectedReportSha256)) ||
       (options.minimumModifiedAtMs !== undefined &&
-        reportMetadata.mtimeMs < options.minimumModifiedAtMs)
+        reportSnapshot.modifiedAtMs < options.minimumModifiedAtMs)
     ) {
       return undefined;
     }
     const report = JSON.parse(
-      await readFile(canonicalReport, 'utf8'),
+      reportSnapshot.bytes.toString('utf8'),
     ) as UnifiedBuildReport;
     if (!validStructure(report)) return undefined;
 
     const artifactPaths: Record<string, string> = {};
+    const artifactJson: Record<string, unknown> = {};
+    const semanticJsonArtifacts = new Set([
+      'boundScene',
+      'exportAudit',
+      'materialPlan',
+      'shapeConsistency',
+      'stepConsistency',
+    ]);
     for (const [key, reference] of Object.entries(report.artifacts ?? {})) {
-      const path = await resolveBoundFile(
+      const bound = await resolveBoundFile(
         canonicalRoot,
         canonicalReport,
         reference,
+        { parseJson: semanticJsonArtifacts.has(key) },
       );
-      if (!path) return undefined;
+      if (!bound) return undefined;
       if (
         options.minimumArtifactModifiedAtMs !== undefined &&
         // Hybrid BRep masters may intentionally predate this compilation;
         // their current-run OCCT/geometry audit is bound separately.
         !(report.backend === 'hybrid-mesh' && key.startsWith('step:')) &&
-        (await stat(path)).mtimeMs < options.minimumArtifactModifiedAtMs
+        bound.modifiedAtMs < options.minimumArtifactModifiedAtMs
       ) {
         return undefined;
       }
-      artifactPaths[key] = path;
+      artifactPaths[key] = bound.path;
+      if (bound.json !== undefined) artifactJson[key] = bound.json;
     }
     const inputPaths: Record<string, string> = {};
+    const inputJson: Record<string, unknown> = {};
     for (const [key, reference] of Object.entries(report.inputs ?? {})) {
       if (key === 'geometry') continue;
-      const path = await resolveBoundFile(
+      const bound = await resolveBoundFile(
         canonicalRoot,
         canonicalReport,
         reference,
-        // The selected printer profile is an immutable skill asset and is
-        // intentionally shared by every session. All mutable build inputs
-        // remain confined to the session workspace.
-        key === 'profile',
+        {
+          // The selected printer profile is an immutable skill asset and is
+          // intentionally shared by every session. All mutable build inputs
+          // remain confined to the session workspace.
+          allowOutsideWorkspace: key === 'profile',
+          parseJson: ['intent', 'profile', 'scene'].includes(key),
+        },
       );
-      if (!path) return undefined;
-      inputPaths[key] = path;
+      if (!bound) return undefined;
+      inputPaths[key] = bound.path;
+      if (bound.json !== undefined) inputJson[key] = bound.json;
     }
     const geometry = objectRecord(report.inputs?.geometry);
     if (geometry) {
       for (const [key, reference] of Object.entries(geometry)) {
-        const path = await resolveBoundFile(
+        const bound = await resolveBoundFile(
           canonicalRoot,
           canonicalReport,
           reference as BuildFileReference,
         );
-        if (!path) return undefined;
-        inputPaths[`geometry:${key}`] = path;
+        if (!bound) return undefined;
+        inputPaths[`geometry:${key}`] = bound.path;
       }
     }
-    if (!(await validateInputChain(report, inputPaths))) return undefined;
-    if (!(await validateBrepExportAudit(report, artifactPaths))) return undefined;
-    if (!(await validateHybridEvidence(report, artifactPaths))) return undefined;
+    if (!(await validateInputChain(report, inputPaths, inputJson))) {
+      return undefined;
+    }
+    if (!(await validateBrepExportAudit(report, artifactPaths, artifactJson))) {
+      return undefined;
+    }
+    if (!(await validateHybridEvidence(report, artifactPaths, artifactJson))) {
+      return undefined;
+    }
     if (report.materialPlan !== undefined && report.materialPlan !== null) {
-      const materialPath = artifactPaths.materialPlan;
-      if (!materialPath) return undefined;
-      const materialPlan = JSON.parse(await readFile(materialPath, 'utf8')) as unknown;
+      const materialPlan = artifactJson.materialPlan;
+      if (materialPlan === undefined) return undefined;
       if (canonicalJson(materialPlan) !== canonicalJson(report.materialPlan)) {
         return undefined;
       }
@@ -1929,7 +2096,7 @@ export async function validateUnifiedBuildReport(
       artifactPaths,
       inputPaths,
       report,
-      reportModifiedAtMs: reportMetadata.mtimeMs,
+      reportModifiedAtMs: reportSnapshot.modifiedAtMs,
       reportPath: canonicalReport,
     };
   } catch {

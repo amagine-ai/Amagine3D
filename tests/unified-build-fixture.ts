@@ -169,7 +169,6 @@ export async function writeUnifiedBuildFixture(
               acceptance: 'Fixture parts retain their declared ownership.',
               assembly_axis: '+Z',
               between: [parts[0], parts[1]],
-              clearance_mm: 0,
               connection: 'glue-face',
               engagement_mm: 1,
               features: [featureIds[parts[0]!], featureIds[parts[1]!]],
@@ -241,7 +240,7 @@ export async function writeUnifiedBuildFixture(
       },
       reference_files: [],
       representation: 'full-3d',
-      schema: 'evidence-cad-intent/v4',
+      schema: 'evidence-cad-intent/v5',
       task_mode: 'specification',
       visual: {
         landmarks: ['all fixture parts remain identifiable'],
@@ -266,7 +265,7 @@ export async function writeUnifiedBuildFixture(
       interfaces: [],
       intentRef: {
         path: intent.path,
-        schema: 'evidence-cad-intent/v4',
+        schema: 'evidence-cad-intent/v5',
         sha256: intent.sha256,
       },
       materials: parts.map((part, index) => ({
@@ -494,7 +493,7 @@ export async function writeUnifiedBuildFixture(
   const inputs: Record<string, unknown> = {
     intent: {
       ...intent,
-      schema: 'evidence-cad-intent/v4',
+      schema: 'evidence-cad-intent/v5',
     },
     profile: {
       ...profile,

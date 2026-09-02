@@ -1,33 +1,41 @@
 import { createHash } from 'node:crypto';
 import {
-  createReadStream,
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
   readFileSync,
   realpathSync,
-  statSync,
 } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import {
   extname,
   isAbsolute,
-  join,
   relative,
   resolve,
-  sep,
 } from 'node:path';
 
-import { CAD_COMPILE_TOOL_NAME } from '@amagine3d/a3d-runtime';
+import {
+  CAD_COMPILE_TOOL_NAME,
+  REFERENCE_ANALYZE_RESULT_SCHEMA,
+  REFERENCE_ANALYZE_TOOL_NAME,
+} from '@amagine3d/a3d-runtime';
 
-import { resolveArtifactPath, scanArtifacts } from './artifacts.ts';
+import { resolveArtifactPath } from './artifacts.ts';
 import {
   BUILD_REPORT_SCHEMA,
   type UnifiedBuildReport,
   validateUnifiedBuildReport,
 } from './build-report.ts';
+import { isContainedRelativePath } from './path-safety.ts';
 
 const REFERENCE_REPORT_SCHEMA = 'evidence-reference-analysis/v1';
 const RENDER_REPORT_SCHEMA = 'evidence-render/v2';
 const MAX_PREVIEW_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/u;
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 interface ToolCallBlock {
   arguments?: unknown;
   id?: unknown;
@@ -47,7 +55,6 @@ export interface VisualAuditResult {
 export interface VisualAuditOptions {
   referenceImages?: readonly { path: string; sha256: string }[];
   requireReferenceAnalysis?: boolean;
-  skillsRoot: string;
   turnStartedAtMs: number;
   workspaceRoot: string;
 }
@@ -70,9 +77,201 @@ export interface VisualAuditEntry {
   readSnapshot?: VisualFileSnapshot;
 }
 
+interface EvidenceFileSnapshot extends VisualFileSnapshot {
+  bytes: Buffer;
+}
+
+function unchangedFile(
+  before: {
+    ctimeMs: number;
+    dev: number;
+    ino: number;
+    mtimeMs: number;
+    size: number;
+  },
+  after: {
+    ctimeMs: number;
+    dev: number;
+    ino: number;
+    mtimeMs: number;
+    size: number;
+  },
+): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+function readFileSnapshotSync(
+  path: string,
+  maxBytes: number,
+): EvidenceFileSnapshot | undefined {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const before = fstatSync(descriptor);
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      before.size <= 0 ||
+      before.size > maxBytes
+    ) {
+      return undefined;
+    }
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    const current = lstatSync(path);
+    if (
+      bytes.length !== before.size ||
+      !unchangedFile(before, after) ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      !unchangedFile(before, current)
+    ) {
+      return undefined;
+    }
+    return {
+      bytes,
+      modifiedAtMs: before.mtimeMs,
+      path,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: before.size,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Closing does not alter the already captured immutable byte snapshot.
+      }
+    }
+  }
+}
+
+async function readFileSnapshot(
+  path: string,
+  maxBytes: number,
+): Promise<EvidenceFileSnapshot | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      before.size <= 0 ||
+      before.size > maxBytes
+    ) {
+      return undefined;
+    }
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    const current = await lstat(path);
+    if (
+      bytes.length !== before.size ||
+      !unchangedFile(before, after) ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      !unchangedFile(before, current)
+    ) {
+      return undefined;
+    }
+    return {
+      bytes,
+      modifiedAtMs: before.mtimeMs,
+      path,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      size: before.size,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function readDigestSnapshot(
+  path: string,
+): Promise<VisualFileSnapshot | undefined> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const before = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      !Number.isSafeInteger(before.size)
+    ) {
+      return undefined;
+    }
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let position = 0;
+    while (position < before.size) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        Math.min(buffer.length, before.size - position),
+        position,
+      );
+      if (bytesRead <= 0) return undefined;
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    const after = await handle.stat();
+    const current = await lstat(path);
+    if (
+      !unchangedFile(before, after) ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      !unchangedFile(before, current)
+    ) {
+      return undefined;
+    }
+    return {
+      modifiedAtMs: before.mtimeMs,
+      path,
+      sha256: hash.digest('hex'),
+      size: before.size,
+    };
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function parseSnapshotJson<T>(
+  snapshot: EvidenceFileSnapshot | undefined,
+): T | undefined {
+  if (!snapshot) return undefined;
+  try {
+    return JSON.parse(snapshot.bytes.toString('utf8')) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 function insideRoot(root: string, path: string): boolean {
-  const value = relative(root, path);
-  return value === '' || (value !== '..' && !value.startsWith(`..${sep}`));
+  return isContainedRelativePath(relative(root, path));
 }
 
 function projectedAuditMessage(rawMessage: unknown): unknown {
@@ -93,6 +292,9 @@ function projectedAuditMessage(rawMessage: unknown): unknown {
   };
   if (message.toolName === CAD_COMPILE_TOOL_NAME) {
     projected.details = projectedCadCompileDetails(message.details);
+  }
+  if (message.toolName === REFERENCE_ANALYZE_TOOL_NAME) {
+    projected.details = projectedReferenceAnalyzeDetails(message.details);
   }
   if (Array.isArray(message.content)) {
     projected.content = message.content.flatMap((rawBlock) => {
@@ -126,8 +328,14 @@ function projectedCadCompileDetails(value: unknown): unknown {
       ? (record.artifacts as Record<string, unknown>)
       : {};
   const renderEvidence = artifacts.renderEvidence;
+  const buildReport = artifacts.buildReport;
   return {
     artifacts: {
+      ...(buildReport &&
+      typeof buildReport === 'object' &&
+      !Array.isArray(buildReport)
+        ? { buildReport }
+        : {}),
       ...(renderEvidence &&
       typeof renderEvidence === 'object' &&
       !Array.isArray(renderEvidence)
@@ -135,8 +343,42 @@ function projectedCadCompileDetails(value: unknown): unknown {
         : {}),
     },
     pass: record.pass,
+    runId: record.runId,
     schema: record.schema,
     status: record.status,
+  };
+}
+
+function projectedReferenceAnalyzeDetails(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const artifacts =
+    record.artifacts &&
+    typeof record.artifacts === 'object' &&
+    !Array.isArray(record.artifacts)
+      ? (record.artifacts as Record<string, unknown>)
+      : {};
+  const report =
+    artifacts.report &&
+    typeof artifacts.report === 'object' &&
+    !Array.isArray(artifacts.report)
+      ? (artifacts.report as Record<string, unknown>)
+      : {};
+  const source =
+    record.source &&
+    typeof record.source === 'object' &&
+    !Array.isArray(record.source)
+      ? (record.source as Record<string, unknown>)
+      : {};
+  return {
+    artifacts: {
+      report: { path: report.path, sha256: report.sha256 },
+    },
+    pass: record.pass,
+    schema: record.schema,
+    source: { path: source.path, sha256: source.sha256 },
   };
 }
 
@@ -195,21 +437,18 @@ export class CadVisualAuditTrail {
               ? requestedPath
               : resolve(this.workspaceRoot, requestedPath);
             const canonical = realpathSync(candidate);
-            const metadata = statSync(canonical);
             if (
-              metadata.isFile() &&
-              metadata.size > 0 &&
-              metadata.size <= MAX_PREVIEW_SNAPSHOT_BYTES &&
               insideRoot(this.workspaceRoot, canonical) &&
               extname(canonical).toLowerCase() === '.png'
             ) {
-              const bytes = readFileSync(canonical);
-              entry.readSnapshot = {
-                modifiedAtMs: metadata.mtimeMs,
-                path: canonical,
-                sha256: createHash('sha256').update(bytes).digest('hex'),
-                size: metadata.size,
-              };
+              const snapshot = readFileSnapshotSync(
+                canonical,
+                MAX_PREVIEW_SNAPSHOT_BYTES,
+              );
+              if (snapshot) {
+                const { bytes: _bytes, ...readSnapshot } = snapshot;
+                entry.readSnapshot = readSnapshot;
+              }
             }
           } catch {
             // Missing or escaped files deliberately produce no usable snapshot.
@@ -228,130 +467,88 @@ function recordArguments(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function tokenizeSimpleCommand(command: string): string[] | undefined {
-  if (
-    /[;&|<>`#\u0000-\u001f\u007f]/u.test(command) ||
-    command.includes('$(')
-  ) {
-    return undefined;
-  }
-  const tokens: string[] = [];
-  let token = '';
-  let quote: '"' | "'" | undefined;
-  let escaped = false;
-  for (const character of command.trim()) {
-    if (escaped) {
-      token += character;
-      escaped = false;
-      continue;
-    }
-    if (character === '\\' && quote !== "'") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (character === quote) quote = undefined;
-      else token += character;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (/\s/u.test(character)) {
-      if (token) tokens.push(token);
-      token = '';
-      continue;
-    }
-    token += character;
-  }
-  if (escaped || quote) return undefined;
-  if (token) tokens.push(token);
-  return tokens.length > 0 ? tokens : undefined;
-}
-
-interface PythonInvocation {
-  arguments: string[];
-  scriptPath: string;
-}
-
-interface TrustedVisualScripts {
-  reference: string;
-}
-
-function scriptInvocation(call: ToolCallBlock): PythonInvocation | undefined {
-  if (call.name !== 'bash') return undefined;
-  const command = recordArguments(call.arguments).command;
-  if (typeof command !== 'string') return undefined;
-  const tokens = tokenizeSimpleCommand(command);
-  if (!tokens || tokens.length < 2) return undefined;
-  if (tokens[0] !== 'python') return undefined;
-  const scriptPath = tokens[1];
-  if (!scriptPath || !scriptPath.toLowerCase().endsWith('.py')) return undefined;
-  return { arguments: tokens.slice(2), scriptPath };
-}
-
-function optionValue(tokens: readonly string[], name: string): string | undefined {
-  const equalsPrefix = `${name}=`;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token === name) {
-      const value = tokens[index + 1];
-      return value && !value.startsWith('-') ? value : undefined;
-    }
-    if (token?.startsWith(equalsPrefix)) {
-      const value = token.slice(equalsPrefix.length);
-      return value || undefined;
-    }
-  }
-  return undefined;
-}
-
-interface ReferenceInvocation {
+interface ReferenceAnalyzeCall {
+  expectedSha256: string;
   imagePath: string;
   reportPath: string;
 }
 
-function referenceInvocation(
-  invocation: PythonInvocation | undefined,
-  trusted: TrustedVisualScripts,
-): ReferenceInvocation | undefined {
-  if (!invocation || invocation.scriptPath !== trusted.reference) return undefined;
-  const imagePath = invocation.arguments[0];
-  const reportPath = optionValue(invocation.arguments, '--out');
-  if (!imagePath || imagePath.startsWith('-') || !reportPath) return undefined;
-  return { imagePath, reportPath };
+interface ReferenceAnalyzeEvidence extends ReferenceAnalyzeCall {
+  artifactReportPath: string;
+  artifactReportSha256: string;
+  sourcePath: string;
+  sourceSha256: string;
 }
 
-async function canonicalInvocation(
+function referenceAnalyzeCall(
   call: ToolCallBlock,
-  workspaceRoot: string,
-): Promise<PythonInvocation | undefined> {
-  const invocation = scriptInvocation(call);
-  if (!invocation) return undefined;
-  try {
-    const candidate = isAbsolute(invocation.scriptPath)
-      ? invocation.scriptPath
-      : resolve(workspaceRoot, invocation.scriptPath);
-    return {
-      ...invocation,
-      scriptPath: await realpath(candidate),
-    };
-  } catch {
+): ReferenceAnalyzeCall | undefined {
+  if (call.name !== REFERENCE_ANALYZE_TOOL_NAME) return undefined;
+  const args = recordArguments(call.arguments);
+  const imagePath = args.image;
+  const reportPath = args.report;
+  const expectedSha256 = args.expected_sha256;
+  if (
+    typeof imagePath !== 'string' ||
+    !imagePath ||
+    typeof reportPath !== 'string' ||
+    !reportPath ||
+    isAbsolute(reportPath) ||
+    reportPath.split(/[\\/]+/u).includes('..') ||
+    extname(reportPath).toLowerCase() !== '.json' ||
+    typeof expectedSha256 !== 'string' ||
+    !SHA256.test(expectedSha256)
+  ) {
     return undefined;
   }
+  return { expectedSha256, imagePath, reportPath };
 }
 
-async function trustedVisualScripts(
-  skillsRoot: string,
-): Promise<TrustedVisualScripts | undefined> {
-  try {
-    const skillRoot = await realpath(join(skillsRoot, 'text-a3d'));
-    const reference = await realpath(join(skillRoot, 'reference_analyze.py'));
-    return { reference };
-  } catch {
+function referenceAnalyzeEvidence(
+  call: ReferenceAnalyzeCall,
+  details: unknown,
+): ReferenceAnalyzeEvidence | undefined {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
     return undefined;
   }
+  const record = details as Record<string, unknown>;
+  const artifacts =
+    record.artifacts &&
+    typeof record.artifacts === 'object' &&
+    !Array.isArray(record.artifacts)
+      ? (record.artifacts as Record<string, unknown>)
+      : undefined;
+  const report =
+    artifacts?.report &&
+    typeof artifacts.report === 'object' &&
+    !Array.isArray(artifacts.report)
+      ? (artifacts.report as Record<string, unknown>)
+      : undefined;
+  const source =
+    record.source &&
+    typeof record.source === 'object' &&
+    !Array.isArray(record.source)
+      ? (record.source as Record<string, unknown>)
+      : undefined;
+  if (
+    record.schema !== REFERENCE_ANALYZE_RESULT_SCHEMA ||
+    record.pass !== true ||
+    typeof report?.path !== 'string' ||
+    typeof report.sha256 !== 'string' ||
+    !SHA256.test(report.sha256) ||
+    typeof source?.path !== 'string' ||
+    typeof source.sha256 !== 'string' ||
+    !SHA256.test(source.sha256)
+  ) {
+    return undefined;
+  }
+  return {
+    ...call,
+    artifactReportPath: report.path,
+    artifactReportSha256: report.sha256,
+    sourcePath: source.path,
+    sourceSha256: source.sha256,
+  };
 }
 
 function isCadMutation(
@@ -391,6 +588,7 @@ interface FileReference {
 interface RawRenderReport {
   meshes?: FileReference[];
   preview?: FileReference;
+  runId?: unknown;
   schema?: unknown;
 }
 
@@ -402,80 +600,63 @@ interface RawReferenceReport {
 
 const MAX_EVIDENCE_REPORT_BYTES = 2 * 1024 * 1024;
 
-async function fileSha256(path: string): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const hash = createHash('sha256');
-    const stream = createReadStream(path);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.once('error', reject);
-    stream.once('end', () => resolve(hash.digest('hex')));
-  });
-}
-
-async function readJsonFile<T>(path: string): Promise<T | undefined> {
-  try {
-    const metadata = await stat(path);
-    if (!metadata.isFile() || metadata.size > MAX_EVIDENCE_REPORT_BYTES) {
-      return undefined;
-    }
-    return JSON.parse(await readFile(path, 'utf8')) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-async function latestPassingBuild(
+async function passingBuild(
   workspaceRoot: string,
+  reportReference: FileReference,
+  runId: string,
   turnStartedAtMs: number,
 ): Promise<BuildEvidence | undefined> {
-  const artifacts = await scanArtifacts(workspaceRoot);
-  for (const artifact of artifacts) {
-    if (
-      artifact.kind !== 'report' ||
-      !artifact.name.endsWith('_report.json') ||
-      artifact.size > MAX_EVIDENCE_REPORT_BYTES
-    ) {
-      continue;
-    }
-    const reportPath = await resolveArtifactPath(workspaceRoot, artifact.path);
-    if (!reportPath) continue;
-    const candidate = await readJsonFile<UnifiedBuildReport>(reportPath);
-    if (candidate?.schema !== BUILD_REPORT_SCHEMA) continue;
-    const validated = await validateUnifiedBuildReport(
-      workspaceRoot,
-      reportPath,
-      {
-        maxBytes: MAX_EVIDENCE_REPORT_BYTES,
-        minimumArtifactModifiedAtMs: turnStartedAtMs,
-        minimumModifiedAtMs: turnStartedAtMs,
-      },
-    );
-    if (!validated) return undefined;
-    const report = validated.report;
-
-    // This is the newest passing unified build. A broken display reference
-    // fails closed instead of falling back to an older successful report.
-    const display = report.artifacts?.['glb:display'];
-    if (
-      typeof display?.path !== 'string' ||
-      typeof display.sha256 !== 'string' ||
-      !SHA256.test(display.sha256)
-    ) {
-      return undefined;
-    }
-    const displayPath = validated.artifactPaths['glb:display'];
-    if (!displayPath) return undefined;
-    return {
-      displayPath,
-      displaySha256: display.sha256,
-      reportModifiedAtMs: validated.reportModifiedAtMs,
-    };
+  if (
+    typeof reportReference.path !== 'string' ||
+    typeof reportReference.sha256 !== 'string' ||
+    !SHA256.test(reportReference.sha256)
+  ) {
+    return undefined;
   }
-  return undefined;
+  const reportPath = await resolveArtifactPath(
+    workspaceRoot,
+    reportReference.path,
+  );
+  if (!reportPath) return undefined;
+  const reportSnapshot = await readFileSnapshot(
+    reportPath,
+    MAX_EVIDENCE_REPORT_BYTES,
+  );
+  if (reportSnapshot?.sha256 !== reportReference.sha256) return undefined;
+  const candidate = parseSnapshotJson<UnifiedBuildReport>(reportSnapshot);
+  if (candidate?.schema !== BUILD_REPORT_SCHEMA) return undefined;
+  const validated = await validateUnifiedBuildReport(
+    workspaceRoot,
+    reportPath,
+    {
+      maxBytes: MAX_EVIDENCE_REPORT_BYTES,
+      minimumArtifactModifiedAtMs: turnStartedAtMs,
+      minimumModifiedAtMs: turnStartedAtMs,
+      expectedReportSha256: reportReference.sha256,
+    },
+  );
+  if (!validated || validated.report.runId !== runId) return undefined;
+  const display = validated.report.artifacts?.['glb:display'];
+  if (
+    typeof display?.path !== 'string' ||
+    typeof display.sha256 !== 'string' ||
+    !SHA256.test(display.sha256)
+  ) {
+    return undefined;
+  }
+  const displayPath = validated.artifactPaths['glb:display'];
+  if (!displayPath) return undefined;
+  return {
+    displayPath,
+    displaySha256: display.sha256,
+    reportModifiedAtMs: validated.reportModifiedAtMs,
+  };
 }
 
 async function inspectRenderEvidence(
-  reportArgument: string | undefined,
+  reportReference: FileReference | undefined,
+  buildReportReference: FileReference | undefined,
+  runId: string | undefined,
   readSnapshots: readonly VisualFileSnapshot[],
   options: VisualAuditOptions,
 ): Promise<EvidenceInspection> {
@@ -484,16 +665,39 @@ async function inspectRenderEvidence(
     previewRead: false,
     renderReportValid: false,
   };
-  if (!reportArgument) return failed;
+  if (
+    typeof reportReference?.path !== 'string' ||
+    typeof reportReference.sha256 !== 'string' ||
+    !SHA256.test(reportReference.sha256) ||
+    !buildReportReference ||
+    typeof runId !== 'string' ||
+    !UUID.test(runId)
+  ) {
+    return failed;
+  }
   const reportPath = await resolveArtifactPath(
     options.workspaceRoot,
-    reportArgument,
+    reportReference.path,
   );
   if (!reportPath) return failed;
-  const reportMetadata = await stat(reportPath);
-  if (reportMetadata.mtimeMs < options.turnStartedAtMs) return failed;
-  const report = await readJsonFile<RawRenderReport>(reportPath);
-  if (report?.schema !== RENDER_REPORT_SCHEMA) return failed;
+  const reportSnapshot = await readFileSnapshot(
+    reportPath,
+    MAX_EVIDENCE_REPORT_BYTES,
+  );
+  if (
+    !reportSnapshot ||
+    reportSnapshot.modifiedAtMs < options.turnStartedAtMs ||
+    reportSnapshot.sha256 !== reportReference.sha256
+  ) {
+    return failed;
+  }
+  const report = parseSnapshotJson<RawRenderReport>(reportSnapshot);
+  if (
+    report?.schema !== RENDER_REPORT_SCHEMA ||
+    report.runId !== runId
+  ) {
+    return failed;
+  }
 
   const preview = report.preview;
   if (
@@ -509,10 +713,14 @@ async function inspectRenderEvidence(
     preview.path,
   );
   if (!previewPath) return failed;
-  const previewMetadata = await stat(previewPath);
+  const previewSnapshot = await readFileSnapshot(
+    previewPath,
+    MAX_PREVIEW_SNAPSHOT_BYTES,
+  );
   if (
-    previewMetadata.mtimeMs < options.turnStartedAtMs ||
-    (await fileSha256(previewPath)) !== preview.sha256
+    !previewSnapshot ||
+    previewSnapshot.modifiedAtMs < options.turnStartedAtMs ||
+    previewSnapshot.sha256 !== preview.sha256
   ) {
     return failed;
   }
@@ -520,16 +728,18 @@ async function inspectRenderEvidence(
     (snapshot) =>
       snapshot.path === previewPath &&
       snapshot.sha256 === preview.sha256 &&
-      snapshot.modifiedAtMs === previewMetadata.mtimeMs &&
-      snapshot.size === previewMetadata.size,
+      snapshot.modifiedAtMs === previewSnapshot.modifiedAtMs &&
+      snapshot.size === previewSnapshot.size,
   );
   const renderReportValid = true;
 
-  const build = await latestPassingBuild(
+  const build = await passingBuild(
     options.workspaceRoot,
+    buildReportReference,
+    runId,
     options.turnStartedAtMs,
   );
-  if (!build || reportMetadata.mtimeMs < build.reportModifiedAtMs) {
+  if (!build || reportSnapshot.modifiedAtMs < build.reportModifiedAtMs) {
     return { buildBound: false, previewRead, renderReportValid };
   }
   if (!Array.isArray(report.meshes) || report.meshes.length === 0) {
@@ -548,6 +758,10 @@ async function inspectRenderEvidence(
       return { buildBound: false, previewRead, renderReportValid };
     }
   }
+  const displaySnapshot = await readDigestSnapshot(build.displayPath);
+  if (displaySnapshot?.sha256 !== build.displaySha256) {
+    return { buildBound: false, previewRead, renderReportValid };
+  }
   return {
     buildBound: true,
     buildReportModifiedAtMs: build.reportModifiedAtMs,
@@ -557,7 +771,7 @@ async function inspectRenderEvidence(
 }
 
 async function inspectReferenceEvidence(
-  calls: readonly ReferenceInvocation[],
+  evidenceItems: readonly ReferenceAnalyzeEvidence[],
   options: VisualAuditOptions,
   buildReportModifiedAtMs: number | undefined,
 ): Promise<boolean> {
@@ -565,10 +779,18 @@ async function inspectReferenceEvidence(
   const expected = new Map<string, string>();
   for (const reference of options.referenceImages ?? []) {
     try {
-      const path = await realpath(reference.path);
+      const path = await realpath(
+        isAbsolute(reference.path)
+          ? reference.path
+          : resolve(options.workspaceRoot, reference.path),
+      );
+      const snapshot = await readFileSnapshot(
+        path,
+        MAX_PREVIEW_SNAPSHOT_BYTES,
+      );
       if (
         !SHA256.test(reference.sha256) ||
-        (await fileSha256(path)) !== reference.sha256
+        snapshot?.sha256 !== reference.sha256
       ) {
         return false;
       }
@@ -580,28 +802,61 @@ async function inspectReferenceEvidence(
   if (expected.size === 0) return false;
 
   const observed = new Set<string>();
-  for (const call of calls) {
-    let sourcePath: string;
+  for (const evidence of evidenceItems) {
+    let callSourcePath: string;
+    let resultSourcePath: string;
     try {
-      sourcePath = await realpath(call.imagePath);
+      callSourcePath = await realpath(
+        isAbsolute(evidence.imagePath)
+          ? evidence.imagePath
+          : resolve(options.workspaceRoot, evidence.imagePath),
+      );
+      resultSourcePath = await realpath(
+        isAbsolute(evidence.sourcePath)
+          ? evidence.sourcePath
+          : resolve(options.workspaceRoot, evidence.sourcePath),
+      );
     } catch {
       continue;
     }
-    const expectedHash = expected.get(sourcePath);
-    if (!expectedHash) continue;
-    const reportPath = await resolveArtifactPath(
-      options.workspaceRoot,
-      call.reportPath,
+    const expectedHash = expected.get(callSourcePath);
+    const sourceSnapshot = await readFileSnapshot(
+      resultSourcePath,
+      MAX_PREVIEW_SNAPSHOT_BYTES,
     );
-    if (!reportPath) continue;
-    const reportMetadata = await stat(reportPath);
     if (
-      reportMetadata.mtimeMs < options.turnStartedAtMs ||
-      reportMetadata.mtimeMs > buildReportModifiedAtMs
+      !expectedHash ||
+      resultSourcePath !== callSourcePath ||
+      evidence.expectedSha256 !== expectedHash ||
+      evidence.sourceSha256 !== expectedHash ||
+      sourceSnapshot?.sha256 !== expectedHash
     ) {
       continue;
     }
-    const report = await readJsonFile<RawReferenceReport>(reportPath);
+    const requestedReportPath = await resolveArtifactPath(
+      options.workspaceRoot,
+      evidence.reportPath,
+    );
+    const artifactReportPath = await resolveArtifactPath(
+      options.workspaceRoot,
+      evidence.artifactReportPath,
+    );
+    if (!requestedReportPath || artifactReportPath !== requestedReportPath) {
+      continue;
+    }
+    const reportSnapshot = await readFileSnapshot(
+      artifactReportPath,
+      MAX_EVIDENCE_REPORT_BYTES,
+    );
+    if (
+      !reportSnapshot ||
+      reportSnapshot.modifiedAtMs < options.turnStartedAtMs ||
+      reportSnapshot.modifiedAtMs > buildReportModifiedAtMs ||
+      reportSnapshot.sha256 !== evidence.artifactReportSha256
+    ) {
+      continue;
+    }
+    const report = parseSnapshotJson<RawReferenceReport>(reportSnapshot);
     if (
       report?.schema !== REFERENCE_REPORT_SCHEMA ||
       typeof report.source?.path !== 'string' ||
@@ -613,12 +868,16 @@ async function inspectReferenceEvidence(
     }
     let reportedSource: string;
     try {
-      reportedSource = await realpath(report.source.path);
+      reportedSource = await realpath(
+        isAbsolute(report.source.path)
+          ? report.source.path
+          : resolve(options.workspaceRoot, report.source.path),
+      );
     } catch {
       continue;
     }
-    if (reportedSource !== sourcePath) continue;
-    observed.add(sourcePath);
+    if (reportedSource !== callSourcePath) continue;
+    observed.add(callSourcePath);
   }
   return observed.size === expected.size;
 }
@@ -627,24 +886,16 @@ export async function auditCadVisualValidation(
   entries: readonly VisualAuditEntry[],
   options: VisualAuditOptions,
 ): Promise<VisualAuditResult> {
-  const trusted = await trustedVisualScripts(options.skillsRoot);
-  if (!trusted) {
-    return {
-      buildBound: false,
-      pass: false,
-      previewRead: false,
-      referenceAnalyzed: false,
-      renderCalled: false,
-      renderReportValid: false,
-    };
-  }
   let renderCalled = false;
   let successfulCadCompile = false;
-  let activeRenderReport: string | undefined;
+  let activeBuildReport: FileReference | undefined;
+  let activeCompileRunId: string | undefined;
+  let activeRenderReport: FileReference | undefined;
+  let activeReferenceAnalyses: ReferenceAnalyzeEvidence[] = [];
   let successfulReadSnapshots: VisualFileSnapshot[] = [];
-  const pendingCadCompiles = new Set<string>();
-  const pendingReferenceAnalyses = new Map<string, ReferenceInvocation>();
-  const successfulReferenceAnalyses: ReferenceInvocation[] = [];
+  const pendingCadCompiles = new Map<string, ReferenceAnalyzeEvidence[]>();
+  const pendingReferenceAnalyses = new Map<string, ReferenceAnalyzeCall>();
+  const successfulReferenceAnalyses: ReferenceAnalyzeEvidence[] = [];
   const pendingPreviewReads = new Map<string, string>();
   for (const entry of entries) {
     const rawMessage = entry.message;
@@ -662,11 +913,13 @@ export async function auditCadVisualValidation(
         if (!rawBlock || typeof rawBlock !== 'object') continue;
         const call = rawBlock as ToolCallBlock;
         if (call.type !== 'toolCall') continue;
-        const invocation = await canonicalInvocation(call, options.workspaceRoot);
         if (isCadMutation(call)) {
           renderCalled = false;
           successfulCadCompile = false;
+          activeBuildReport = undefined;
+          activeCompileRunId = undefined;
           activeRenderReport = undefined;
+          activeReferenceAnalyses = [];
           successfulReadSnapshots = [];
           pendingCadCompiles.clear();
           pendingPreviewReads.clear();
@@ -675,9 +928,11 @@ export async function auditCadVisualValidation(
           call.name === CAD_COMPILE_TOOL_NAME &&
           typeof call.id === 'string'
         ) {
-          pendingCadCompiles.add(call.id);
+          pendingCadCompiles.set(call.id, [
+            ...successfulReferenceAnalyses,
+          ]);
         }
-        const reference = referenceInvocation(invocation, trusted);
+        const reference = referenceAnalyzeCall(call);
         if (reference && typeof call.id === 'string') {
           pendingReferenceAnalyses.set(call.id, reference);
         }
@@ -694,6 +949,8 @@ export async function auditCadVisualValidation(
       typeof message.toolCallId === 'string' &&
       pendingCadCompiles.has(message.toolCallId)
     ) {
+      const referenceAnalyses =
+        pendingCadCompiles.get(message.toolCallId) ?? [];
       pendingCadCompiles.delete(message.toolCallId);
       const details =
         message.details &&
@@ -713,16 +970,38 @@ export async function auditCadVisualValidation(
         !Array.isArray(artifacts.renderEvidence)
           ? (artifacts.renderEvidence as Record<string, unknown>)
           : undefined;
+      const buildReport =
+        artifacts?.buildReport &&
+        typeof artifacts.buildReport === 'object' &&
+        !Array.isArray(artifacts.buildReport)
+          ? (artifacts.buildReport as Record<string, unknown>)
+          : undefined;
       if (
         message.isError !== true &&
         details?.schema === 'evidence-cad-compile-result/v1' &&
         details.pass === true &&
         details.status === 'awaiting-visual-review' &&
-        typeof renderEvidence?.path === 'string'
+        typeof details.runId === 'string' &&
+        UUID.test(details.runId) &&
+        typeof buildReport?.path === 'string' &&
+        typeof buildReport.sha256 === 'string' &&
+        SHA256.test(buildReport.sha256) &&
+        typeof renderEvidence?.path === 'string' &&
+        typeof renderEvidence.sha256 === 'string' &&
+        SHA256.test(renderEvidence.sha256)
       ) {
         renderCalled = true;
         successfulCadCompile = true;
-        activeRenderReport = renderEvidence.path;
+        activeCompileRunId = details.runId as string;
+        activeBuildReport = {
+          path: buildReport.path,
+          sha256: buildReport.sha256,
+        };
+        activeRenderReport = {
+          path: renderEvidence.path,
+          sha256: renderEvidence.sha256,
+        };
+        activeReferenceAnalyses = referenceAnalyses;
         successfulReadSnapshots = [];
         pendingPreviewReads.clear();
       }
@@ -730,14 +1009,17 @@ export async function auditCadVisualValidation(
     }
     if (
       message.role === 'toolResult' &&
-      message.toolName === 'bash' &&
-      message.isError !== true &&
+      message.toolName === REFERENCE_ANALYZE_TOOL_NAME &&
       typeof message.toolCallId === 'string' &&
       pendingReferenceAnalyses.has(message.toolCallId)
     ) {
       const reference = pendingReferenceAnalyses.get(message.toolCallId);
-      if (reference) successfulReferenceAnalyses.push(reference);
       pendingReferenceAnalyses.delete(message.toolCallId);
+      if (reference && message.isError !== true) {
+        const evidence = referenceAnalyzeEvidence(reference, message.details);
+        if (evidence) successfulReferenceAnalyses.push(evidence);
+      }
+      continue;
     }
     if (
       message.role === 'toolResult' &&
@@ -764,8 +1046,10 @@ export async function auditCadVisualValidation(
     }
   }
   const evidence = renderCalled
-    ? await inspectRenderEvidence(
+      ? await inspectRenderEvidence(
         activeRenderReport,
+        activeBuildReport,
+        activeCompileRunId,
         successfulReadSnapshots,
         options,
       )
@@ -776,7 +1060,7 @@ export async function auditCadVisualValidation(
       };
   const referenceAnalyzed = options.requireReferenceAnalysis
     ? await inspectReferenceEvidence(
-        successfulReferenceAnalyses,
+        activeReferenceAnalyses,
         options,
         evidence.buildReportModifiedAtMs,
       )
@@ -806,10 +1090,10 @@ export function visualValidationInstruction(
     '<visual_validation_required>',
     ...(requireReferenceAnalysis
       ? [
-          'Uploaded reference images are present. Run the selected skill\'s reference_analyze.py once for every saved local image path before modeling, with an explicit --out reference-report.json. The server verifies a current-turn evidence-reference-analysis/v1 report, exact source path, and source SHA-256 for every upload; hand-copied pixel coordinates or unsupported visual assertions do not satisfy the reference contract.',
+          'Uploaded reference images are present. Call the structured reference_analyze tool once for every saved local image path before modeling, passing the exact saved path, supplied SHA-256, and a workspace-relative JSON report path. The server binds each successful tool result to its call ID and verifies the current-turn report artifact SHA-256, exact source path, source SHA-256, and completion before the cad_compile build it informed; shell commands, hand-copied pixel coordinates, and unsupported visual assertions do not satisfy the reference contract.',
         ]
       : []),
-    'This CAD turn has a mandatory visual gate. After any required reference analysis, call cad_compile to build, audit, package, and render the current marker, immutable intent, semantic scene, and generated source. A successful call returns evidence-cad-compile-result/v1 with pass=true, status=awaiting-visual-review, and artifacts.renderEvidence.path pointing to a current evidence-render/v2 report bound to the latest passing evidence-a3d-build/v1 report. Use the read tool on the exact preview PNG recorded by that report; a successful compile alone does not complete visual review. The server verifies current-turn mtimes, file hashes, the read-time preview snapshot, and the render-report mesh binding to the latest passing build; command text or a similarly named old image does not count. Compare the preview against the independent reference/design contract before answering. If the comparison fails, revise the source or scene without weakening the intent, call cad_compile again, and read the new preview.',
+    'This CAD turn has a mandatory visual gate. After any required reference analysis, call cad_compile to build, audit, package, and render the current marker, immutable intent, semantic scene, and generated source. A successful call returns evidence-cad-compile-result/v1 with pass=true, status=awaiting-visual-review, and exact artifacts.buildReport and artifacts.renderEvidence references. Use the read tool on the exact preview PNG recorded by that render report; a successful compile alone does not complete visual review. The server verifies current-turn mtimes, file hashes, the read-time preview snapshot, and the render-report mesh binding to the exact evidence-a3d-build/v1 report returned by that cad_compile call; command text, workspace scans, or a similarly named old image do not count. Compare the preview against the independent reference/design contract before answering. If the comparison fails, revise the source or scene without weakening the intent, call cad_compile again, and read the new preview.',
     '</visual_validation_required>',
   ].join('\n');
 }
@@ -821,7 +1105,7 @@ export function visualValidationRepairInstruction(
   const missing: string[] = [];
   if (options.requireReferenceAnalysis && !audit.referenceAnalyzed) {
     missing.push(
-      'run the canonical reference_analyze.py --out <report.json> for every saved uploaded-image path, bind each evidence-reference-analysis/v1 source path and SHA-256, then rebuild the final CAD after those reports before rerendering and rereading',
+      'call the structured reference_analyze tool for every saved uploaded-image path with its supplied SHA-256 and a workspace-relative report path, then rebuild the final CAD after those hash-bound reports before rerendering and rereading',
     );
   }
   if (!audit.renderCalled) {
@@ -836,7 +1120,7 @@ export function visualValidationRepairInstruction(
   }
   if (!audit.buildBound) {
     missing.push(
-      'render artifacts["glb:display"] from the workspace latest passing evidence-a3d-build/v1 report, preserving its exact path and SHA-256 in render-report meshes',
+      'render artifacts["glb:display"] from the exact evidence-a3d-build/v1 artifacts.buildReport returned by the successful cad_compile call, preserving its path and SHA-256 in render-report meshes',
     );
   }
   if (!audit.previewRead) {

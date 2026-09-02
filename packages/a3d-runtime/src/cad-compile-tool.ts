@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { constants, createReadStream } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { constants, type BigIntStats } from 'node:fs';
 import {
   access,
   lstat,
@@ -8,7 +8,6 @@ import {
   open,
   realpath,
   stat,
-  writeFile,
 } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -19,13 +18,24 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 
+import { terminateProcessTree } from './python-json-process.ts';
+
 export const CAD_COMPILE_TOOL_NAME = 'cad_compile';
 
 const RESULT_SCHEMA = 'evidence-cad-compile-result/v1';
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const LOG_NAME = 'cad_compile.log';
 const RESULT_NAME = 'cad_compile-result.json';
 const DEFAULT_LOG_POLL_INTERVAL_MS = 250;
 const DEFAULT_TERMINATE_GRACE_MS = 500;
+export const CAD_COMPILE_AGGREGATE_TIMEOUT_MS = 5_400_000;
+// Python's bounded Windows cleanup can consume 12 seconds (taskkill + two
+// waits); reserve additional time for compact-result and log publication.
+export const CAD_COMPILE_DEADLINE_SETTLEMENT_GRACE_MS = 30_000;
+export const CAD_COMPILE_HARD_TIMEOUT_MS =
+  CAD_COMPILE_AGGREGATE_TIMEOUT_MS +
+  CAD_COMPILE_DEADLINE_SETTLEMENT_GRACE_MS;
 const MAX_CAPTURE_BYTES = 1_000_000;
 const MAX_LOG_READ_BYTES = 64_000;
 const MAX_LOG_UPDATE_CHARS = 4_000;
@@ -75,6 +85,7 @@ export interface CadCompileResult {
   artifacts: Record<string, CadCompileArtifactReference>;
   issues: CadCompileIssue[];
   pass: boolean;
+  runId: string;
   schema: typeof RESULT_SCHEMA;
   status: string;
   [key: string]: unknown;
@@ -91,6 +102,8 @@ interface CadCompileProgress {
 type CadCompileToolDetails = CadCompileProgress | CadCompileResult;
 
 export interface CadCompileToolTuning {
+  /** Test-only latency tuning; production callers should use the default. */
+  hardTimeoutMs?: number;
   /** Test-only latency tuning; production callers should use the default. */
   logPollIntervalMs?: number;
   /** Test-only latency tuning; production callers should use the default. */
@@ -112,6 +125,8 @@ export function isCadCompileResult(value: unknown): value is CadCompileResult {
   return (
     result.schema === RESULT_SCHEMA &&
     typeof result.pass === 'boolean' &&
+    typeof result.runId === 'string' &&
+    UUID.test(result.runId) &&
     typeof result.status === 'string' &&
     Array.isArray(result.issues) &&
     typeof result.artifacts === 'object' &&
@@ -216,6 +231,78 @@ async function assertPathEntriesAreSafe(
   }
 }
 
+async function truncateSafeCompileLog(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    try {
+      const existing = await lstat(path);
+      if (
+        existing.isSymbolicLink() ||
+        !existing.isFile() ||
+        existing.nlink !== 1
+      ) {
+        throw infrastructureError(
+          'TOOL.LOG_UNSAFE',
+          'cad_compile log must be a single-linked regular file',
+        );
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
+    handle = await open(
+      path,
+      constants.O_RDWR |
+        constants.O_CREAT |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+      0o600,
+    );
+    const opened = await handle.stat();
+    const current = await lstat(path);
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      current.isSymbolicLink() ||
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      opened.dev !== current.dev ||
+      opened.ino !== current.ino
+    ) {
+      throw infrastructureError(
+        'TOOL.LOG_UNSAFE',
+        'cad_compile log stopped being a single-linked regular file',
+      );
+    }
+    await handle.truncate(0);
+    const truncated = await handle.stat();
+    const published = await lstat(path);
+    if (
+      !truncated.isFile() ||
+      truncated.nlink !== 1 ||
+      truncated.size !== 0 ||
+      published.isSymbolicLink() ||
+      !published.isFile() ||
+      published.nlink !== 1 ||
+      truncated.dev !== published.dev ||
+      truncated.ino !== published.ino
+    ) {
+      throw infrastructureError(
+        'TOOL.LOG_UNSAFE',
+        'cad_compile log changed while it was prepared',
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('{')) throw error;
+    throw infrastructureError(
+      'TOOL.LOG_UNSAFE',
+      `cad_compile log could not be prepared safely: ${(error as Error).message}`,
+    );
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 async function resolveWorkspaceParameter(
   workspaceRoot: string,
   label: string,
@@ -315,38 +402,6 @@ function appendCaptured(
   };
 }
 
-function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
-  if (process.platform === 'win32') return;
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    // The group may already have exited; termination must never escape an
-    // AbortSignal listener or a delayed SIGKILL callback.
-  }
-}
-
-function terminateProcessTree(
-  child: ChildProcess,
-  graceMs: number,
-): void {
-  const pid = child.pid;
-  if (!pid) return;
-  if (process.platform === 'win32') {
-    const killer = spawn(
-      'taskkill',
-      ['/pid', String(pid), '/t', '/f'],
-      { shell: false, stdio: 'ignore', windowsHide: true },
-    );
-    killer.unref();
-    return;
-  }
-  killProcessGroup(pid, 'SIGTERM');
-  const timer = setTimeout(() => {
-    killProcessGroup(pid, 'SIGKILL');
-  }, graceMs);
-  timer.unref();
-}
-
 class CompileLogTailer {
   private bytesRead = 0;
   private interval: NodeJS.Timeout | undefined;
@@ -435,6 +490,7 @@ class CompileLogTailer {
 async function runCompilerProcess(options: {
   argv: string[];
   cwd: string;
+  hardTimeoutMs: number;
   logPath: string;
   logDisplayPath: string;
   onUpdate: AgentToolUpdateCallback<CadCompileToolDetails> | undefined;
@@ -446,6 +502,12 @@ async function runCompilerProcess(options: {
   if (options.signal?.aborted) {
     throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
   }
+  if (!Number.isFinite(options.hardTimeoutMs) || options.hardTimeoutMs <= 0) {
+    throw infrastructureError(
+      'TOOL.CONFIG_INVALID',
+      'cad_compile hard timeout must be a positive number',
+    );
+  }
 
   const tailer = new CompileLogTailer(
     options.logPath,
@@ -456,6 +518,10 @@ async function runCompilerProcess(options: {
   let stdout: Buffer = Buffer.alloc(0);
   let stderr: Buffer = Buffer.alloc(0);
   let outputOverflow = false;
+  let childClosed = false;
+  let terminationReason: 'aborted' | 'output-limit' | 'timeout' | undefined;
+  let terminationPromise: Promise<void> | undefined;
+  let watchdog: NodeJS.Timeout | undefined;
 
   const child = spawn(options.pythonExecutable, options.argv, {
     cwd: options.cwd,
@@ -467,20 +533,38 @@ async function runCompilerProcess(options: {
   });
   tailer.start();
 
-  const abort = () => terminateProcessTree(child, options.terminateGraceMs);
+  const terminate = (
+    reason: 'aborted' | 'output-limit' | 'timeout',
+  ): Promise<void> => {
+    if (childClosed || terminationReason) {
+      return terminationPromise ?? Promise.resolve();
+    }
+    terminationReason = reason;
+    terminationPromise = terminateProcessTree(
+      child,
+      options.terminateGraceMs,
+    );
+    return terminationPromise;
+  };
+  const abort = () => void terminate('aborted');
   options.signal?.addEventListener('abort', abort, { once: true });
+  if (options.signal?.aborted) abort();
+  watchdog = setTimeout(
+    () => void terminate('timeout'),
+    options.hardTimeoutMs,
+  );
 
   child.stdout?.on('data', (chunk: Buffer) => {
     const captured = appendCaptured(stdout, chunk);
     stdout = captured.buffer;
     outputOverflow ||= captured.overflow;
-    if (captured.overflow) terminateProcessTree(child, options.terminateGraceMs);
+    if (captured.overflow) void terminate('output-limit');
   });
   child.stderr?.on('data', (chunk: Buffer) => {
     const captured = appendCaptured(stderr, chunk);
     stderr = captured.buffer;
     outputOverflow ||= captured.overflow;
-    if (captured.overflow) terminateProcessTree(child, options.terminateGraceMs);
+    if (captured.overflow) void terminate('output-limit');
   });
 
   try {
@@ -489,15 +573,25 @@ async function runCompilerProcess(options: {
       signal: NodeJS.Signals | null;
     }>((resolvePromise, rejectPromise) => {
       child.once('error', rejectPromise);
-      child.once('close', (code, childSignal) =>
-        resolvePromise({ code, signal: childSignal }),
-      );
+      child.once('close', (code, childSignal) => {
+        childClosed = true;
+        if (watchdog) clearTimeout(watchdog);
+        options.signal?.removeEventListener('abort', abort);
+        resolvePromise({ code, signal: childSignal });
+      });
     });
+    await terminationPromise;
     await tailer.stop();
-    if (options.signal?.aborted) {
+    if (terminationReason === 'aborted') {
       throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
     }
-    if (outputOverflow) {
+    if (terminationReason === 'timeout') {
+      throw infrastructureError(
+        'TOOL.TIMEOUT',
+        `cad_compile exceeded its ${options.hardTimeoutMs} ms hard timeout`,
+      );
+    }
+    if (terminationReason === 'output-limit' || outputOverflow) {
       throw infrastructureError(
         'TOOL.OUTPUT_TOO_LARGE',
         'cad_compile produced too much direct process output',
@@ -509,7 +603,13 @@ async function runCompilerProcess(options: {
       stdout: stdout.toString('utf8'),
     };
   } catch (error) {
-    terminateProcessTree(child, options.terminateGraceMs);
+    if (!childClosed) {
+      terminationPromise ??= terminateProcessTree(
+        child,
+        options.terminateGraceMs,
+      );
+      await terminationPromise;
+    }
     await tailer.stop();
     if (error instanceof Error && error.message.startsWith('{')) throw error;
     throw infrastructureError(
@@ -517,6 +617,7 @@ async function runCompilerProcess(options: {
       `cad_compile could not run: ${(error as Error).message}`,
     );
   } finally {
+    if (watchdog) clearTimeout(watchdog);
     options.signal?.removeEventListener('abort', abort);
   }
 }
@@ -552,8 +653,12 @@ function parseCompileResult(
 async function validateReturnedArtifacts(
   workspaceRoot: string,
   result: CadCompileResult,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   for (const [name, rawReference] of Object.entries(result.artifacts)) {
+    if (signal?.aborted) {
+      throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
+    }
     if (
       typeof rawReference !== 'object' ||
       rawReference === null ||
@@ -579,16 +684,16 @@ async function validateReturnedArtifacts(
       );
     }
     await assertPathEntriesAreSafe(workspaceRoot, candidate, `artifact ${name}`);
-    const entry = await lstat(candidate).catch((error: NodeJS.ErrnoException) => {
+    const entry = await lstat(candidate, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
       throw infrastructureError(
         'TOOL.RESULT_INVALID',
         `cad_compile artifact ${name} is unavailable: ${error.message}`,
       );
     });
-    if (!entry.isFile()) {
+    if (!entry.isFile() || entry.nlink !== 1n) {
       throw infrastructureError(
         'TOOL.RESULT_INVALID',
-        `cad_compile artifact ${name} is not a regular file`,
+        `cad_compile artifact ${name} is not a single-linked regular file`,
       );
     }
     if (
@@ -600,24 +705,100 @@ async function validateReturnedArtifacts(
         `cad_compile artifact ${name} does not contain a valid SHA-256`,
       );
     }
-    const observedHash = await new Promise<string>((resolveHash, rejectHash) => {
-      const hash = createHash('sha256');
-      const stream = createReadStream(candidate);
-      stream.on('data', (chunk) => hash.update(chunk));
-      stream.once('error', rejectHash);
-      stream.once('end', () => resolveHash(hash.digest('hex')));
-    }).catch((error: NodeJS.ErrnoException) => {
-      throw infrastructureError(
-        'TOOL.RESULT_INVALID',
-        `cad_compile artifact ${name} could not be hashed: ${error.message}`,
-      );
-    });
+    const observedHash = await hashStableArtifact(candidate, name, entry, signal);
     if (observedHash !== rawReference.sha256) {
       throw infrastructureError(
         'TOOL.RESULT_HASH_MISMATCH',
         `cad_compile artifact ${name} changed before result validation`,
       );
     }
+  }
+}
+
+function artifactSnapshotMatches(
+  left: BigIntStats,
+  right: BigIntStats,
+): boolean {
+  return (
+    left.isFile() &&
+    right.isFile() &&
+    left.nlink === 1n &&
+    right.nlink === 1n &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+async function hashStableArtifact(
+  path: string,
+  name: string,
+  initialPathEntry: BigIntStats,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+    const before = await handle.stat({ bigint: true });
+    if (!artifactSnapshotMatches(initialPathEntry, before)) {
+      throw infrastructureError(
+        'TOOL.RESULT_CHANGED',
+        `cad_compile artifact ${name} changed before result validation`,
+      );
+    }
+    if (signal?.aborted) {
+      throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
+    }
+
+    const hash = createHash('sha256');
+    const stream = handle.createReadStream({
+      autoClose: false,
+      signal,
+      start: 0,
+    });
+    try {
+      for await (const chunk of stream) hash.update(chunk as Buffer);
+    } catch (error) {
+      stream.destroy();
+      if (signal?.aborted || (error as Error).name === 'AbortError') {
+        throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
+      }
+      throw error;
+    }
+
+    if (signal?.aborted) {
+      throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
+    }
+    const after = await handle.stat({ bigint: true });
+    const finalPathEntry = await lstat(path, { bigint: true });
+    if (
+      !artifactSnapshotMatches(before, after) ||
+      !artifactSnapshotMatches(after, finalPathEntry)
+    ) {
+      throw infrastructureError(
+        'TOOL.RESULT_CHANGED',
+        `cad_compile artifact ${name} changed during result validation`,
+      );
+    }
+    return hash.digest('hex');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('{')) throw error;
+    if (signal?.aborted || (error as Error).name === 'AbortError') {
+      throw infrastructureError('TOOL.ABORTED', 'cad_compile was cancelled');
+    }
+    throw infrastructureError(
+      'TOOL.RESULT_INVALID',
+      `cad_compile artifact ${name} could not be hashed: ${(error as Error).message}`,
+    );
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -722,7 +903,7 @@ export function createCadCompileTool(
       ] as const) {
         await assertPathEntriesAreSafe(root, path, label);
       }
-      await writeFile(logPath, '');
+      await truncateSafeCompileLog(logPath);
 
       const processResult = await runCompilerProcess({
         argv: [
@@ -744,6 +925,7 @@ export function createCadCompileTool(
           logPath,
         ],
         cwd: root,
+        hardTimeoutMs: tuning.hardTimeoutMs ?? CAD_COMPILE_HARD_TIMEOUT_MS,
         logDisplayPath: relative(root, logPath) || LOG_NAME,
         logPath,
         onUpdate,
@@ -755,7 +937,7 @@ export function createCadCompileTool(
           tuning.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS,
       });
       const result = parseCompileResult(processResult.stdout, processResult);
-      await validateReturnedArtifacts(root, result);
+      await validateReturnedArtifacts(root, result, signal);
 
       if (result.pass && processResult.code !== 0) {
         throw infrastructureError(

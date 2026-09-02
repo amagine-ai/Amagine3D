@@ -1,8 +1,10 @@
 import { strict as assert } from 'node:assert';
+import { execFile } from 'node:child_process';
 import {
   chmod,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   realpath,
   rm,
@@ -15,9 +17,13 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  CAD_COMPILE_AGGREGATE_TIMEOUT_MS,
+  CAD_COMPILE_DEADLINE_SETTLEMENT_GRACE_MS,
+  CAD_COMPILE_HARD_TIMEOUT_MS,
   CAD_COMPILE_TOOL_NAME,
   createCadCompileResultExtension,
   createCadCompileTool,
+  isCadCompileResult,
   type CadCompileResult,
 } from '../packages/a3d-runtime/src/cad-compile-tool.ts';
 
@@ -46,7 +52,10 @@ if (argv.includes('--report')) throw new Error('tool must let the compiler deriv
 const mode = fs.readFileSync(source, 'utf8').trim();
 fs.appendFileSync(log, 'stage=source\\n');
 
-if (mode === 'hang') {
+if (mode === 'sync-hang') {
+  fs.writeFileSync(path.join(process.cwd(), 'compiler.pid'), String(process.pid));
+  while (true) {}
+} else if (mode === 'hang') {
   const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
   });
@@ -69,6 +78,7 @@ if (mode === 'hang') {
       artifacts,
       issues: pass ? [] : [{ code: 'QA.MESH_FAILED', severity: 'error', stage: 'mesh-qa' }],
       pass,
+      runId: '11111111-1111-4111-8111-111111111111',
       schema: 'evidence-cad-compile-result/v1',
       status: pass ? 'awaiting-visual-review' : 'failed',
       receivedMarker: path.relative(process.cwd(), marker),
@@ -89,7 +99,7 @@ interface Fixture {
 }
 
 async function createFixture(
-  mode: 'bad-hash' | 'fail' | 'hang' | 'pass',
+  mode: 'bad-hash' | 'fail' | 'hang' | 'pass' | 'sync-hang',
 ): Promise<Fixture> {
   const temporary = await mkdtemp(join(tmpdir(), 'amagine-cad-tool-'));
   const canonicalTemporary = await realpath(temporary);
@@ -126,6 +136,7 @@ async function createFixture(
 function executeTool(
   fixture: Fixture,
   options: {
+    hardTimeoutMs?: number;
     intent?: string;
     marker?: string;
     onUpdate?: (value: unknown) => void;
@@ -133,6 +144,7 @@ function executeTool(
   } = {},
 ) {
   const tool = createCadCompileTool(fixture.projectRoot, fixture.workspaceRoot, {
+    hardTimeoutMs: options.hardTimeoutMs,
     logPollIntervalMs: 10,
     terminateGraceMs: 50,
   });
@@ -150,6 +162,51 @@ function executeTool(
     {} as never,
   );
 }
+
+async function waitForPid(path: string): Promise<number> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const pid = Number.parseInt(await readFile(path, 'utf8'), 10);
+      if (Number.isInteger(pid) && pid > 0) return pid;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+  throw new Error('fake compiler did not publish its pid');
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+async function makeFifo(path: string): Promise<void> {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    execFile('mkfifo', [path], (error) => {
+      if (error) rejectPromise(error);
+      else resolvePromise();
+    });
+  });
+}
+
+test('cad_compile watchdog reserves cleanup time after the aggregate deadline', () => {
+  assert.equal(CAD_COMPILE_AGGREGATE_TIMEOUT_MS, 5_400_000);
+  assert.ok(
+    CAD_COMPILE_DEADLINE_SETTLEMENT_GRACE_MS >= 12_000,
+    'wrapper grace must cover the Python Windows cleanup upper bound',
+  );
+  assert.equal(
+    CAD_COMPILE_HARD_TIMEOUT_MS,
+    CAD_COMPILE_AGGREGATE_TIMEOUT_MS +
+      CAD_COMPILE_DEADLINE_SETTLEMENT_GRACE_MS,
+  );
+  assert.ok(CAD_COMPILE_HARD_TIMEOUT_MS < 7_200_000);
+});
 
 test(
   'cad_compile is sequential, streams only real log growth, and preserves compact result details',
@@ -241,6 +298,28 @@ test(
   },
 );
 
+test(
+  'cad_compile honors cancellation before returned artifact hashing',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('pass');
+    const controller = new AbortController();
+    try {
+      const execution = executeTool(fixture, {
+        onUpdate: (update) => {
+          if (JSON.stringify(update).includes('stage=render')) {
+            controller.abort();
+          }
+        },
+        signal: controller.signal,
+      });
+      await assert.rejects(execution, /TOOL\.ABORTED/u);
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
 test('cad_compile result extension marks only structured semantic failures as errors', async () => {
   let toolResultHandler: ((event: Record<string, unknown>) => unknown) | undefined;
   const extension = createCadCompileResultExtension();
@@ -257,10 +336,13 @@ test('cad_compile result extension marks only structured semantic failures as er
     artifacts: {},
     issues: [{ code: 'QA.MESH_FAILED' }],
     pass: false,
+    runId: '11111111-1111-4111-8111-111111111111',
     schema: 'evidence-cad-compile-result/v1',
     status: 'failed',
   };
   const usage = { input: 1, output: 2 };
+  assert.equal(isCadCompileResult(failed), true);
+  assert.equal(isCadCompileResult({ ...failed, runId: undefined }), false);
   assert.deepEqual(
     await toolResultHandler({
       details: failed,
@@ -304,6 +386,38 @@ test(
         /TOOL\.SYMLINK_REJECTED/u,
       );
     } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  'cad_compile rejects a FIFO log before starting its hard watchdog',
+  { skip: process.platform === 'win32', timeout: 5_000 },
+  async () => {
+    const fixture = await createFixture('pass');
+    const outputDir = join(fixture.workspaceRoot, 'artifacts');
+    const logPath = join(outputDir, 'cad_compile.log');
+    let unblock: Promise<void> | undefined;
+    let fallback: NodeJS.Timeout | undefined;
+    try {
+      await mkdir(outputDir, { recursive: true });
+      await makeFifo(logPath);
+      // If this guard ever regresses, replace the FIFO after pairing a reader
+      // so the test reports a normal assertion instead of wedging the suite.
+      fallback = setTimeout(() => {
+        unblock = (async () => {
+          const reader = await open(logPath, 'r');
+          await unlink(logPath);
+          await writeFile(logPath, '');
+          await reader.close();
+        })();
+      }, 250);
+
+      await assert.rejects(executeTool(fixture), /TOOL\.LOG_UNSAFE/u);
+    } finally {
+      if (fallback) clearTimeout(fallback);
+      await unblock;
       await fixture.cleanup();
     }
   },
@@ -396,6 +510,28 @@ test(
         } catch {
           // The expected path: the process group was already terminated.
         }
+      }
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  'cad_compile hard watchdog terminates a synchronously stuck driver',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('sync-hang');
+    let compilerPid: number | undefined;
+    try {
+      const execution = executeTool(fixture, { hardTimeoutMs: 250 });
+      compilerPid = await waitForPid(
+        join(fixture.workspaceRoot, 'compiler.pid'),
+      );
+      await assert.rejects(execution, /TOOL\.TIMEOUT/u);
+      assert.equal(processExists(compilerPid), false);
+    } finally {
+      if (compilerPid && processExists(compilerPid)) {
+        process.kill(compilerPid, 'SIGKILL');
       }
       await fixture.cleanup();
     }

@@ -26,6 +26,18 @@ export {
   type CadCompileIssue,
   type CadCompileResult,
 } from './cad-compile-tool.ts';
+export {
+  CAD_CAPABILITIES_SCHEMA,
+  CAD_CAPABILITIES_TOOL_NAME,
+  createCadCapabilitiesTool,
+  type CadCapabilitiesResult,
+} from './cad-capabilities-tool.ts';
+export {
+  createReferenceAnalyzeTool,
+  REFERENCE_ANALYZE_RESULT_SCHEMA,
+  REFERENCE_ANALYZE_TOOL_NAME,
+  type ReferenceAnalyzeResult,
+} from './reference-analyze-tool.ts';
 export { parseModelSpec, type ModelSpec } from './runtime-config.ts';
 export {
   sanitizeInternalPromptHistory,
