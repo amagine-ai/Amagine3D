@@ -148,6 +148,16 @@ class ColorPipelineTests(unittest.TestCase):
             "color_cad_helpers_test", COLOR / "cad_helpers.py"
         )
 
+    def test_overlap_volume_handles_disjoint_solid_color_regions(self):
+        left = Box(1, 1, 1).solids()[0]
+        disjoint = (Pos(3, 0, 0) * Box(1, 1, 1)).solids()[0]
+        overlapping = (Pos(0.5, 0, 0) * Box(1, 1, 1)).solids()[0]
+
+        self.assertEqual(self.cad_helpers._intersection_volume(left, disjoint), 0.0)
+        self.assertAlmostEqual(
+            self.cad_helpers._intersection_volume(left, overlapping), 0.5
+        )
+
     def test_3mf_writer_and_cli_require_an_explicit_package_mode(self):
         exporter = self.cad_helpers._export_3mf
         self.assertFalse(hasattr(exporter, "write_3mf"))

@@ -16,8 +16,13 @@ The source process receives the text-a3d skill directory at the front of
 also recomputes every returned artifact SHA-256 before exposing the compact
 result.
 
-The declared source runs first. It may generate or refresh the scene and its
-geometry inputs, but it may not modify the immutable intent.
+The immutable intent must already exist and is validated before any
+Agent-authored geometry executes. Create it in a separate contract-only
+authoring step; never call `write_intent(...)` from the build source or run the
+full build source manually to bootstrap it. After intent validation, the
+declared build source runs and may generate or refresh only the scene and its
+geometry inputs. The driver then verifies that the intent hash did not change
+and validates the resulting scene.
 
 - An all-BRep scene requires the source to export `<intent.part>_report.json`
   through the existing `cad_helpers`/color exporter contract.

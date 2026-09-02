@@ -296,6 +296,15 @@ def write_intent(
     visual landmark, acceptance criterion, or printability policy.
     """
 
+    if os.environ.get("AMAGINE3D_SOURCE_PHASE") == "compile":
+        raise AuthoringError(
+            "immutable intent",
+            [
+                "write_intent is forbidden inside a cad_compile build source; "
+                "create and validate intent in a separate contract-only authoring step"
+            ],
+        )
+
     destination = Path(path).resolve()
     profile = _resolve_input_path(profile_path)
     features, manufacturing = _expand_intent_parts(

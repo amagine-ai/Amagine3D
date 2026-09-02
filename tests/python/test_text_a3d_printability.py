@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 
-from build123d import Align, Box, Pos
+from build123d import Align, Box, Compound, Pos
 import numpy as np
 import trimesh
 
@@ -886,6 +886,46 @@ class SinglePartOrientationExportTests(unittest.TestCase):
 
 
 class SingleMaterialAssemblyTests(unittest.TestCase):
+    def test_assembly_preflight_reports_all_non_single_solid_parts(self):
+        first = Compound(
+            children=[Box(1, 1, 1), Pos(3, 0, 0) * Box(1, 1, 1)]
+        )
+        second = Compound()
+
+        with self.assertRaises(cad_helpers.BuildInvariantError) as raised:
+            cad_helpers._preflight_assembly_parts(
+                {"first": first, "valid": Box(1, 1, 1), "second": second}
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            "assembly part 'first' must be one valid solid, got 2; "
+            "assembly part 'second' must be one valid solid, got 0",
+        )
+        with self.assertRaises(cad_helpers.BuildInvariantError) as single:
+            cad_helpers._preflight_assembly_parts({"first": first})
+        self.assertEqual(
+            str(single.exception),
+            "assembly part 'first' must be one valid solid, got 2",
+        )
+
+    def test_overlap_volume_handles_disjoint_solids_without_masking_failures(self):
+        left = Box(1, 1, 1).solids()[0]
+        disjoint = (Pos(3, 0, 0) * Box(1, 1, 1)).solids()[0]
+        overlapping = (Pos(0.5, 0, 0) * Box(1, 1, 1)).solids()[0]
+
+        self.assertEqual(cad_helpers._intersection_volume(left, disjoint), 0.0)
+        self.assertAlmostEqual(
+            cad_helpers._intersection_volume(left, overlapping), 0.5
+        )
+
+        class BrokenBoolean:
+            def __and__(self, other):
+                raise RuntimeError("kernel boolean failed")
+
+        with self.assertRaisesRegex(RuntimeError, "kernel boolean failed"):
+            cad_helpers._intersection_volume(BrokenBoolean(), left)
+
     def test_part_colored_assembly_requires_explicit_separate_parts_mode(self):
         intent = {
             "part": "case",

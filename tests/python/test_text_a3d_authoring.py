@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,36 @@ def _intent_kwargs() -> dict:
 
 
 class AuthoringTests(unittest.TestCase):
+    def test_compile_phase_forbids_intent_authoring_without_creating_a_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            intent_path = Path(directory) / "device_intent.json"
+            with patch.dict(
+                "os.environ", {"AMAGINE3D_SOURCE_PHASE": "compile"}, clear=False
+            ):
+                with self.assertRaisesRegex(
+                    authoring.AuthoringError, "separate contract-only authoring step"
+                ):
+                    authoring.write_intent(
+                        intent_path,
+                        part="device",
+                        manufacturing_mode="single-part",
+                        parts={
+                            "device": {
+                                "features": [
+                                    {
+                                        "id": "body",
+                                        "kind": "envelope",
+                                        "evidence": "one physical body",
+                                        "acceptance": "one physical body",
+                                    }
+                                ]
+                            }
+                        },
+                        critical_features=["body"],
+                        **_intent_kwargs(),
+                    )
+            self.assertFalse(intent_path.exists())
+
     def test_intent_writer_is_idempotent_but_never_retargets_an_existing_file(self):
         with tempfile.TemporaryDirectory() as directory:
             intent_path = Path(directory) / "device_intent.json"
@@ -156,26 +187,29 @@ class AuthoringTests(unittest.TestCase):
             self.assertEqual(intent_contract.validate(intent, root), [])
 
             scene_path = root / "device_scene.json"
-            scene = authoring.write_scene(
-                scene_path,
-                intent_path=intent_path,
-                parts={
-                    "device": {
-                        "representationMaster": "mesh",
-                        "nodes": [
-                            {
-                                "id": "body-node",
-                                "featureId": "body",
-                                "role": "solid",
-                                "recipe": {
-                                    "kind": "sourceMesh",
-                                    "parameters": {"sourceMesh": "body.stl"},
-                                },
-                            }
-                        ],
-                    }
-                },
-            )
+            with patch.dict(
+                "os.environ", {"AMAGINE3D_SOURCE_PHASE": "compile"}, clear=False
+            ):
+                scene = authoring.write_scene(
+                    scene_path,
+                    intent_path=intent_path,
+                    parts={
+                        "device": {
+                            "representationMaster": "mesh",
+                            "nodes": [
+                                {
+                                    "id": "body-node",
+                                    "featureId": "body",
+                                    "role": "solid",
+                                    "recipe": {
+                                        "kind": "sourceMesh",
+                                        "parameters": {"sourceMesh": "body.stl"},
+                                    },
+                                }
+                            ],
+                        }
+                    },
+                )
             second_scene = authoring.write_scene(
                 root / "device_scene_copy.json",
                 intent_path=intent_path,

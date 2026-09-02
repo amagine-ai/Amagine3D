@@ -30,6 +30,7 @@ from typing import Any, Iterable
 
 from intent_contract import validate as validate_intent
 from scene_contract import validate as validate_scene
+from source_preflight import audit as audit_source
 
 
 RESULT_SCHEMA = "evidence-cad-compile-result/v1"
@@ -766,6 +767,7 @@ def _finish(
                 "log",
                 "preview",
                 "renderEvidence",
+                "sourcePreflight",
             }
         },
         "backend": result.get("backend"),
@@ -893,6 +895,24 @@ def compile_cad(
             )
         return _finish(result, result_path=result_path, log_path=log_path)
 
+    source_preflight = audit_source(source_path)
+    source_preflight_path = output_dir / f"{model}_source-preflight.json"
+    _write_json(source_preflight_path, source_preflight)
+    result["artifacts"]["sourcePreflight"] = _artifact(source_preflight_path)
+    if source_preflight["errors"]:
+        for error in source_preflight["errors"]:
+            message = error.get("message", "source preflight failed")
+            if isinstance(error.get("line"), int):
+                message = f"line {error['line']}: {message}"
+            _issue(
+                result,
+                code="SOURCE.PREFLIGHT_FAILED",
+                stage="source-preflight",
+                check=error.get("check"),
+                message=message,
+            )
+        return _finish(result, result_path=result_path, log_path=log_path)
+
     intent_digest = _digest(intent_path)
     previous_report_digest = _digest(report_path) if report_path.is_file() else None
     source_command = runner.run(
@@ -904,6 +924,7 @@ def compile_cad(
             "AMAGINE3D_INTENT_PATH": str(intent_path),
             "AMAGINE3D_OUTPUT_DIR": str(output_dir),
             "AMAGINE3D_SCENE_PATH": str(scene_path),
+            "AMAGINE3D_SOURCE_PHASE": "compile",
             "PYTHONPATH": str(Path(__file__).resolve().parent)
             + (
                 os.pathsep + os.environ["PYTHONPATH"]

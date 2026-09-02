@@ -203,6 +203,15 @@ def _shape_record(shape) -> dict:
     }
 
 
+def _intersection_volume(left, right) -> float:
+    """Measure a boolean intersection, treating an explicit empty result as zero."""
+    intersection = left & right
+    if intersection is None:
+        # build123d Shape booleans return None for a valid, empty intersection.
+        return 0.0
+    return float(intersection.volume)
+
+
 def _manifest_geometry_record(stats: dict) -> dict:
     """Translate kernel-specific measurements into the shared build schema."""
     return {
@@ -786,7 +795,15 @@ def export_regions(
     names = list(normalized)
     for index, left in enumerate(names):
         for right in names[index + 1:]:
-            overlap = float((normalized[left][0] & normalized[right][0]).volume)
+            try:
+                overlap = _intersection_volume(
+                    normalized[left][0], normalized[right][0]
+                )
+            except Exception as error:
+                raise RegionInvariantError(
+                    f"could not compare overlap for regions {left!r} and "
+                    f"{right!r}: {error}"
+                ) from error
             report["overlaps_mm3"][f"{left}&{right}"] = round(overlap, 6)
             if overlap > 0.01:
                 raise RegionInvariantError(

@@ -33,7 +33,7 @@ const MAX_LOG_UPDATE_CHARS = 4_000;
 const cadCompileParameters = Type.Object({
   intent: Type.String({
     description:
-      'Intent-contract JSON path, relative to the current session workspace.',
+      'Pre-existing immutable intent-contract JSON path, relative to the current session workspace. Author and validate it separately before the build source; the source may not create or modify it.',
     minLength: 1,
   }),
   marker: Type.String({
@@ -48,7 +48,7 @@ const cadCompileParameters = Type.Object({
   }),
   source: Type.String({
     description:
-      'Agent-authored Python CAD source path, relative to the current session workspace.',
+      'Agent-authored Python CAD build-source path, relative to the current session workspace. It may generate the scene but must not write the intent.',
     minLength: 1,
   }),
   output_dir: Type.String({
@@ -220,7 +220,11 @@ async function resolveWorkspaceParameter(
   workspaceRoot: string,
   label: string,
   value: string,
-  options: { mustExist: boolean; type?: 'directory' | 'file' },
+  options: {
+    missingRepairHint?: string;
+    mustExist: boolean;
+    type?: 'directory' | 'file';
+  },
 ): Promise<string> {
   assertRelativeParameter(label, value);
   const candidate = resolve(workspaceRoot, value);
@@ -251,6 +255,9 @@ async function resolveWorkspaceParameter(
       throw infrastructureError(
         'TOOL.PATH_MISSING',
         `${label} does not exist inside the session workspace`,
+        options.missingRepairHint
+          ? { repairHint: options.missingRepairHint }
+          : {},
       );
     }
   }
@@ -649,6 +656,7 @@ export function createCadCompileTool(
       'Compile and audit the current text-a3d generation marker, intent, scene, and source',
     promptGuidelines: [
       'Use cad_compile instead of manually chaining text-a3d compiler and QA scripts.',
+      'Before calling cad_compile, run a separate contract-only authoring step that creates and validates the immutable intent. Never put write_intent in the CAD build source or run the full build source manually to bootstrap intent; the build source may generate the scene inside cad_compile.',
       'A pass result still requires reading the returned fresh preview before delivery.',
       'On a failed result, repair the reported semantic or geometry issue and call cad_compile again.',
     ],
@@ -674,6 +682,8 @@ export function createCadCompileTool(
       );
 
       const intent = await resolveWorkspaceParameter(root, 'intent', params.intent, {
+        missingRepairHint:
+          'Create and validate the immutable intent in a separate contract-only authoring step, then call cad_compile again. Do not run the CAD build source to create intent; it may create the scene during compilation.',
         mustExist: true,
         type: 'file',
       });

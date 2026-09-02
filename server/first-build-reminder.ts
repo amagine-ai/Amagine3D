@@ -2,7 +2,7 @@ import type { AgentSessionEvent } from '@amagine3d/a3d-runtime';
 
 export const FIRST_BUILD_REMINDER = [
   '<first_build_reminder>',
-  '本轮 CAD 任务尚未观察到首次正式编译。请减少继续阅读和规划，尽快调用 cad_compile 工具编译当前设计，以便用真实几何反馈继续完善模型。',
+  '本轮 CAD 任务尚未观察到首次正式编译。请先用独立的契约作者步骤生成并验证 immutable intent，再尽快调用 cad_compile 编译当前设计；不要把 write_intent 放进 build source，也不要为引导 intent 而手工运行完整 build source。scene 可由 build source 在 cad_compile 内生成。',
   '这只是一次软提醒：不是阶段切换，不要求生成粗糙占位模型，也不会放宽最终 QA 或视觉审计。',
   '</first_build_reminder>',
 ].join('\n');

@@ -7,6 +7,7 @@ import {
   realpath,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -162,6 +163,10 @@ test(
       );
       assert.equal(tool.name, CAD_COMPILE_TOOL_NAME);
       assert.equal(tool.executionMode, 'sequential');
+      assert.match(
+        (tool.promptGuidelines ?? []).join('\n'),
+        /separate contract-only authoring step[\s\S]*Never put write_intent[\s\S]*may generate the scene/u,
+      );
 
       const updates: unknown[] = [];
       const result = await executeTool(fixture, {
@@ -298,6 +303,30 @@ test(
         executeTool(fixture, { marker: 'linked.json' }),
         /TOOL\.SYMLINK_REJECTED/u,
       );
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  'cad_compile explains how to bootstrap a missing immutable intent',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('pass');
+    try {
+      await unlink(join(fixture.workspaceRoot, 'intent.json'));
+      await assert.rejects(executeTool(fixture), (error: Error) => {
+        const details = JSON.parse(error.message) as {
+          code?: string;
+          repairHint?: string;
+        };
+        assert.equal(details.code, 'TOOL.PATH_MISSING');
+        assert.match(details.repairHint ?? '', /separate contract-only/u);
+        assert.match(details.repairHint ?? '', /Do not run the CAD build source/u);
+        assert.match(details.repairHint ?? '', /create the scene during compilation/u);
+        return true;
+      });
     } finally {
       await fixture.cleanup();
     }

@@ -363,6 +363,67 @@ class CadCompileTests(unittest.TestCase):
             )
             self.assertFalse(audit["pass"])
 
+    def test_source_preflight_stops_invalid_api_and_contract_authoring(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(
+                root,
+                part="part",
+                feature_owners={"part-body": "part"},
+            )
+            _localize_profile(intent, root)
+            source = root / "build.py"
+            source.write_text(
+                "from authoring import write_intent\n"
+                "from build123d import Ellipsoid\n"
+                "from pathlib import Path\n"
+                "Path('source-ran').write_text('yes')\n",
+                encoding="utf-8",
+            )
+
+            class NeverRunSource:
+                def __init__(self, log_path: Path):
+                    self.log_path = log_path
+
+                def run(self, *args, **kwargs):
+                    raise AssertionError("invalid source reached the subprocess runner")
+
+            result = compile_cad(
+                CompileOptions(
+                    workspace=root,
+                    marker=marker,
+                    intent=intent,
+                    scene=Path("part_scene.json"),
+                    source=source,
+                    output_dir=Path("."),
+                ),
+                runner_factory=NeverRunSource,
+            )
+            self.assertFalse(result["pass"])
+            self.assertFalse((root / "source-ran").exists())
+            self.assertTrue(
+                all(
+                    issue["code"] == "SOURCE.PREFLIGHT_FAILED"
+                    and issue["stage"] == "source-preflight"
+                    for issue in result["issues"]
+                )
+            )
+            self.assertEqual(
+                {issue["check"] for issue in result["issues"]},
+                {"api-symbol", "contract-authoring"},
+            )
+            preflight_path = Path(result["artifacts"]["sourcePreflight"]["path"])
+            preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                preflight["schema"], "evidence-python-source-preflight/v1"
+            )
+            self.assertFalse(preflight["pass"])
+            self.assertEqual(
+                {error["name"] for error in preflight["errors"]},
+                {"Ellipsoid", "write_intent"},
+            )
+
     def test_source_cannot_mutate_immutable_intent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

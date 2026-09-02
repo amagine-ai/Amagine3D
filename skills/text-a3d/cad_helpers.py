@@ -351,6 +351,36 @@ def _stats(shape) -> dict:
     }
 
 
+def _preflight_assembly_parts(parts: dict) -> dict:
+    """Validate assembly part identifiers and collect one-solid statistics."""
+    normalized = {}
+    invalid_parts = []
+    for part_name, shape in parts.items():
+        if not isinstance(part_name, str) or not _ID_PATTERN.fullmatch(part_name):
+            raise BuildInvariantError(f"invalid assembly part name: {part_name!r}")
+        stats = _stats(shape)
+        normalized[part_name] = (shape, stats)
+        if not stats["valid"] or stats["solid_count"] != 1:
+            invalid_parts.append(
+                f"assembly part {part_name!r} must be one valid solid, "
+                f"got {stats['solid_count']}"
+            )
+    if invalid_parts:
+        # A single failure preserves the previous error text exactly. Multiple
+        # failures retain that text per part while reporting them in one pass.
+        raise BuildInvariantError("; ".join(invalid_parts))
+    return normalized
+
+
+def _intersection_volume(left, right) -> float:
+    """Measure a boolean intersection, treating an explicit empty result as zero."""
+    intersection = left & right
+    if intersection is None:
+        # build123d Shape booleans return None for a valid, empty intersection.
+        return 0.0
+    return float(intersection.volume)
+
+
 def _manifest_geometry_record(stats: dict) -> dict:
     """Translate kernel-specific measurements into the shared build schema."""
     return {
@@ -1093,17 +1123,7 @@ def export_assembly(
     ):
         raise BuildInvariantError("max_overlap_mm3 must be finite and non-negative")
 
-    normalized = {}
-    for part_name, shape in parts.items():
-        if not isinstance(part_name, str) or not _ID_PATTERN.fullmatch(part_name):
-            raise BuildInvariantError(f"invalid assembly part name: {part_name!r}")
-        stats = _stats(shape)
-        if not stats["valid"] or stats["solid_count"] != 1:
-            raise BuildInvariantError(
-                f"assembly part {part_name!r} must be one valid solid, "
-                f"got {stats['solid_count']}"
-            )
-        normalized[part_name] = (shape, stats)
+    normalized = _preflight_assembly_parts(parts)
 
     try:
         intent_data, scene_data, plate_profile, inputs = bind_inputs(
@@ -1133,7 +1153,9 @@ def export_assembly(
     for index, left in enumerate(names):
         for right in names[index + 1:]:
             try:
-                overlap = float((normalized[left][0] & normalized[right][0]).volume)
+                overlap = _intersection_volume(
+                    normalized[left][0], normalized[right][0]
+                )
             except Exception as error:
                 raise BuildInvariantError(
                     f"could not compare overlap for {left!r} and {right!r}: {error}"
