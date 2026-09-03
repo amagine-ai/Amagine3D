@@ -21,6 +21,12 @@ from typing import Callable, Iterable
 import numpy as np
 import trimesh
 
+from cad_diagnostics import (
+    SOURCE_DIAGNOSTICS_SCHEMA,
+    CadDiagnosticError,
+    source_diagnostics_payload,
+)
+
 from build123d import (
     Compound,
     Pos,
@@ -104,7 +110,6 @@ _EVENTS: list[dict] = []
 _FEATURES: dict[str, dict] = {}
 _PARAMETERS: dict[str, dict] = {}
 _DEFERRED_ISSUES: list[dict] = []
-_SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
 _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -144,7 +149,7 @@ def _raise_deferred_source_issues() -> None:
             {
                 "issues": issues,
                 "pass": False,
-                "schema": _SOURCE_DIAGNOSTICS_SCHEMA,
+                "schema": SOURCE_DIAGNOSTICS_SCHEMA,
             },
             indent=2,
         )
@@ -152,6 +157,16 @@ def _raise_deferred_source_issues() -> None:
     raise BuildInvariantError(
         f"{len(issues)} checked source operations require repair"
     )
+
+
+def _raise_source_diagnostics(
+    diagnostics: Iterable[CadDiagnosticError],
+    message: str,
+) -> None:
+    items = list(diagnostics)
+    if _collect_source_diagnostics():
+        print(json.dumps(source_diagnostics_payload(items), indent=2))
+    raise BuildInvariantError(message)
 
 
 def _export_display_glb(
@@ -364,6 +379,8 @@ def _write_part_color_archive(entries, path: Path, name: str) -> dict:
             package_mode="separate_parts",
             package_name=name,
         )
+    except CadDiagnosticError as error:
+        _raise_source_diagnostics([error], f"could not write colored 3MF: {error}")
     except Exception as error:
         raise BuildInvariantError(f"could not write colored 3MF: {error}") from error
 
@@ -395,6 +412,7 @@ def _preflight_assembly_parts(parts: dict) -> dict:
     """Validate assembly part identifiers and collect one-solid statistics."""
     normalized = {}
     invalid_parts = []
+    diagnostics = []
     for part_name, shape in parts.items():
         if not isinstance(part_name, str) or not _ID_PATTERN.fullmatch(part_name):
             raise BuildInvariantError(f"invalid assembly part name: {part_name!r}")
@@ -405,10 +423,18 @@ def _preflight_assembly_parts(parts: dict) -> dict:
                 f"assembly part {part_name!r} must be one valid solid, "
                 f"got {stats['solid_count']}"
             )
+            diagnostics.append(
+                CadDiagnosticError(
+                    check="assembly-part-topology",
+                    code="SOURCE.PART_NOT_SINGLE_SOLID",
+                    message=invalid_parts[-1],
+                    part=part_name,
+                    observed=_manifest_geometry_record(stats),
+                    expected={"bodyCount": 1, "valid": True},
+                )
+            )
     if invalid_parts:
-        # A single failure preserves the previous error text exactly. Multiple
-        # failures retain that text per part while reporting them in one pass.
-        raise BuildInvariantError("; ".join(invalid_parts))
+        _raise_source_diagnostics(diagnostics, "; ".join(invalid_parts))
     return normalized
 
 
@@ -868,6 +894,117 @@ def checked_cut(
             message,
         ):
             return body
+    return result
+
+
+def checked_union(
+    body,
+    addition,
+    feature_id: str,
+    min_added_mm3: float = 0.001,
+    *,
+    part_name: str | None = None,
+):
+    """Fuse an additive feature and require one valid, connected solid."""
+
+    if (
+        isinstance(min_added_mm3, bool)
+        or not isinstance(min_added_mm3, (int, float))
+        or not math.isfinite(min_added_mm3)
+        or min_added_mm3 < 0
+    ):
+        raise BuildInvariantError("min_added_mm3 must be finite and non-negative")
+    before = float(body.volume)
+    addition_stats = _stats(addition)
+    try:
+        result = body + addition
+        result_stats = _stats(result)
+    except Exception as error:
+        message = f"union {feature_id!r} failed: {error}"
+        if _collect_source_diagnostics():
+            _defer_source_issue(
+                {
+                    "blockedBy": "BOOLEAN_OPERATION_FAILED",
+                    "check": "checked-union",
+                    "code": "SOURCE.CHECKED_UNION_FAILED",
+                    "expected": {"minimumAddedMm3": float(min_added_mm3)},
+                    "featureId": feature_id,
+                    "observed": {
+                        "addition": addition_stats,
+                        "body": _stats(body),
+                        "error": str(error),
+                    },
+                    **({"partId": part_name} if part_name is not None else {}),
+                    "status": "blocked",
+                },
+                message,
+            )
+            return body
+        raise BuildInvariantError(message) from error
+    if result_stats["solid_count"] != 1:
+        message = (
+            f"union {feature_id!r} produced {result_stats['solid_count']} solids; "
+            "the additive feature is not connected to its owner"
+        )
+        if _defer_source_issue(
+            {
+                "check": "checked-union",
+                "code": "SOURCE.UNION_DISCONNECTED",
+                "expected": {"bodyCount": 1},
+                "featureId": feature_id,
+                "observed": {
+                    "addition": addition_stats,
+                    "result": _manifest_geometry_record(result_stats),
+                },
+                **({"partId": part_name} if part_name is not None else {}),
+            },
+            message,
+        ):
+            return body
+    if not result_stats["valid"]:
+        message = f"union {feature_id!r} produced an invalid solid"
+        if _defer_source_issue(
+            {
+                "check": "checked-union",
+                "code": "SOURCE.UNION_INVALID_RESULT",
+                "expected": {"validSolid": True},
+                "featureId": feature_id,
+                "observed": _manifest_geometry_record(result_stats),
+                **({"partId": part_name} if part_name is not None else {}),
+            },
+            message,
+        ):
+            return body
+    added = float(result.volume) - before
+    if added < min_added_mm3:
+        message = (
+            f"union {feature_id!r} added {added:.6f} mm^3; "
+            "the additive feature had no material effect"
+        )
+        if _defer_source_issue(
+            {
+                "check": "checked-union",
+                "code": "SOURCE.UNION_NO_EFFECT",
+                "expected": {"minimumAddedMm3": float(min_added_mm3)},
+                "featureId": feature_id,
+                "observed": {
+                    "addedMm3": round(added, 6),
+                    "addition": addition_stats,
+                },
+                **({"partId": part_name} if part_name is not None else {}),
+            },
+            message,
+        ):
+            return body
+    _EVENTS.append(
+        {
+            "added_mm3": round(added, 6),
+            "id": feature_id,
+            "kind": "union",
+            "tool": addition_stats,
+            **({"part": part_name} if part_name is not None else {}),
+        }
+    )
     return result
 
 

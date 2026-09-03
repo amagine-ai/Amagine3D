@@ -15,9 +15,12 @@ class SharedSkillFileTests(unittest.TestCase):
     def test_shared_entrypoints_exist_only_at_the_skill_root(self):
         shared_entrypoints = (
             "bambu_profile.py",
+            "cad_diagnostics.py",
             "compare_silhouette.py",
             "cpu_z_buffer.py",
             "freshness_check.py",
+            "mesh_topology.py",
+            "organic_shell.py",
             "reference_analyze.py",
             "render_preview.py",
         )
@@ -60,6 +63,9 @@ class SharedSkillFileTests(unittest.TestCase):
         construction = (
             SINGLE / "references" / "construction-strategies.md"
         ).read_text(encoding="utf-8")
+        connections = (
+            SINGLE / "references" / "multipart-connections.md"
+        ).read_text(encoding="utf-8")
         evidence = (SINGLE / "references" / "evidence-contract.md").read_text(
             encoding="utf-8"
         )
@@ -75,6 +81,10 @@ class SharedSkillFileTests(unittest.TestCase):
 
         self.assertNotIn("two symmetric M3", construction)
         self.assertNotIn('"id": "screen-active-surface"', evidence)
+        self.assertIn("rather than a fixed list of", connections)
+        self.assertIn("observing the cutter alone does not create", construction)
+        self.assertIn("continuous path from the declared exterior face", construction)
+        self.assertIn("through the full wall thickness", construction)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,16 @@ import tempfile
 import numpy as np
 import trimesh
 
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+from cad_diagnostics import (
+    SOURCE_DIAGNOSTICS_SCHEMA,
+    CadDiagnosticError,
+    source_diagnostics_payload,
+)
+
 from build123d import (
     Color,
     Compound,
@@ -43,6 +53,8 @@ _export_3mf = _load_local_module(
     "_text_a3d_color_export_3mf_for_cad_helpers",
     "export_3mf.py",
 )
+
+
 def _load_parent_module(module_name: str, filename: str):
     parent = Path(__file__).resolve().parent.parent
     if str(parent) not in sys.path:
@@ -104,7 +116,6 @@ _FEATURES: dict[str, dict] = {}
 _EVENTS: list[dict] = []
 _PARAMETERS: dict[str, dict] = {}
 _DEFERRED_ISSUES: list[dict] = []
-_SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
 _REGION_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -132,7 +143,7 @@ def _raise_deferred_source_issues() -> None:
             {
                 "issues": issues,
                 "pass": False,
-                "schema": _SOURCE_DIAGNOSTICS_SCHEMA,
+                "schema": SOURCE_DIAGNOSTICS_SCHEMA,
             },
             indent=2,
         )
@@ -140,6 +151,12 @@ def _raise_deferred_source_issues() -> None:
     raise RegionInvariantError(
         f"{len(issues)} checked source operations require repair"
     )
+
+
+def _raise_source_diagnostic(error: CadDiagnosticError, message: str) -> None:
+    if _collect_source_diagnostics():
+        print(json.dumps(source_diagnostics_payload([error]), indent=2))
+    raise RegionInvariantError(message)
 
 
 _PARAMETER_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -1050,12 +1067,15 @@ def export_regions(
     report["internal_region_meshes"] = internal_region_meshes
 
     archive_path = output / f"{name}.3mf"
-    report["three_mf"] = write_color_archive(
-        entries,
-        str(archive_path),
-        package_mode=package_mode,
-        package_name=name,
-    )
+    try:
+        report["three_mf"] = write_color_archive(
+            entries,
+            str(archive_path),
+            package_mode=package_mode,
+            package_name=name,
+        )
+    except CadDiagnosticError as error:
+        _raise_source_diagnostic(error, f"could not write colored 3MF: {error}")
     artifacts["3mf"] = {
         "coordinateFrame": "plate-print",
         "path": str(archive_path.resolve()),

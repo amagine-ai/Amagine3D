@@ -21,6 +21,17 @@ import lib3mf
 import numpy as np
 import trimesh
 
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+from cad_diagnostics import CadDiagnosticError
+from mesh_topology import (
+    MeshTopologyError,
+    mesh_topology_facts,
+    physical_body_count,
+)
+
 
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 UNIT_TO_MM = {
@@ -119,15 +130,42 @@ def write_color_archive(
     for region in regions:
         mesh = trimesh.load(region.path, force="mesh", process=False)
         if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
-            raise ValueError(f"region {region.name!r} did not load as a mesh")
+            raise CadDiagnosticError(
+                check="3mf-region-topology",
+                code="EXPORT.MESH_UNAVAILABLE",
+                message=f"region {region.name!r} did not load as a mesh",
+                part=region.name,
+                observed={"path": str(Path(region.path).resolve())},
+                expected={"meshAvailable": True},
+            )
         mesh.merge_vertices()
         mesh.remove_unreferenced_vertices()
-        body_count = len(mesh.split(only_watertight=False))
-        if not mesh.is_watertight or not mesh.is_volume or body_count != 1:
-            raise ValueError(
-                f"region {region.name!r} must be one closed volumetric mesh; "
-                f"watertight={mesh.is_watertight}, is_volume={mesh.is_volume}, "
-                f"body_count={body_count}"
+        topology = mesh_topology_facts(mesh)
+        if (
+            topology["watertight"] is not True
+            or topology["isVolume"] is not True
+            or topology["bodyCount"] != 1
+        ):
+            raise CadDiagnosticError(
+                check="3mf-region-topology",
+                code="EXPORT.NON_VOLUMETRIC_MESH",
+                message=(
+                    f"region {region.name!r} must be one closed volumetric mesh; "
+                    f"watertight={topology['watertight']}, "
+                    f"is_volume={topology['isVolume']}, "
+                    f"body_count={topology['bodyCount']}"
+                ),
+                part=region.name,
+                observed=topology,
+                expected={
+                    "bodyCount": 1,
+                    "isVolume": True,
+                    "watertight": True,
+                },
+                repair_hint=(
+                    "Repair the named physical mesh at its construction source; "
+                    "do not fill holes or discard disconnected bodies during export."
+                ),
             )
         loaded_regions.append((region, mesh))
 
@@ -537,7 +575,10 @@ def _lib3mf_readback(path: str) -> dict:
                     f"mesh object {mesh_object.GetName()!r} has an unreadable "
                     f"color property: {error}"
                 ) from error
-        body_count = len(mesh.split(only_watertight=False))
+        try:
+            body_count = physical_body_count(mesh)
+        except MeshTopologyError:
+            body_count = None
         record = {
             "color": color,
             "name": mesh_object.GetName(),
@@ -688,8 +729,12 @@ def inspect_color_archive(path: str) -> dict:
         mesh = _mesh_from_object(element, UNIT_TO_MM[root.attrib.get("unit", "millimeter")])
         mesh.merge_vertices()
         mesh.remove_unreferenced_vertices()
+        try:
+            body_count = physical_body_count(mesh)
+        except MeshTopologyError:
+            body_count = None
         mesh_topology[object_id] = {
-            "body_count": len(mesh.split(only_watertight=False)),
+            "body_count": body_count,
             "is_volume": bool(mesh.is_volume),
             "watertight": bool(mesh.is_watertight),
         }

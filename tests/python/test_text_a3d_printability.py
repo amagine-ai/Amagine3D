@@ -294,6 +294,39 @@ class BambuProfileTests(unittest.TestCase):
 
 
 class PrintabilityGeometryTests(unittest.TestCase):
+    def test_closed_cavity_counts_as_one_physical_body(self):
+        hollow = trimesh.boolean.difference(
+            [
+                trimesh.creation.box(extents=[20, 20, 20]),
+                trimesh.creation.box(extents=[16, 16, 16]),
+            ],
+            engine="manifold",
+            check_volume=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            mesh_path = Path(directory) / "hollow.stl"
+            hollow.export(mesh_path)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SKILL / "qa_check.py"),
+                    str(mesh_path),
+                    "--components",
+                    "1",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        payload = json.loads(result.stdout)
+        body_check = next(
+            item
+            for item in payload["checks"]
+            if item["name"] == "physical_body_count"
+        )
+        self.assertTrue(body_check["pass"], payload)
+        self.assertEqual(body_check["observed"], 1)
+
     def setUp(self):
         self.catalog = bambu_profile.load_catalog()
 
@@ -1852,7 +1885,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads(result.stdout)
-            self.assertNotIn("connected_components", payload["errors"])
+            self.assertNotIn("physical_body_count", payload["errors"])
 
 
 class ContractTests(unittest.TestCase):

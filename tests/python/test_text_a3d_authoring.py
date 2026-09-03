@@ -51,6 +51,14 @@ class AuthoringTests(unittest.TestCase):
             female_feature="guide/bore",
             clearances_mm={"diameter": 0.4, "length": 0.2},
         )
+        geometry_dimensions = authoring.paired_dimensions(compact)
+        self.assertEqual(
+            geometry_dimensions,
+            {
+                "male": {"diameter": 4.0, "length": 5.0},
+                "female": {"diameter": 4.4, "length": 5.2},
+            },
+        )
 
         expanded = authoring._expand_paired_interfaces(
             [compact],
@@ -69,6 +77,36 @@ class AuthoringTests(unittest.TestCase):
             },
         )
         self.assertNotIn("clearancesMm", expanded["female"])
+
+    def test_paired_interface_has_no_duplicate_female_dimension_path(self):
+        with self.assertRaisesRegex(TypeError, "female_dimensions_mm"):
+            authoring.paired_interface(
+                id="pin-fit",
+                kind="pin-socket",
+                male_feature="pin/stem",
+                male_dimensions_mm={"diameter": 4.0},
+                female_feature="guide/bore",
+                clearances_mm={"diameter": 0.4},
+                female_dimensions_mm={"diameter": 4.4},
+            )
+
+        raw = authoring.paired_interface(
+            id="pin-fit",
+            kind="pin-socket",
+            male_feature="pin/stem",
+            male_dimensions_mm={"diameter": 4.0},
+            female_feature="guide/bore",
+            clearances_mm={"diameter": 0.4},
+        )
+        raw["female"]["dimensionsMm"] = {"diameter": 4.4}
+        with self.assertRaisesRegex(
+            authoring.AuthoringError,
+            "female dimensions are derived only",
+        ):
+            authoring._expand_paired_interfaces(
+                [raw],
+                {"pin/stem": "pin", "guide/bore": "guide"},
+            )
 
     def test_compile_phase_forbids_intent_authoring_without_creating_a_file(self):
         with tempfile.TemporaryDirectory() as directory:

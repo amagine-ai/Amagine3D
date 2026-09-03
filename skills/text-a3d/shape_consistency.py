@@ -18,6 +18,7 @@ from typing import Any, Iterable
 import numpy as np
 import trimesh
 
+from mesh_topology import MeshTopologyError, physical_body_count
 from scene_contract import validate as validate_scene
 
 
@@ -113,7 +114,10 @@ def load_artifact(spec: dict[str, Any], base_dir: Path) -> trimesh.Trimesh:
 def _mesh_summary(mesh: trimesh.Trimesh, label: str) -> dict[str, Any]:
     bounds = np.asarray(mesh.bounds, dtype=float)
     size = bounds[1] - bounds[0]
-    body_count = max(len(mesh.split(only_watertight=False)), 1)
+    try:
+        body_count = physical_body_count(mesh)
+    except MeshTopologyError:
+        body_count = None
     volume = float(mesh.volume) if mesh.is_watertight else None
     return {
         "bodyCount": body_count,

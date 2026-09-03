@@ -81,6 +81,22 @@ class SourcePreflightTests(unittest.TestCase):
             {("api-symbol", "Ellipsoid"), ("api-binding", "scale")},
         )
 
+    def test_rejects_post_mesh_hole_filling(self) -> None:
+        errors = source_preflight.validate_source_text(
+            "import trimesh\ntrimesh.repair.fill_holes(mesh)\n"
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["check"], "post-mesh-repair")
+        self.assertEqual(errors[0]["name"], "fill_holes")
+
+    def test_rejects_imported_post_mesh_repair(self) -> None:
+        errors = source_preflight.validate_source_text(
+            "from trimesh.repair import fix_winding\nfix_winding(mesh)\n"
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["check"], "post-mesh-repair")
+        self.assertEqual(errors[0]["name"], "fix_winding")
+
     def test_accepts_valid_explicit_build123d_symbols(self) -> None:
         errors = source_preflight.validate_source_text(
             "\n".join(

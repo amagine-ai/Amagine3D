@@ -21,6 +21,13 @@ from capability_manifest import literal_public_names
 
 PREFLIGHT_SCHEMA = "evidence-python-source-preflight/v1"
 MANAGED_MODULE = "build123d"
+FORBIDDEN_MESH_REPAIRS = {
+    "fill_holes",
+    "fix_inversion",
+    "fix_normals",
+    "fix_winding",
+    "stitch",
+}
 
 
 def _issue(
@@ -140,6 +147,34 @@ def validate_source_text(source: str, filename: str = "<source>") -> list[dict[s
                     line=node.lineno,
                     module="authoring",
                     name=node.attr,
+                )
+            )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "trimesh.repair":
+            for alias in node.names:
+                if alias.name in FORBIDDEN_MESH_REPAIRS or alias.name == "*":
+                    issues.append(
+                        _issue(
+                            "post-mesh-repair",
+                            "CAD build source must construct a watertight volume; post-mesh repair is forbidden",
+                            line=node.lineno,
+                            module="trimesh.repair",
+                            name=alias.name,
+                        )
+                    )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in FORBIDDEN_MESH_REPAIRS
+        ):
+            issues.append(
+                _issue(
+                    "post-mesh-repair",
+                    "CAD build source must construct a watertight volume; post-mesh repair is forbidden",
+                    line=node.lineno,
+                    module="trimesh.repair",
+                    name=node.func.attr,
                 )
             )
 

@@ -17,6 +17,7 @@ from coordinate_frames import (
     transform_bounds,
     validated_rigid_matrix,
 )
+from mesh_topology import MeshTopologyError, physical_body_count
 
 
 FACE_AXES = {
@@ -1018,19 +1019,17 @@ def main() -> int:
     )
 
     try:
-        components = (
-            len(mesh.split(only_watertight=False, repair=False)) if len(faces) else 0
-        )
+        components = physical_body_count(mesh) if len(faces) else 0
         audit.add(
-            "connected_components",
+            "physical_body_count",
             components == args.components,
             components,
             args.components,
         )
-    except Exception as error:
+    except MeshTopologyError as error:
         components = None
         audit.add(
-            "connected_components",
+            "physical_body_count",
             False,
             {"error": str(error)},
             args.components,

@@ -598,6 +598,65 @@ class HybridCompileTests(unittest.TestCase):
             self.assertEqual(len(missed), 2)
             self.assertTrue(all(issue["partId"] == "housing" for issue in missed))
 
+    def test_compile_collects_all_invalid_physical_source_meshes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scene, _ = _fixture(root)
+            source = root / "source"
+
+            for name, extents in (
+                ("open-housing", [20, 20, 10]),
+                ("open-button", [4, 4, 3]),
+            ):
+                mesh = trimesh.creation.box(extents=extents)
+                mesh.update_faces(np.arange(len(mesh.faces) - 1))
+                mesh.remove_unreferenced_vertices()
+                mesh.export(source / f"{name}.stl")
+
+            next(
+                node for node in scene["nodes"] if node["id"] == "housing-outer"
+            )["recipe"]["parameters"]["sourceMesh"] = "source/open-housing.stl"
+            next(
+                node for node in scene["nodes"] if node["id"] == "button-body"
+            )["recipe"]["parameters"]["sourceMesh"] = "source/open-button.stl"
+
+            with self.assertRaises(hybrid_compile.CompileDiagnosticsError) as raised:
+                hybrid_compile.compile_scene(
+                    scene,
+                    base_dir=root,
+                    output_dir=root / "artifacts",
+                    source_scene=_write_scene(root, scene),
+                    consistency_samples=64,
+                )
+
+            invalid = [
+                issue
+                for issue in raised.exception.issues
+                if issue["code"] == "BACKEND.PHYSICAL_NODE_INVALID"
+            ]
+            self.assertEqual(
+                {issue["nodeId"] for issue in invalid},
+                {"housing-outer", "button-body"},
+            )
+            self.assertEqual(len(invalid), 2)
+
+    def test_hollow_mesh_is_one_material_body_and_keeps_its_cavity(self):
+        outer = trimesh.creation.box(extents=[20, 20, 20])
+        inner = trimesh.creation.box(extents=[16, 16, 16])
+        hollow = trimesh.boolean.difference(
+            [outer, inner],
+            engine="manifold",
+            check_volume=True,
+        )
+        self.assertIsInstance(hollow, trimesh.Trimesh)
+        self.assertEqual(len(hollow.split(only_watertight=False)), 2)
+
+        compiled = hybrid_compile._union([hollow], "shell")
+
+        self.assertEqual(hybrid_compile.physical_body_count(compiled), 1)
+        self.assertAlmostEqual(compiled.volume, hollow.volume, places=6)
+        self.assertEqual(len(compiled.split(only_watertight=False)), 2)
+
     def test_volumetric_color_regions_round_trip_materials_and_build_item(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

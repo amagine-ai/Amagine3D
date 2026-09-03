@@ -60,6 +60,7 @@ from material_plan import (
     source_binding,
     validate_material_sources,
 )
+from mesh_topology import MeshTopologyError, physical_body_count
 from scene_contract import SELF_TAPPING_RECIPE_KIND, validate as validate_scene
 from shape_consistency import compare_manifest, compare_meshes, load_artifact
 from self_tapping_geometry import (
@@ -466,7 +467,10 @@ def _source_spec(node: dict[str, Any], base_dir: Path) -> tuple[dict[str, Any], 
     resolved = Path(raw_path)
     if not resolved.is_absolute():
         resolved = (base_dir / resolved).resolve()
-    digest = digest_file(resolved)
+    try:
+        digest = digest_file(resolved)
+    except OSError as error:
+        raise CompileError(f"{context}.sourceMesh cannot be read: {error}") from error
     declared_digest = spec.get("sha256")
     if declared_digest is not None and declared_digest != digest:
         raise CompileError(f"{context}.sourceMesh.sha256 does not match its file")
@@ -479,7 +483,12 @@ def _load_node_mesh(
     base_dir: Path,
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     spec, resolved = _source_spec(node, base_dir)
-    mesh = load_artifact(spec, base_dir)
+    try:
+        mesh = load_artifact(spec, base_dir)
+    except (OSError, ValueError, TypeError) as error:
+        raise CompileError(
+            f"node {node['id']} source mesh cannot be loaded: {error}"
+        ) from error
     # STL stores independent triangle corners.  Merge coincident vertices to
     # recover their declared topology without changing the physical surface.
     mesh.merge_vertices()
@@ -706,7 +715,12 @@ def _load_display_mesh(
     """
 
     spec, resolved = _source_spec(node, base_dir)
-    mesh = load_artifact(spec, base_dir)
+    try:
+        mesh = load_artifact(spec, base_dir)
+    except (OSError, ValueError, TypeError) as error:
+        raise CompileError(
+            f"node {node['id']} display source mesh cannot be loaded: {error}"
+        ) from error
     mesh.merge_vertices()
     mesh.remove_unreferenced_vertices()
     if mesh.is_empty or len(mesh.faces) == 0:
@@ -722,11 +736,11 @@ def _load_display_mesh(
 
 
 def _components(meshes: list[trimesh.Trimesh]) -> list[trimesh.Trimesh]:
-    result: list[trimesh.Trimesh] = []
-    for mesh in meshes:
-        split = mesh.split(only_watertight=False)
-        result.extend(_require_volume(item, "boolean component") for item in split)
-    return result
+    # Keep each volume's oriented surface set intact.  Splitting a hollow mesh
+    # turns its negative inner surface into a positive solid and silently fills
+    # the cavity during union.  Manifold accepts disconnected volume inputs and
+    # resolves their material connectivity after the boolean.
+    return [_require_volume(mesh, "boolean input") for mesh in meshes]
 
 
 def _union(meshes: list[trimesh.Trimesh], part_id: str) -> trimesh.Trimesh:
@@ -1326,7 +1340,7 @@ def _pbr_material(part_id: str, appearance: dict[str, Any]) -> PBRMaterial:
 def _mesh_record(mesh: trimesh.Trimesh, path: Path) -> dict[str, Any]:
     bounds = np.asarray(mesh.bounds, dtype=float)
     return {
-        "bodyCount": max(len(mesh.split(only_watertight=False)), 1),
+        "bodyCount": physical_body_count(mesh),
         "boundsMm": {
             "max": _vector(bounds[1]),
             "min": _vector(bounds[0]),
@@ -2042,6 +2056,8 @@ def compile_scene(
     included_display: list[dict[str, Any]] = []
     display_compiled: list[tuple[str, trimesh.Trimesh, dict[str, Any]]] = []
     feature_records: dict[str, dict[str, Any]] = {}
+    diagnostic_issues: list[dict[str, Any]] = []
+    invalid_parts: set[str] = set()
 
     for node in scene["nodes"]:
         role = node["role"]
@@ -2050,7 +2066,22 @@ def compile_scene(
             # and are emitted solely into the display GLB.  They never reach
             # the positive/cutter collections used by boolean/STL/3MF paths.
             if node["recipe"]["kind"] == "displayComponent":
-                mesh, bound_spec = _load_display_mesh(node, base_dir)
+                try:
+                    mesh, bound_spec = _load_display_mesh(node, base_dir)
+                except CompileError as error:
+                    diagnostic_issues.append(
+                        _compile_issue(
+                            code="BACKEND.DISPLAY_NODE_INVALID",
+                            check="display-source",
+                            message=str(error),
+                            part_id=node["partId"],
+                            node_id=node["id"],
+                            feature_id=node["featureId"],
+                            observed={"error": str(error)},
+                            expected={"finiteDisplayMesh": True},
+                        )
+                    )
+                    continue
                 bound_sources[node["id"]] = bound_spec
                 appearance = _display_appearance(node)
                 display_compiled.append((node["id"], mesh, appearance))
@@ -2080,26 +2111,60 @@ def compile_scene(
                 }
             )
             continue
-        if node["recipe"]["kind"] == SELF_TAPPING_RECIPE_KIND:
-            mesh, fastener_evidence = _load_self_tapping_node(
-                node,
-                scene,
-                procedural_fasteners,
-            )
-            group_key = (
-                f"{node['recipe']['parameters']['interfaceId']}/"
-                f"{node['recipe']['parameters']['fastenerId']}"
-            )
-            fastener_groups[group_key] = fastener_evidence
-        else:
-            mesh, bound_spec = _load_node_mesh(node, base_dir)
-            bound_sources[node["id"]] = bound_spec
         part_id = node["partId"]
         feature_id = node["featureId"]
-        if feature_id in feature_records:
-            raise CompileError(
-                f"feature {feature_id!r} is implemented by more than one physical node"
+        try:
+            if node["recipe"]["kind"] == SELF_TAPPING_RECIPE_KIND:
+                mesh, fastener_evidence = _load_self_tapping_node(
+                    node,
+                    scene,
+                    procedural_fasteners,
+                )
+                group_key = (
+                    f"{node['recipe']['parameters']['interfaceId']}/"
+                    f"{node['recipe']['parameters']['fastenerId']}"
+                )
+                fastener_groups[group_key] = fastener_evidence
+            else:
+                mesh, bound_spec = _load_node_mesh(node, base_dir)
+                bound_sources[node["id"]] = bound_spec
+        except CompileError as error:
+            invalid_parts.add(part_id)
+            diagnostic_issues.append(
+                _compile_issue(
+                    code="BACKEND.PHYSICAL_NODE_INVALID",
+                    check="physical-source",
+                    message=str(error),
+                    part_id=part_id,
+                    node_id=node["id"],
+                    feature_id=feature_id,
+                    observed={"error": str(error)},
+                    expected={
+                        "positiveVolume": True,
+                        "watertight": True,
+                        "windingConsistent": True,
+                    },
+                )
             )
+            continue
+        if feature_id in feature_records:
+            invalid_parts.add(part_id)
+            diagnostic_issues.append(
+                _compile_issue(
+                    code="BACKEND.FEATURE_IMPLEMENTATION_DUPLICATE",
+                    check="feature-implementation",
+                    message=(
+                        f"feature {feature_id!r} is implemented by more than one "
+                        "physical node"
+                    ),
+                    part_id=part_id,
+                    node_id=node["id"],
+                    feature_id=feature_id,
+                    offender_id=feature_records[feature_id]["nodeId"],
+                    expected={"physicalNodeCount": 1},
+                )
+            )
+            continue
         feature_records[feature_id] = {
             "bbox_mm": {
                 "max": _vector(mesh.bounds[1]),
@@ -2122,13 +2187,14 @@ def compile_scene(
     part_records: dict[str, dict[str, Any]] = {}
     part_removed_volume: dict[str, float] = {}
     warnings: list[str] = []
-    diagnostic_issues: list[dict[str, Any]] = []
     nodes_by_id = {
         node["id"]: node
         for node in scene["nodes"]
         if isinstance(node, dict) and isinstance(node.get("id"), str)
     }
     for part_id, part in parts.items():
+        if part_id in invalid_parts:
+            continue
         try:
             body = _union(positive[part_id], part_id)
         except CompileError as error:
@@ -2211,7 +2277,21 @@ def compile_scene(
                     )
                 )
                 continue
-        body_count = len(body.split(only_watertight=False))
+        try:
+            body_count = physical_body_count(body)
+        except MeshTopologyError as error:
+            diagnostic_issues.append(
+                _compile_issue(
+                    code="BACKEND.PART_BODY_COUNT_NOT_EVALUATED",
+                    check="part-body-count",
+                    message=str(error),
+                    part_id=part_id,
+                    blocked_by="MANIFOLD_DECOMPOSITION_FAILED",
+                    observed={"error": str(error)},
+                    expected={"bodyCount": 1},
+                )
+            )
+            continue
         if body_count != 1:
             diagnostic_issues.append(
                 _compile_issue(
@@ -2332,7 +2412,7 @@ def compile_scene(
             "positiveNodeIds": positive_node_ids[part_id],
             "printTransform": part_print_transforms[part_id],
             "print": {
-                "bodyCount": len(print_mesh.split(only_watertight=False)),
+                "bodyCount": physical_body_count(print_mesh),
                 "boundsMm": deepcopy(print_record["boundsMm"]),
                 "isVolume": print_record["isVolume"],
                 "valid": bool(
@@ -2344,7 +2424,7 @@ def compile_scene(
             },
             "representationMaster": part["representationMaster"],
             "semantic": {
-                "bodyCount": len(body.split(only_watertight=False)),
+                "bodyCount": physical_body_count(body),
                 "boundsMm": {
                     "min": _vector(body.bounds[0]),
                     "max": _vector(body.bounds[1]),
@@ -2367,7 +2447,7 @@ def compile_scene(
             )
         part_records[part_id]["colorRegions"] = [
             {
-                "bodyCount": len(region["mesh"].split(only_watertight=False)),
+                "bodyCount": physical_body_count(region["mesh"]),
                 "id": region["id"],
                 "isVolume": bool(region["mesh"].is_volume),
                 "materialId": region["materialId"],

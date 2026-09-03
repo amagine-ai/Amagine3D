@@ -16,6 +16,8 @@ from build123d import import_step
 import numpy as np
 import trimesh
 
+from mesh_topology import MeshTopologyError, physical_body_count
+
 
 EXPORT_AUDIT_SCHEMA = "evidence-export-audit/v1"
 BOUNDS_TOLERANCE_MM = 0.05
@@ -55,10 +57,13 @@ def geometry_record(shape: Any) -> dict:
 
 
 def _mesh_record(mesh: trimesh.Trimesh) -> dict:
-    components = mesh.split(only_watertight=False)
     bounds = np.asarray(mesh.bounds, dtype=float)
+    try:
+        body_count = physical_body_count(mesh)
+    except MeshTopologyError:
+        body_count = None
     return {
-        "bodyCount": len(components),
+        "bodyCount": body_count,
         "boundsMm": {
             "min": bounds[0].tolist(),
             "max": bounds[1].tolist(),

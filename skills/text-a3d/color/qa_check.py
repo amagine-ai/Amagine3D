@@ -28,6 +28,7 @@ from build_manifest import (
     SEMANTIC_ENVELOPE_TOLERANCE_MM,
 )
 from material_plan import validate_material_plan, validate_material_sources
+from mesh_topology import MeshTopologyError, physical_body_count
 
 if __package__:
     from .export_3mf import inspect_color_archive, load_color_archive_mesh
@@ -1423,8 +1424,21 @@ def main() -> int:
     audit.add("degenerate_faces", ratio <= args.max_degenerate_ratio,
               {"count": degenerate, "ratio": round(ratio, 8)},
               {"max_ratio": args.max_degenerate_ratio})
-    components = len(mesh.split(only_watertight=False)) if len(faces) else 0
-    audit.add("connected_components", components == args.components, components, args.components)
+    try:
+        components = physical_body_count(mesh) if len(faces) else 0
+        audit.add(
+            "physical_body_count",
+            components == args.components,
+            components,
+            args.components,
+        )
+    except MeshTopologyError as error:
+        audit.add(
+            "physical_body_count",
+            False,
+            {"error": str(error)},
+            args.components,
+        )
     volume = float(mesh.volume) if mesh.is_watertight and len(faces) else None
     positive_volume = volume is not None and np.isfinite(volume) and volume > 1e-6
     audit.add("positive_volume", positive_volume, volume, "> 0")

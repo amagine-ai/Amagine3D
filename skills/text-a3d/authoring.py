@@ -386,7 +386,6 @@ def paired_interface(
     male_dimensions_mm: Mapping[str, float],
     female_feature: str,
     clearances_mm: Mapping[str, float],
-    female_dimensions_mm: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Declare a paired scene interface without duplicating owners or dimensions.
 
@@ -400,7 +399,7 @@ def paired_interface(
             "scene interface",
             ["self-tapping-screw keeps its existing explicit canonical structure"],
         )
-    return {
+    interface = {
         "id": id,
         "kind": kind,
         "male": {
@@ -410,9 +409,95 @@ def paired_interface(
         "female": {
             "featureId": female_feature,
             "clearancesMm": deepcopy(dict(clearances_mm)),
-            "dimensionsMm": deepcopy(dict(female_dimensions_mm or {})),
         },
     }
+    _paired_dimensions(interface, "paired_interface")
+    return interface
+
+
+def _paired_dimensions(
+    interface: Mapping[str, Any],
+    context: str,
+) -> tuple[dict[str, float], dict[str, float], dict[str, dict[str, Any]]]:
+    male = interface.get("male")
+    female = interface.get("female")
+    if not isinstance(male, Mapping) or not isinstance(female, Mapping):
+        raise AuthoringError(
+            "scene interface",
+            [f"{context} requires male and female endpoints"],
+        )
+    male_dimensions = male.get("dimensionsMm")
+    clearances = female.get("clearancesMm")
+    if "dimensionsMm" in female:
+        raise AuthoringError(
+            "scene interface",
+            [
+                f"{context}.female.dimensionsMm is forbidden; female dimensions "
+                "are derived only from male dimensions and clearances"
+            ],
+        )
+    if not isinstance(male_dimensions, Mapping) or not male_dimensions:
+        raise AuthoringError(
+            "scene interface",
+            [f"{context}.male.dimensionsMm must be non-empty"],
+        )
+    if not isinstance(clearances, Mapping):
+        raise AuthoringError(
+            "scene interface",
+            [f"{context}.female.clearancesMm must be an object"],
+        )
+
+    canonical_male: dict[str, float] = {}
+    female_dimensions: dict[str, float] = {}
+    provenance: dict[str, dict[str, Any]] = {}
+    for field, male_value in male_dimensions.items():
+        if (
+            not isinstance(field, str)
+            or not field
+            or not isinstance(male_value, (int, float))
+            or isinstance(male_value, bool)
+            or not math.isfinite(float(male_value))
+            or float(male_value) <= 0
+        ):
+            raise AuthoringError(
+                "scene interface",
+                [f"{context}.male dimension {field!r} must be finite and positive"],
+            )
+        canonical_male[field] = float(male_value)
+    for field, clearance in clearances.items():
+        if field not in canonical_male:
+            raise AuthoringError(
+                "scene interface",
+                [
+                    f"{context} cannot derive female {field!r} because the male "
+                    "dimension is missing"
+                ],
+            )
+        if (
+            not isinstance(clearance, (int, float))
+            or isinstance(clearance, bool)
+            or not math.isfinite(float(clearance))
+            or float(clearance) < 0
+        ):
+            raise AuthoringError(
+                "scene interface",
+                [
+                    f"{context} clearance {field!r} must be finite and non-negative"
+                ],
+            )
+        female_dimensions[field] = canonical_male[field] + float(clearance)
+        provenance[field] = {
+            "from": f"male.{field}",
+            "offsetMm": float(clearance),
+        }
+    return canonical_male, female_dimensions, provenance
+
+
+def paired_dimensions(interface: Mapping[str, Any]) -> dict[str, dict[str, float]]:
+    """Return geometry-driving endpoint dimensions from one paired declaration."""
+
+    male, female, _ = _paired_dimensions(interface, "paired_interface")
+    return {"female": female, "male": male}
 
 
 def _expand_paired_interfaces(
@@ -463,75 +548,13 @@ def _expand_paired_interfaces(
             endpoint["partId"] = owner
             canonical[endpoint_name] = endpoint
 
-        male_dimensions = canonical["male"].get("dimensionsMm")
         female = canonical["female"]
-        clearances = female.pop("clearancesMm", None)
-        female_dimensions = female.get("dimensionsMm")
-        if not isinstance(male_dimensions, Mapping) or not male_dimensions:
-            raise AuthoringError(
-                "scene interface",
-                [f"paired_interfaces[{index}].male.dimensionsMm must be non-empty"],
-            )
-        if not isinstance(clearances, Mapping):
-            raise AuthoringError(
-                "scene interface",
-                [f"paired_interfaces[{index}].female.clearancesMm must be an object"],
-            )
-        if not isinstance(female_dimensions, Mapping):
-            raise AuthoringError(
-                "scene interface",
-                [f"paired_interfaces[{index}].female.dimensionsMm must be an object"],
-            )
-        female_dimensions = deepcopy(dict(female_dimensions))
-        derived: dict[str, dict[str, Any]] = {}
-        for field, clearance in clearances.items():
-            if field not in male_dimensions:
-                raise AuthoringError(
-                    "scene interface",
-                    [
-                        f"paired_interfaces[{index}] cannot derive female {field!r} "
-                        "because the male dimension is missing"
-                    ],
-                )
-            male_value = male_dimensions[field]
-            if (
-                not isinstance(male_value, (int, float))
-                or isinstance(male_value, bool)
-                or not math.isfinite(float(male_value))
-                or not isinstance(clearance, (int, float))
-                or isinstance(clearance, bool)
-                or not math.isfinite(float(clearance))
-                or float(clearance) < 0
-            ):
-                raise AuthoringError(
-                    "scene interface",
-                    [
-                        f"paired_interfaces[{index}] dimension {field!r} and its "
-                        "clearance must be finite, with a non-negative clearance"
-                    ],
-                )
-            derived_value = float(male_value) + float(clearance)
-            declared_value = female_dimensions.get(field, derived_value)
-            if not isinstance(declared_value, (int, float)) or isinstance(
-                declared_value, bool
-            ):
-                raise AuthoringError(
-                    "scene interface",
-                    [f"paired_interfaces[{index}].female dimension {field!r} is invalid"],
-                )
-            if abs(float(declared_value) - derived_value) > 1e-9:
-                raise AuthoringError(
-                    "scene interface",
-                    [
-                        f"paired_interfaces[{index}].female dimension {field!r} "
-                        "conflicts with the explicit offset"
-                    ],
-                )
-            female_dimensions[field] = derived_value
-            derived[field] = {
-                "from": f"male.{field}",
-                "offsetMm": float(clearance),
-            }
+        male_dimensions, female_dimensions, derived = _paired_dimensions(
+            canonical,
+            f"paired_interfaces[{index}]",
+        )
+        canonical["male"]["dimensionsMm"] = male_dimensions
+        female.pop("clearancesMm")
         female["dimensionsMm"] = female_dimensions
         female["derivedDimensionsMm"] = derived
         expanded.append(canonical)

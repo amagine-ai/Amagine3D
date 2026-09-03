@@ -271,13 +271,25 @@ class ColorPipelineTests(unittest.TestCase):
                 faces=[[0, 1, 2]],
                 process=False,
             ).export(open_mesh_path)
-            with self.assertRaisesRegex(ValueError, "closed volumetric mesh"):
+            with self.assertRaisesRegex(
+                exporter.CadDiagnosticError,
+                "closed volumetric mesh",
+            ) as raised:
                 exporter.write_color_archive(
                     [(open_mesh_path, "#CC2233", "open")],
                     str(root / "open.3mf"),
                     package_mode="co_print_body",
                     package_name="open",
                 )
+            self.assertEqual(
+                raised.exception.code,
+                "EXPORT.NON_VOLUMETRIC_MESH",
+            )
+            self.assertEqual(raised.exception.part, "open")
+            self.assertEqual(
+                raised.exception.observed["boundaryEdgeCount"],
+                3,
+            )
 
             mesh_path = root / "body.stl"
             archive_path = root / "body.3mf"
