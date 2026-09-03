@@ -285,7 +285,10 @@ export function registerChatRoute(
     try {
       startStep('正在启动 Amagine3D Agent', 'start');
       session = await supervisor.createSession(() =>
-        runtime.createSession(sessionId, { webSearchEnabled }),
+        runtime.createSession(sessionId, {
+          intentScopeId: randomUUID(),
+          webSearchEnabled,
+        }),
       );
 
       unsubscribe = session.subscribe((event: AgentSessionEvent) => {

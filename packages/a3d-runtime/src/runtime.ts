@@ -14,6 +14,7 @@ import {
 
 import {
   CAD_COMPILE_TOOL_NAME,
+  cadIntentStatePath,
   createCadCompileTool,
   createCadCompileResultExtension,
 } from './cad-compile-tool.ts';
@@ -22,6 +23,7 @@ import {
   createCadCapabilitiesTool,
 } from './cad-capabilities-tool.ts';
 import { createRestrictedToolDefinitions } from './restricted-tools.ts';
+import { createInvalidEncryptedContentRetryExtension } from './provider-retry.ts';
 import { sanitizeInternalPromptHistory } from './internal-prompts.ts';
 import {
   createReferenceAnalyzeTool,
@@ -48,6 +50,7 @@ export interface SkillSummary {
 }
 
 export interface PiSessionOptions {
+  intentScopeId: string;
   webSearchEnabled?: boolean;
 }
 
@@ -204,7 +207,7 @@ export class PiRuntime {
 
   async createSession(
     sessionId: string,
-    options: PiSessionOptions = {},
+    options: PiSessionOptions,
   ): Promise<AgentSession> {
     const scopedWorkspaceRoot = this.workspaceRootForSession(sessionId);
     const uploadRoot = join(this.stateRoot, 'uploads', sessionId);
@@ -222,13 +225,14 @@ export class PiRuntime {
         `The available project skills are located at ${this.skillsRoot}.`,
         `Your only writable directory is ${scopedWorkspaceRoot}. Repository code and skills are read-only. Keep every task output inside this directory.`,
         'Use a matching skill whenever the user request falls within its description.',
-        'Use text-a3d as the single Agent-visible CAD authoring surface. For every CAD generation, modification, or inspection, keep one immutable evidence-cad-intent/v5 target and one mutable evidence-semantic-scene/v1 implementation, then let the skill select internal compilers. Do not expose separate single-material, color, or Hybrid modes.',
+        'Use text-a3d as the single Agent-visible CAD authoring surface. For every CAD generation, modification, or inspection, keep one immutable evidence-cad-intent/v5 target and one mutable evidence-semantic-scene/v1 implementation, then let the skill select internal compilers. The runtime hash-binds the first valid intent used in a user turn; preserve it throughout every repair attempt. When a later user request explicitly changes the target, author a new intent filename instead of rewriting an earlier contract. Do not expose separate single-material, color, or Hybrid modes.',
         `Manufactured color and material are semantic properties of physical parts or regions inside that same authoring surface. ${join(this.skillsRoot, 'text-a3d', 'color', 'BACKEND.md')} is internal backend documentation; read it only when implementing or debugging manufactured-color compilation, never as another Agent mode. LED/LCD content and other transient display appearance remain display-only unless the user explicitly requests printable geometry.`,
-        'Let text-a3d route its supporting references from the complete task semantics and the current intent/scene, never from keyword matching alone. Load only guidance relevant to the requested representation, multipart construction, enclosure, installed components, or manufactured color; do not inspect compiler implementation files during ordinary modeling.',
+        'Let text-a3d route its supporting references from the complete task semantics and the current intent/scene, never from keyword matching or fixed component-name classes. Load only guidance relevant to the requested representation, multipart construction, enclosure, installed components, or manufactured color; do not inspect compiler implementation files during ordinary modeling.',
         'When an installed build123d symbol, representation family, or interface helper is uncertain, call cad_capabilities for a compact version-bound manifest before guessing or inspecting compiler implementation. Treat that manifest as advisory evidence, not as a mandatory phase or a shape template.',
         'cad_capabilities, reference_analyze, and cad_compile are peer tools inside the existing open Agent loop. Select and revisit them from current evidence and judgment; do not turn their availability into a fixed workflow state machine.',
         'Iterate autonomously by editing the semantic scene while preserving the immutable intent; do not ask for approval between a concept pass and physical compilation.',
-        'Treat parts, color regions, and display decoration as separate concepts. Give every physical part exactly one representation master (BRep or mesh), derive mating male/female interface geometry from one clearance recipe, and make cuts, openings, walls, and connectors real manufacturing geometry.',
+        'Treat parts, color regions, and display decoration as separate concepts. Give every physical part exactly one representation master (BRep or mesh), derive mating male/female interface geometry from one clearance recipe, and make cuts, openings, walls, and connectors real manufacturing geometry. Build every cavity, pocket, recess, seat, or installed-component keepout by subtracting a real cutter from its owning part; observe() may preserve planning evidence but never replaces the cut. A functional port or connector opening for an internal item must form one continuous passage from the declared exterior face into its target interior cavity or keepout: extend the cutter across the full wall thickness and beyond both boundaries before applying checked_cut(). A shallow exterior recess is not a functional opening. The installed item itself may remain display-only, but its manufactured opening may not. Add support, stops, retention, and a feasible insertion path when the assembly needs them.',
+        'Reason about installed items from assembly behavior, not their names. If an item must enter an enclosed volume or remain serviceable, default to a removable service cover with a locating seam and accessible direct fastening into printed plastic unless the user chose another closure; align each cover clearance hole and receiver pilot boss from one screw datum. If an item only passes through or follows a surface, model only the necessary opening, slot, channel, or local retention. Escalate to a serviceable enclosure only when the spatial and maintenance requirements call for it.',
         'A Three.js concept GLB is diagnostic, not the final deliverable. After booleans and interfaces compile, feed the resulting physical meshes back into one final display GLB and apply PBR materials there; that GLB may also contain explicitly excluded installed-component visuals such as the screen surface. Never preserve a prettier proxy when it disagrees with the printable surface.',
         'All geometry remains in millimetres at unit scale. When product dimensions are inferred, choose the initial semantic envelope so its spatial bounding-box diagonal does not exceed the smallest usable build extent; this preserves arbitrary rigid-rotation freedom from the first build. Print placement may rigidly rotate and translate a finished part, but must never resize it; repair driving dimensions and rebuild instead.',
         'For create, generate, build, or regenerate requests, pre-existing output files are references only. Rewrite the source and execute the build in the current run.',
@@ -238,6 +242,7 @@ export class PiRuntime {
       ],
       cwd: scopedWorkspaceRoot,
       extensionFactories: [
+        createInvalidEncryptedContentRetryExtension(),
         createCadCompileResultExtension(),
         ...(webSearchEnabled ? [createRequiredWebSearchExtension()] : []),
       ],
@@ -278,7 +283,12 @@ export class PiRuntime {
         scopedWorkspaceRoot,
         uploadRoot,
       ),
-      createCadCompileTool(this.projectRoot, scopedWorkspaceRoot),
+      createCadCompileTool({
+        intentScopeId: options.intentScopeId,
+        intentStatePath: cadIntentStatePath(this.sessionRoot, sessionId),
+        projectRoot: this.projectRoot,
+        workspaceRoot: scopedWorkspaceRoot,
+      }),
       ...(tavilySearchTool ? [tavilySearchTool] : []),
     ];
     const { session } = await createAgentSession({

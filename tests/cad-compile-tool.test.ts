@@ -64,8 +64,18 @@ if (mode === 'sync-hang') {
 } else {
   setTimeout(() => {
     fs.appendFileSync(log, 'stage=render\\n');
-    const pass = mode !== 'fail';
-    const artifacts = { log: artifact(log, mode === 'bad-hash') };
+    const intentValid = mode !== 'invalid-intent';
+    const pass = mode !== 'fail' && intentValid;
+    const intentValidation = path.join(outputDir, 'model_intent-validation.json');
+    fs.writeFileSync(intentValidation, JSON.stringify({
+      errors: intentValid ? [] : ['invalid intent'],
+      pass: intentValid,
+      schema: 'intent-validation/v5',
+    }));
+    const artifacts = {
+      intentValidation: artifact(intentValidation),
+      log: artifact(log, mode === 'bad-hash'),
+    };
     if (pass) {
       const preview = path.join(outputDir, 'model_views.png');
       const renderEvidence = path.join(outputDir, 'model_render.json');
@@ -76,7 +86,13 @@ if (mode === 'sync-hang') {
     }
     const result = {
       artifacts,
-      issues: pass ? [] : [{ code: 'QA.MESH_FAILED', severity: 'error', stage: 'mesh-qa' }],
+      issues: pass
+        ? []
+        : [{
+            code: intentValid ? 'QA.MESH_FAILED' : 'CONTRACT.INTENT_INVALID',
+            severity: 'error',
+            stage: intentValid ? 'mesh-qa' : 'intent-validation',
+          }],
       pass,
       runId: '11111111-1111-4111-8111-111111111111',
       schema: 'evidence-cad-compile-result/v1',
@@ -93,13 +109,20 @@ if (mode === 'sync-hang') {
 
 interface Fixture {
   cleanup(): Promise<void>;
+  intentStatePath: string;
   outside: string;
   projectRoot: string;
   workspaceRoot: string;
 }
 
 async function createFixture(
-  mode: 'bad-hash' | 'fail' | 'hang' | 'pass' | 'sync-hang',
+  mode:
+    | 'bad-hash'
+    | 'fail'
+    | 'hang'
+    | 'invalid-intent'
+    | 'pass'
+    | 'sync-hang',
 ): Promise<Fixture> {
   const temporary = await mkdtemp(join(tmpdir(), 'amagine-cad-tool-'));
   const canonicalTemporary = await realpath(temporary);
@@ -127,6 +150,7 @@ async function createFixture(
     async cleanup() {
       await rm(canonicalTemporary, { force: true, recursive: true });
     },
+    intentStatePath: join(canonicalTemporary, 'state', 'intent.json'),
     outside: join(canonicalTemporary, 'outside.json'),
     projectRoot,
     workspaceRoot,
@@ -140,13 +164,21 @@ function executeTool(
     intent?: string;
     marker?: string;
     onUpdate?: (value: unknown) => void;
+    scopeId?: string;
     signal?: AbortSignal;
   } = {},
 ) {
-  const tool = createCadCompileTool(fixture.projectRoot, fixture.workspaceRoot, {
-    hardTimeoutMs: options.hardTimeoutMs,
-    logPollIntervalMs: 10,
-    terminateGraceMs: 50,
+  const tool = createCadCompileTool({
+    intentScopeId:
+      options.scopeId ?? '11111111-1111-4111-8111-111111111111',
+    intentStatePath: fixture.intentStatePath,
+    projectRoot: fixture.projectRoot,
+    tuning: {
+      hardTimeoutMs: options.hardTimeoutMs,
+      logPollIntervalMs: 10,
+      terminateGraceMs: 50,
+    },
+    workspaceRoot: fixture.workspaceRoot,
   });
   return tool.execute(
     'compile-call',
@@ -214,15 +246,25 @@ test(
   async () => {
     const fixture = await createFixture('pass');
     try {
-      const tool = createCadCompileTool(
-        fixture.projectRoot,
-        fixture.workspaceRoot,
-      );
+      const tool = createCadCompileTool({
+        intentScopeId: '11111111-1111-4111-8111-111111111111',
+        intentStatePath: fixture.intentStatePath,
+        projectRoot: fixture.projectRoot,
+        workspaceRoot: fixture.workspaceRoot,
+      });
       assert.equal(tool.name, CAD_COMPILE_TOOL_NAME);
       assert.equal(tool.executionMode, 'sequential');
       assert.match(
         (tool.promptGuidelines ?? []).join('\n'),
         /separate contract-only authoring step[\s\S]*Never put write_intent[\s\S]*may generate the scene/u,
+      );
+      assert.match(
+        (tool.promptGuidelines ?? []).join('\n'),
+        /review the full issue set[\s\S]*Use judgment when an issue should be deferred/u,
+      );
+      assert.doesNotMatch(
+        (tool.promptGuidelines ?? []).join('\n'),
+        /do not repair only the first message/u,
       );
 
       const updates: unknown[] = [];
@@ -441,6 +483,92 @@ test(
         assert.match(details.repairHint ?? '', /create the scene during compilation/u);
         return true;
       });
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  'cad_compile freezes the first valid intent for every repair in one user turn',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('pass');
+    try {
+      await executeTool(fixture);
+      const state = JSON.parse(await readFile(fixture.intentStatePath, 'utf8')) as {
+        activeRevision: number;
+        activeScopeId: string;
+        revisions: Array<{ path: string; sha256: string }>;
+        schema: string;
+      };
+      assert.equal(state.schema, 'evidence-cad-intent-session/v1');
+      assert.equal(state.activeScopeId, '11111111-1111-4111-8111-111111111111');
+      assert.equal(state.activeRevision, 0);
+      assert.equal(state.revisions[0]?.path, 'intent.json');
+
+      await writeFile(join(fixture.workspaceRoot, 'intent.json'), '{"changed":true}\n');
+      await assert.rejects(executeTool(fixture), /TOOL\.INTENT_FROZEN/u);
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  'cad_compile accepts a later user-turn revision only under a new intent filename',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('pass');
+    try {
+      await executeTool(fixture);
+      await writeFile(join(fixture.workspaceRoot, 'intent-v2.json'), '{"target":2}\n');
+      await executeTool(fixture, {
+        intent: 'intent-v2.json',
+        scopeId: '22222222-2222-4222-8222-222222222222',
+      });
+
+      const state = JSON.parse(await readFile(fixture.intentStatePath, 'utf8')) as {
+        activeRevision: number;
+        revisions: Array<{ path: string }>;
+      };
+      assert.equal(state.activeRevision, 1);
+      assert.deepEqual(
+        state.revisions.map(({ path }) => path),
+        ['intent.json', 'intent-v2.json'],
+      );
+
+      await writeFile(join(fixture.workspaceRoot, 'intent.json'), '{"target":3}\n');
+      await assert.rejects(
+        executeTool(fixture, {
+          scopeId: '33333333-3333-4333-8333-333333333333',
+        }),
+        /TOOL\.INTENT_PATH_REUSED/u,
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  'cad_compile does not freeze an intent that failed contract validation',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('invalid-intent');
+    try {
+      const invalid = await executeTool(fixture);
+      assert.equal((invalid.details as CadCompileResult).pass, false);
+      await assert.rejects(readFile(fixture.intentStatePath), /ENOENT/u);
+
+      await writeFile(join(fixture.workspaceRoot, 'intent.json'), '{"repaired":true}\n');
+      await writeFile(join(fixture.workspaceRoot, 'model.py'), 'pass\n');
+      const repaired = await executeTool(fixture);
+      assert.equal((repaired.details as CadCompileResult).pass, true);
+      assert.match(
+        await readFile(fixture.intentStatePath, 'utf8'),
+        /evidence-cad-intent-session\/v1/u,
+      );
     } finally {
       await fixture.cleanup();
     }

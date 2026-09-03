@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { CURRENT_SESSION_VERSION } from '@amagine3d/a3d-runtime';
+import {
+  cadIntentStatePath,
+  CURRENT_SESSION_VERSION,
+} from '@amagine3d/a3d-runtime';
 
 import { CHAT_TURN_CUSTOM_TYPE } from '../src/lib/chat-turn.ts';
 import {
@@ -239,6 +242,9 @@ test('moves session metadata and workspace folders to trash together', async () 
     await mkdir(selectedRoot, { recursive: true });
     await writeFile(join(selectedRoot, 'selected.stl'), 'solid selected');
     const sessionPath = await writeSession(sessionRoot, selectedRoot);
+    const intentState = cadIntentStatePath(sessionRoot, SESSION_ID);
+    await mkdir(join(intentState, '..'), { recursive: true });
+    await writeFile(intentState, '{}');
     let movedPaths: string[] = [];
 
     const trashed = await moveSessionsToTrash(
@@ -252,7 +258,10 @@ test('moves session metadata and workspace folders to trash together', async () 
     );
 
     assert.equal(trashed, 1);
-    assert.deepEqual(new Set(movedPaths), new Set([sessionPath, selectedRoot]));
+    assert.deepEqual(
+      new Set(movedPaths),
+      new Set([intentState, sessionPath, selectedRoot]),
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }

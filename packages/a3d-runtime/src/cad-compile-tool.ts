@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants, type BigIntStats } from 'node:fs';
 import {
@@ -6,10 +6,14 @@ import {
   lstat,
   mkdir,
   open,
+  readFile,
   realpath,
+  rename,
   stat,
+  unlink,
+  writeFile,
 } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   defineTool,
@@ -23,6 +27,8 @@ import { terminateProcessTree } from './python-json-process.ts';
 export const CAD_COMPILE_TOOL_NAME = 'cad_compile';
 
 const RESULT_SCHEMA = 'evidence-cad-compile-result/v1';
+const INTENT_SESSION_SCHEMA = 'evidence-cad-intent-session/v1';
+export const CAD_INTENT_STATE_DIRECTORY = '.intent-sessions';
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const LOG_NAME = 'cad_compile.log';
@@ -110,6 +116,31 @@ export interface CadCompileToolTuning {
   terminateGraceMs?: number;
 }
 
+export interface CadCompileToolOptions {
+  intentScopeId: string;
+  intentStatePath: string;
+  projectRoot: string;
+  tuning?: CadCompileToolTuning;
+  workspaceRoot: string;
+}
+
+interface FrozenIntentRevision {
+  path: string;
+  sha256: string;
+}
+
+interface IntentSessionState {
+  activeRevision: number;
+  activeScopeId: string;
+  revisions: FrozenIntentRevision[];
+  schema: typeof INTENT_SESSION_SCHEMA;
+}
+
+interface IntentCandidate extends FrozenIntentRevision {
+  revision: number;
+  state: IntentSessionState | undefined;
+}
+
 interface CapturedProcessResult {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -181,6 +212,267 @@ function infrastructureError(
       ...extra,
     }),
   );
+}
+
+export function cadIntentStatePath(
+  sessionRoot: string,
+  sessionId: string,
+): string {
+  if (!UUID.test(sessionId)) throw new Error('Invalid session id.');
+  return join(sessionRoot, CAD_INTENT_STATE_DIRECTORY, `${sessionId}.json`);
+}
+
+function relativeIntentPath(workspaceRoot: string, intentPath: string): string {
+  return relative(workspaceRoot, intentPath).split(sep).join('/');
+}
+
+function isFrozenIntentRevision(value: unknown): value is FrozenIntentRevision {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const revision = value as Partial<FrozenIntentRevision>;
+  return (
+    typeof revision.path === 'string' &&
+    revision.path.length > 0 &&
+    !isAbsolute(revision.path) &&
+    !revision.path.split('/').includes('..') &&
+    typeof revision.sha256 === 'string' &&
+    /^[0-9a-f]{64}$/u.test(revision.sha256)
+  );
+}
+
+function isIntentSessionState(value: unknown): value is IntentSessionState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Partial<IntentSessionState>;
+  return (
+    state.schema === INTENT_SESSION_SCHEMA &&
+    typeof state.activeScopeId === 'string' &&
+    UUID.test(state.activeScopeId) &&
+    Number.isInteger(state.activeRevision) &&
+    Number(state.activeRevision) >= 0 &&
+    Array.isArray(state.revisions) &&
+    state.revisions.length > Number(state.activeRevision) &&
+    state.revisions.every(isFrozenIntentRevision)
+  );
+}
+
+async function readIntentSessionState(
+  statePath: string,
+): Promise<IntentSessionState | undefined> {
+  let entry;
+  try {
+    entry = await lstat(statePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw infrastructureError(
+      'TOOL.INTENT_STATE_INVALID',
+      `intent session state is unavailable: ${(error as Error).message}`,
+    );
+  }
+  if (entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1) {
+    throw infrastructureError(
+      'TOOL.INTENT_STATE_INVALID',
+      'intent session state must be a single-linked regular file',
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(statePath, 'utf8'));
+  } catch (error) {
+    throw infrastructureError(
+      'TOOL.INTENT_STATE_INVALID',
+      `intent session state is not valid JSON: ${(error as Error).message}`,
+    );
+  }
+  if (!isIntentSessionState(parsed)) {
+    throw infrastructureError(
+      'TOOL.INTENT_STATE_INVALID',
+      `intent session state must use ${INTENT_SESSION_SCHEMA}`,
+    );
+  }
+  return parsed;
+}
+
+async function stableFileHash(
+  path: string,
+  label: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const entry = await lstat(path, { bigint: true });
+  if (!entry.isFile() || entry.nlink !== 1n) {
+    throw infrastructureError(
+      'TOOL.PATH_INVALID',
+      `${label} must be a single-linked regular file`,
+    );
+  }
+  return await hashStableArtifact(path, label, entry, signal);
+}
+
+function frozenIntentError(
+  expected: FrozenIntentRevision,
+  observed: FrozenIntentRevision,
+): Error {
+  return infrastructureError(
+    'TOOL.INTENT_FROZEN',
+    'the accepted intent is frozen for this user turn',
+    {
+      expected,
+      observed,
+      repairHint:
+        'Restore the accepted intent exactly. A user-requested target change must be authored under a new intent filename in a later user turn.',
+    },
+  );
+}
+
+async function resolveIntentCandidate(
+  workspaceRoot: string,
+  intentPath: string,
+  statePath: string,
+  scopeId: string,
+  signal: AbortSignal | undefined,
+): Promise<IntentCandidate> {
+  const observed = {
+    path: relativeIntentPath(workspaceRoot, intentPath),
+    sha256: await stableFileHash(intentPath, 'intent', signal),
+  };
+  const state = await readIntentSessionState(statePath);
+  if (!state) return { ...observed, revision: 0, state };
+
+  const active = state.revisions[state.activeRevision]!;
+  if (state.activeScopeId === scopeId) {
+    if (active.path !== observed.path || active.sha256 !== observed.sha256) {
+      throw frozenIntentError(active, observed);
+    }
+    return { ...observed, revision: state.activeRevision, state };
+  }
+
+  const reusedRevision = state.revisions.findIndex(
+    (revision) => revision.path === observed.path,
+  );
+  if (reusedRevision >= 0) {
+    const reused = state.revisions[reusedRevision]!;
+    if (reused.sha256 !== observed.sha256) {
+      throw infrastructureError(
+        'TOOL.INTENT_PATH_REUSED',
+        'an earlier immutable intent filename was reused with different content',
+        {
+          expected: reused,
+          observed,
+          repairHint:
+            'Keep prior intent files unchanged and write a new intent filename for a user-requested target revision.',
+        },
+      );
+    }
+    return { ...observed, revision: reusedRevision, state };
+  }
+  return { ...observed, revision: state.revisions.length, state };
+}
+
+function sameIntentState(
+  left: IntentSessionState | undefined,
+  right: IntentSessionState | undefined,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+async function writeIntentSessionState(
+  statePath: string,
+  state: IntentSessionState,
+): Promise<void> {
+  const parent = dirname(statePath);
+  await mkdir(parent, { recursive: true });
+  const temporary = `${statePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    await rename(temporary, statePath);
+  } catch (error) {
+    throw infrastructureError(
+      'TOOL.INTENT_STATE_WRITE_FAILED',
+      `could not persist the immutable intent binding: ${(error as Error).message}`,
+    );
+  } finally {
+    await unlink(temporary).catch(() => undefined);
+  }
+}
+
+async function commitIntentCandidate(
+  statePath: string,
+  scopeId: string,
+  candidate: IntentCandidate,
+): Promise<void> {
+  const current = await readIntentSessionState(statePath);
+  if (!sameIntentState(current, candidate.state)) {
+    throw infrastructureError(
+      'TOOL.INTENT_STATE_CHANGED',
+      'intent session state changed during compilation',
+    );
+  }
+  const revisions = [...(current?.revisions ?? [])];
+  if (candidate.revision === revisions.length) {
+    revisions.push({ path: candidate.path, sha256: candidate.sha256 });
+  } else {
+    const existing = revisions[candidate.revision];
+    if (
+      !existing ||
+      existing.path !== candidate.path ||
+      existing.sha256 !== candidate.sha256
+    ) {
+      throw infrastructureError(
+        'TOOL.INTENT_STATE_CHANGED',
+        'intent revision changed during compilation',
+      );
+    }
+  }
+  await writeIntentSessionState(statePath, {
+    activeRevision: candidate.revision,
+    activeScopeId: scopeId,
+    revisions,
+    schema: INTENT_SESSION_SCHEMA,
+  });
+}
+
+async function intentValidationPassed(
+  result: CadCompileResult,
+): Promise<boolean> {
+  const reference = result.artifacts.intentValidation;
+  if (!reference) return false;
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(reference.path);
+  } catch (error) {
+    throw infrastructureError(
+      'TOOL.RESULT_INVALID',
+      `intent validation artifact is unavailable: ${(error as Error).message}`,
+    );
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== reference.sha256) {
+    throw infrastructureError(
+      'TOOL.RESULT_HASH_MISMATCH',
+      'intent validation artifact changed before intent binding',
+    );
+  }
+  let audit: { errors?: unknown; pass?: unknown; schema?: unknown };
+  try {
+    audit = JSON.parse(bytes.toString('utf8')) as typeof audit;
+  } catch (error) {
+    throw infrastructureError(
+      'TOOL.RESULT_INVALID',
+      `intent validation artifact is not valid JSON: ${(error as Error).message}`,
+    );
+  }
+  if (
+    audit.schema !== 'intent-validation/v5' ||
+    typeof audit.pass !== 'boolean' ||
+    !Array.isArray(audit.errors) ||
+    audit.pass !== (audit.errors.length === 0)
+  ) {
+    throw infrastructureError(
+      'TOOL.RESULT_INVALID',
+      'intent validation artifact has an invalid contract',
+    );
+  }
+  return audit.pass;
 }
 
 function assertRelativeParameter(label: string, value: string): void {
@@ -812,11 +1104,14 @@ async function hashStableArtifact(
  * preserving the result content and details.
  */
 export function createCadCompileTool(
-  projectRoot: string,
-  workspaceRoot: string,
-  tuning: CadCompileToolTuning = {},
+  options: CadCompileToolOptions,
 ) {
-  const resolvedProjectRoot = resolve(projectRoot);
+  if (!UUID.test(options.intentScopeId)) {
+    throw new Error('intentScopeId must be a UUID.');
+  }
+  const resolvedProjectRoot = resolve(options.projectRoot);
+  const resolvedIntentStatePath = resolve(options.intentStatePath);
+  const tuning = options.tuning ?? {};
   const pythonExecutable =
     process.platform === 'win32'
       ? join(resolvedProjectRoot, '.venv', 'Scripts', 'python.exe')
@@ -838,13 +1133,20 @@ export function createCadCompileTool(
     promptGuidelines: [
       'Use cad_compile instead of manually chaining text-a3d compiler and QA scripts.',
       'Before calling cad_compile, run a separate contract-only authoring step that creates and validates the immutable intent. Never put write_intent in the CAD build source or run the full build source manually to bootstrap intent; the build source may generate the scene inside cad_compile.',
+      'The first valid intent used in this user turn is hash-bound by the runtime. Preserve that exact file and content throughout repair iterations. A later user-requested target change must use a new intent filename rather than rewriting an earlier contract.',
       'A pass result still requires reading the returned fresh preview before delivery.',
-      'On a failed result, review the complete issue set and repair shared root causes in one coordinated source change before calling cad_compile again. Use repairDelta and repairState to avoid regressing checks that already passed; blockedBy marks checks that require valid upstream evidence, not extra failures to guess around.',
+      'Before calling cad_compile again, review the full issue set, identify shared root causes, and try to address related findings in one coordinated change. Use judgment when an issue should be deferred and briefly explain that choice. Use repairDelta and repairState to avoid regressing checks that already passed; blockedBy marks checks that require valid upstream evidence, not extra failures to guess around.',
     ],
     parameters: cadCompileParameters,
     executionMode: 'sequential',
     async execute(_toolCallId, params, signal, onUpdate) {
-      const root = await canonicalWorkspaceRoot(workspaceRoot);
+      const root = await canonicalWorkspaceRoot(options.workspaceRoot);
+      if (isInside(root, resolvedIntentStatePath)) {
+        throw infrastructureError(
+          'TOOL.CONFIG_INVALID',
+          'intent session state must be stored outside the Agent-writable workspace',
+        );
+      }
       await access(pythonExecutable, constants.X_OK).catch(
         (error: NodeJS.ErrnoException) => {
           throw infrastructureError(
@@ -883,6 +1185,13 @@ export function createCadCompileTool(
         { label: 'intent', path: intent },
         { label: 'source', path: source },
       ]);
+      const intentCandidate = await resolveIntentCandidate(
+        root,
+        intent,
+        resolvedIntentStatePath,
+        options.intentScopeId,
+        signal,
+      );
       const outputDir = await resolveWorkspaceParameter(
         root,
         'output_dir',
@@ -954,6 +1263,13 @@ export function createCadCompileTool(
           'TOOL.EXIT_MISMATCH',
           'cad_compile reported pass=false but exited successfully',
           { exitCode: processResult.code },
+        );
+      }
+      if (await intentValidationPassed(result)) {
+        await commitIntentCandidate(
+          resolvedIntentStatePath,
+          options.intentScopeId,
+          intentCandidate,
         );
       }
 

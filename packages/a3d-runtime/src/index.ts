@@ -18,13 +18,20 @@ export {
   createRestrictedToolDefinitions,
 } from './restricted-tools.ts';
 export {
+  createInvalidEncryptedContentRetryExtension,
+  isInvalidEncryptedContentError,
+} from './provider-retry.ts';
+export {
+  CAD_INTENT_STATE_DIRECTORY,
   CAD_COMPILE_TOOL_NAME,
+  cadIntentStatePath,
   createCadCompileTool,
   createCadCompileResultExtension,
   isCadCompileResult,
   type CadCompileArtifactReference,
   type CadCompileIssue,
   type CadCompileResult,
+  type CadCompileToolOptions,
 } from './cad-compile-tool.ts';
 export {
   CAD_CAPABILITIES_SCHEMA,
