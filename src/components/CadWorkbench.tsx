@@ -45,8 +45,10 @@ import {
   trashStorageSessions,
 } from '../lib/agent-api';
 import {
+  defaultPreviewArtifact,
   fileSectionArtifacts,
-  preferredPreviewArtifact,
+  preferredDisplayPreviewArtifact,
+  preferredPrintPreviewArtifact,
 } from '../lib/artifact-selection';
 import {
   appendChatStepText,
@@ -104,6 +106,7 @@ export function CadWorkbench({
       Record<string, number>
     >({});
     const [prompt, setPrompt] = useState('');
+    const [printPreview, setPrintPreview] = useState(false);
     const [running, setRunning] = useState(false);
     const [runtimeEntries, setRuntimeEntries] = useState<RuntimeEntry[]>([]);
     const [selectedPath, setSelectedPath] = useState<string>();
@@ -161,10 +164,6 @@ export function CadWorkbench({
         : session?.persisted
           ? session.title
           : text('New printable object', '新建可打印物体');
-    const previewArtifact =
-      selectedArtifact?.kind === 'model'
-        ? selectedArtifact
-        : preferredPreviewArtifact(artifacts);
     const artifactWorkspaceName =
       sessionId === BUNDLED_POMODORO_SESSION_ID
         ? text('Amagine3D Pomodoro Timer', 'Amagine3D 番茄钟')
@@ -175,11 +174,42 @@ export function CadWorkbench({
           ? parameterModels.find(
               (model) =>
                 model.primaryPreviewPath === selectedArtifact.path ||
-                model.displayPreviewPath === selectedArtifact.path,
+                model.displayPreviewPath === selectedArtifact.path ||
+                model.artifactPaths.includes(selectedArtifact.path),
             )
           : undefined,
       [parameterModels, selectedArtifact],
     );
+    const displayPreviewArtifact = useMemo(
+      () =>
+        (activeParameterModel
+          ? artifacts.find(
+              ({ path }) => path === activeParameterModel.displayPreviewPath,
+            )
+          : selectedArtifact?.kind === 'model' &&
+              selectedArtifact.format === 'glb'
+            ? selectedArtifact
+            : undefined) ?? preferredDisplayPreviewArtifact(artifacts),
+      [activeParameterModel, artifacts, selectedArtifact],
+    );
+    const printPreviewArtifact = useMemo(
+      () =>
+        (activeParameterModel
+          ? artifacts.find(
+              ({ path }) => path === activeParameterModel.primaryPreviewPath,
+            )
+          : selectedArtifact?.kind === 'model' &&
+              (selectedArtifact.format === '3mf' ||
+                selectedArtifact.format === 'stl')
+            ? selectedArtifact
+            : undefined) ?? preferredPrintPreviewArtifact(artifacts),
+      [activeParameterModel, artifacts, selectedArtifact],
+    );
+    const previewArtifact = printPreview
+      ? printPreviewArtifact ?? displayPreviewArtifact
+      : displayPreviewArtifact ?? printPreviewArtifact;
+    const showingPrintPreview =
+      previewArtifact?.format === '3mf' || previewArtifact?.format === 'stl';
 
     function addRuntimeEntry(
       message: string,
@@ -218,6 +248,9 @@ export function CadWorkbench({
       setSelectedPath(artifact.path);
       if (artifact.kind === 'model' || artifact.kind === 'image') {
         setLeftView('files');
+      }
+      if (artifact.kind === 'model') {
+        setPrintPreview(artifact.format === '3mf' || artifact.format === 'stl');
       }
     }
 
@@ -320,8 +353,9 @@ export function CadWorkbench({
     }
 
     function selectInitialArtifact(nextArtifacts: ArtifactSummary[]) {
+      setPrintPreview(false);
       setSelectedPath(
-        preferredPreviewArtifact(nextArtifacts)?.path ??
+        defaultPreviewArtifact(nextArtifacts)?.path ??
           fileSectionArtifacts(nextArtifacts)[0]?.path ??
           nextArtifacts[0]?.path,
       );
@@ -363,13 +397,19 @@ export function CadWorkbench({
         setArtifactWorkspace(detail.artifactWorkspace);
         setParameterModels(parameterCollection.models);
         setParameterIssue(undefined);
-        setSelectedPath(
+        const initialArtifact =
           preferredArtifactPath &&
             detail.artifacts.some(({ path }) => path === preferredArtifactPath)
             ? preferredArtifactPath
-            : preferredPreviewArtifact(detail.artifacts)?.path ??
+            : defaultPreviewArtifact(detail.artifacts)?.path ??
                 fileSectionArtifacts(detail.artifacts)[0]?.path ??
-                detail.artifacts[0]?.path,
+                detail.artifacts[0]?.path;
+        setSelectedPath(initialArtifact);
+        const selected = detail.artifacts.find(
+          ({ path }) => path === initialArtifact,
+        );
+        setPrintPreview(
+          selected?.format === '3mf' || selected?.format === 'stl',
         );
       } catch (error) {
         addRuntimeEntry(errorText(error, language), 'session', 'error');
@@ -396,7 +436,7 @@ export function CadWorkbench({
             return current;
           }
           return (
-            preferredPreviewArtifact(next.artifacts)?.path ??
+            defaultPreviewArtifact(next.artifacts)?.path ??
             fileSectionArtifacts(next.artifacts)[0]?.path ??
             next.artifacts[0]?.path
           );
@@ -568,8 +608,9 @@ export function CadWorkbench({
             `${artifact.modifiedAt}:${String(artifact.size)}`,
         );
         const currentPreview =
-          preferredPreviewArtifact(changedArtifacts) ??
-          preferredPreviewArtifact(event.artifacts);
+          defaultPreviewArtifact(changedArtifacts) ??
+          defaultPreviewArtifact(event.artifacts);
+        setPrintPreview(false);
         if (currentPreview) setSelectedPath(currentPreview.path);
         void fetchModelParameters(event.sessionId)
           .then((collection) => setParameterModels(collection.models))
@@ -648,6 +689,7 @@ export function CadWorkbench({
         setArtifactWorkspace(next.artifactWorkspace);
         setParameterModels(next.models);
         setSelectedPath(model.displayPreviewPath);
+        setPrintPreview(false);
         addRuntimeEntry(
           text('Complete model rebuilt', '完整模型已重建'),
           'parameters',
@@ -808,6 +850,7 @@ export function CadWorkbench({
       setParameterIssue(undefined);
       setSelectedPath(undefined);
       setSelectedText(undefined);
+      setPrintPreview(false);
       if (!preserveComposer) {
         setPrompt('');
         setPendingImages([]);
@@ -898,7 +941,12 @@ export function CadWorkbench({
           logCollapsed={logCollapsed}
           onLogResize={beginLogResize}
           onToggleLog={() => setLogCollapsed((collapsed) => !collapsed)}
+          onTogglePrintPreview={() => setPrintPreview((enabled) => !enabled)}
           previewArtifact={previewArtifact}
+          printPreview={showingPrintPreview}
+          printPreviewAvailable={Boolean(
+            displayPreviewArtifact && printPreviewArtifact,
+          )}
           running={running || parameterBuilding}
           runtimeEntries={runtimeEntries}
           runtimeReady={Boolean(health?.runtimeReady)}

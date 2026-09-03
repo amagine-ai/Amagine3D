@@ -2,8 +2,10 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
 import {
+  defaultPreviewArtifact,
   fileSectionArtifacts,
-  preferredPreviewArtifact,
+  preferredDisplayPreviewArtifact,
+  preferredPrintPreviewArtifact,
 } from '../src/lib/artifact-selection.ts';
 import type { ArtifactSummary, PreviewFormat } from '../src/types.ts';
 
@@ -38,7 +40,11 @@ test('selects the display GLB over the top-level STL for single-color builds', (
     model('bracket.stl', 'stl', '2026-08-23T08:00:02.000Z'),
     model('bracket-display.glb', 'glb', '2026-08-23T08:00:03.000Z'),
   ];
-  assert.equal(preferredPreviewArtifact(artifacts)?.path, 'bracket-display.glb');
+  assert.equal(
+    preferredDisplayPreviewArtifact(artifacts)?.path,
+    'bracket-display.glb',
+  );
+  assert.equal(defaultPreviewArtifact(artifacts)?.path, 'bracket-display.glb');
 });
 
 test('selects the display GLB over the 3MF print package for color builds', () => {
@@ -48,7 +54,11 @@ test('selects the display GLB over the 3MF print package for color builds', () =
     model('timer-region-screen.stl', 'stl', '2026-08-23T08:00:03.000Z'),
     model('timer-region-housing.stl', 'stl', '2026-08-23T08:00:02.000Z'),
   ];
-  assert.equal(preferredPreviewArtifact(artifacts)?.path, 'timer-display.glb');
+  assert.equal(
+    preferredDisplayPreviewArtifact(artifacts)?.path,
+    'timer-display.glb',
+  );
+  assert.equal(preferredPrintPreviewArtifact(artifacts)?.path, 'timer.3mf');
 });
 
 test('honors a featured display GLB as the visible model', () => {
@@ -59,7 +69,10 @@ test('honors a featured display GLB as the visible model', () => {
       featured: true,
     },
   ];
-  assert.equal(preferredPreviewArtifact(artifacts)?.path, 'timer-display.glb');
+  assert.equal(
+    preferredDisplayPreviewArtifact(artifacts)?.path,
+    'timer-display.glb',
+  );
 });
 
 test('does not let an older multi-color print package override a newer STL build', () => {
@@ -67,7 +80,7 @@ test('does not let an older multi-color print package override a newer STL build
     model('new-part.stl', 'stl', '2026-08-23T09:00:00.000Z'),
     model('old-part.3mf', '3mf', '2026-08-23T08:00:00.000Z'),
   ];
-  assert.equal(preferredPreviewArtifact(artifacts)?.path, 'new-part.stl');
+  assert.equal(preferredPrintPreviewArtifact(artifacts)?.path, 'new-part.stl');
 });
 
 test('prefers 3MF when top-level print outputs share the same timestamp', () => {
@@ -75,7 +88,7 @@ test('prefers 3MF when top-level print outputs share the same timestamp', () => 
     model('timer.stl', 'stl', '2026-08-23T08:00:00.000Z'),
     model('timer.3mf', '3mf', '2026-08-23T08:00:00.000Z'),
   ];
-  assert.equal(preferredPreviewArtifact(artifacts)?.path, 'timer.3mf');
+  assert.equal(preferredPrintPreviewArtifact(artifacts)?.path, 'timer.3mf');
 });
 
 test('honors the explicit preview of a bundled project', () => {
@@ -88,7 +101,7 @@ test('honors the explicit preview of a bundled project', () => {
     featured,
   ];
   assert.equal(
-    preferredPreviewArtifact(artifacts)?.path,
+    defaultPreviewArtifact(artifacts)?.path,
     'focus-bar-logical-assembly.3mf',
   );
 });
