@@ -263,6 +263,12 @@ When the request contains an installed LED/LCD or another display component,
 read `installed-displays.md` for the physical aperture/keepout/retention and
 display-only scene rules.
 
+Before writing the immutable document, enumerate the exact names that will
+enter the manufacturing exporters. Keep installed references, transient visual
+content, and purchased hardware out of that list unless the user explicitly
+requested a printable surrogate. This inventory is part of intent reasoning;
+it is not a separate contract or a keyword-based component taxonomy.
+
 The scene is not allowed to broaden the immutable request. Its `intentRef` is
 hash checked and the referenced document must pass the complete root v5 intent
 validator. Scene `parts[].id` is an exact set match against the single top-level

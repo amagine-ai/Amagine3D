@@ -65,6 +65,7 @@ def _write_brep_scene(
     part_names: list[str],
     *,
     interface_dimensions: dict[str, tuple[str, float]] | None = None,
+    display_nodes: list[dict] | None = None,
     revision: str = "test-rev-001",
 ) -> Path:
     intent = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -174,7 +175,7 @@ def _write_brep_scene(
                 },
             }
             for feature_id, owner in scene_features
-        ],
+        ] + list(display_nodes or []),
         "interfaces": scene_interfaces,
     }
     scene_path.write_text(json.dumps(scene), encoding="utf-8")
@@ -1192,11 +1193,35 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 manufacturing=manufacturing,
                 dimensions_mm=(20.0, 10.0, 6.0),
             )
+            display_path = root / "status-surface.ply"
+            display_mesh = trimesh.creation.box(extents=[4.0, 0.1, 1.0])
+            display_mesh.apply_translation([0.0, -4.8, 5.0])
+            display_mesh.export(display_path)
             scene_path = _write_brep_scene(
                 root,
                 intent_path,
                 ["lower-shell", "top-lid"],
                 interface_dimensions={"lid-tab-slot": ("width", 6.0)},
+                display_nodes=[
+                    {
+                        "id": "status-surface",
+                        "partId": "top-lid",
+                        "featureId": "display/status-surface",
+                        "role": "display-only",
+                        "operation": "none",
+                        "physicalFeatureRef": "lid-slot",
+                        "recipe": {
+                            "kind": "displayComponent",
+                            "parameters": {
+                                "sourceMesh": display_path.name,
+                                "appearance": {
+                                    "baseColor": "#111417",
+                                    "roughness": 0.2,
+                                },
+                            },
+                        },
+                    }
+                ],
             )
             tab = Pos(0, 0, 4) * Box(
                 6, 3, 2, align=(Align.CENTER, Align.CENTER, Align.MIN)
@@ -1269,6 +1294,11 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertTrue((root / "case.stl").is_file())
             self.assertTrue((root / "case-assemble.step").is_file())
             self.assertTrue((root / "case-display.glb").is_file())
+            self.assertEqual(
+                report["artifacts"]["glb:display"]["displayOnlyNodeNames"],
+                ["status-surface"],
+            )
+            self.assertNotIn("status-surface", report["parts"])
             self.assertFalse((root / "case.3mf").exists())
             self.assertFalse((root / "case_material-plan.json").exists())
             self.assertNotIn("part_colors", report)
@@ -1377,7 +1407,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertEqual(preview.returncode, 0, preview.stdout + preview.stderr)
             self.assertTrue((root / "case_views.png").is_file())
             preview_payload = json.loads(preview_report.read_text(encoding="utf-8"))
-            self.assertEqual(len(preview_payload["meshes"]), 2)
+            self.assertEqual(len(preview_payload["meshes"]), 3)
             self.assertEqual(preview_payload["dimensions_mm"], [20.0, 10.0, 6.0])
             self.assertTrue(
                 all("preview_color_rgb" in item for item in preview_payload["meshes"])

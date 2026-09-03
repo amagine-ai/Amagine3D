@@ -167,6 +167,15 @@ claim exact reproduction. The report uses `evidence-reference-analysis/v1`
 and binds the absolute uploaded-image path and SHA-256. Analyze every uploaded
 image separately; an unbound or stale report does not satisfy the visual gate.
 
+Before freezing intent, make one compact assembly inventory in the intent
+authoring step. Assign each requested object an output role based on what it
+must do: printed manufacturing part, non-manufactured installed reference,
+display-only appearance, or purchased hardware. Then inspect the exact physical
+part names that will enter STL, STEP, and 3MF. This is a semantic decision, not
+a component-name classifier, and it does not require another file, compile, or
+user checkpoint. Only printed manufacturing parts belong in `parts` passed to
+`write_intent(...)`.
+
 Write a contract-only `<name>_intent.py` from
 `references/evidence-contract.md`, preferably with `write_intent(...)`, and run
 that small file to create `<name>_intent.json` before authoring or compiling
@@ -215,6 +224,12 @@ implemented. Keep all parts, nodes, booleans, color regions, display-only
 components, interfaces, and artifact bindings in one millimetre-scale,
 right-handed coordinate system. Every source and derived artifact uses
 `scale: 1`.
+
+Define every feature datum, envelope, and transform once in build source. Use
+that same value or object to construct the real BRep/mesh operation and its
+scene node; never hand-copy a second set of dimensions merely to describe the
+operation. A scene recipe that disagrees with the actual cutter or connector is
+not evidence of the manufactured geometry.
 
 Scene validation re-runs the complete hash-bound v5 intent contract. Scene
 physical part IDs must exactly equal the intent physical parts. Every
@@ -312,6 +327,11 @@ different concepts:
 - a physical part can be printed separately and has interfaces;
 - a color region is a permanent material assignment inside one physical part;
 - a display-only node is excluded from STEP, STL, 3MF, part counts, and booleans.
+
+Both BRep exporters read scene-declared `displayComponent` nodes into the
+display GLB while keeping their physical `parts` argument manufacturing-only.
+Do not add a fake printable insert just to make an installed component visible
+in the preview.
 
 For every declared mechanical interface, keep intent targets, scene endpoints,
 feature observations, and final physical-part geometry aligned. The generic
@@ -481,6 +501,12 @@ matches it. For uploaded references, also bind the
 reference-analysis report and compare silhouette, proportions, landmarks,
 negative space, hidden-side assumptions, and manufactured color regions. Mesh
 QA cannot replace this visual gate.
+
+When the design contains a service cover or internal installation path, also
+inspect the print preview and the views that expose its seam and access face.
+Confirm that the cover is a real printed part, its locator and fasteners are
+visible in manufacturing geometry, and no internal reference component appears
+on the print plate.
 
 After any geometry or material change, call `cad_compile` again and read its new
 preview. Continue only from new evidence, and report remaining failures

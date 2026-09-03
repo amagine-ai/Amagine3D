@@ -20,12 +20,15 @@ from typing import Callable, Iterable
 
 import numpy as np
 import trimesh
+from trimesh.visual import TextureVisuals
+from trimesh.visual.material import PBRMaterial
 
 from cad_diagnostics import (
     SOURCE_DIAGNOSTICS_SCHEMA,
     CadDiagnosticError,
     source_diagnostics_payload,
 )
+from shape_consistency import ConsistencyError, load_artifact
 
 from build123d import (
     Compound,
@@ -172,12 +175,21 @@ def _raise_source_diagnostics(
 def _export_display_glb(
     items: Iterable[tuple[str, object, tuple[int, int, int]]],
     path: Path,
-) -> None:
-    import trimesh
+    *,
+    display_items: Iterable[tuple[str, trimesh.Trimesh, dict]] = (),
+) -> dict:
+    physical_items = list(items)
+    visual_items = list(display_items)
+    physical_names = [label for label, _, _ in physical_items]
+    display_names = [label for label, _, _ in visual_items]
+    if len(set([*physical_names, *display_names])) != len(
+        [*physical_names, *display_names]
+    ):
+        raise BuildInvariantError("display GLB node names must be unique")
 
     scene = trimesh.Scene()
     with tempfile.TemporaryDirectory() as directory:
-        for index, (label, shape, color) in enumerate(items):
+        for index, (label, shape, color) in enumerate(physical_items):
             mesh_path = Path(directory) / f"{index}-{label}.stl"
             export_stl(
                 shape, str(mesh_path), tolerance=0.01, angular_tolerance=0.1
@@ -190,8 +202,75 @@ def _export_display_glb(
             mesh.visual.face_colors = [*color, 255]
             mesh.metadata["name"] = label
             scene.add_geometry(mesh, geom_name=label, node_name=label)
+    for label, mesh, appearance in visual_items:
+        display = mesh.copy()
+        color = appearance["baseColor"]
+        display.visual = TextureVisuals(
+            material=PBRMaterial(
+                name=f"{label}-material",
+                baseColorFactor=[
+                    *[int(color[index : index + 2], 16) for index in (1, 3, 5)],
+                    255,
+                ],
+                metallicFactor=appearance["metallic"],
+                roughnessFactor=appearance["roughness"],
+            )
+        )
+        display.metadata["name"] = label
+        scene.add_geometry(
+            display,
+            geom_name=f"{label}-display-geometry",
+            node_name=label,
+        )
     data = scene.export(file_type="glb")
     path.write_bytes(data if isinstance(data, bytes) else bytes(data))
+    return {
+        "displayOnlyNodeNames": sorted(display_names),
+        "nodeNames": sorted([*physical_names, *display_names]),
+        "physicalNodeNames": sorted(physical_names),
+    }
+
+
+def _display_components(scene_data: dict, scene_path: str | Path) -> list[tuple]:
+    """Load scene-declared visual components without manufacturing them."""
+
+    base_dir = Path(scene_path).resolve().parent
+    components = []
+    for node in scene_data.get("nodes", []):
+        if not isinstance(node, dict) or node.get("role") != "display-only":
+            continue
+        parameters = node["recipe"]["parameters"]
+        raw_source = parameters["sourceMesh"]
+        source = {"path": raw_source} if isinstance(raw_source, str) else raw_source
+        source_path = Path(source["path"])
+        if not source_path.is_absolute():
+            source_path = (base_dir / source_path).resolve()
+        declared_digest = source.get("sha256")
+        observed_digest = _digest(source_path)
+        if declared_digest is not None and declared_digest != observed_digest:
+            raise BuildInvariantError(
+                f"display component {node['id']!r} sourceMesh.sha256 does not match"
+            )
+        try:
+            mesh = load_artifact(source, base_dir)
+        except (ConsistencyError, OSError, TypeError, ValueError) as error:
+            raise BuildInvariantError(
+                f"display component {node['id']!r} source mesh cannot be loaded: "
+                f"{error}"
+            ) from error
+        appearance = parameters["appearance"]
+        components.append(
+            (
+                node["id"],
+                mesh,
+                {
+                    "baseColor": appearance["baseColor"].upper(),
+                    "metallic": float(appearance.get("metallic", 0.0)),
+                    "roughness": float(appearance.get("roughness", 0.58)),
+                },
+            )
+        )
+    return components
 
 
 def _parameter_overrides() -> dict:
@@ -1237,7 +1316,12 @@ def export_part(
     except Exception:
         pass
     export_step(shape, str(assemble_step_path), unit=Unit.MM)
-    _export_display_glb(((name, shape, _DISPLAY_TINTS[0]),), display_glb_path)
+    display_components = _display_components(scene_data, scene_path)
+    display_nodes = _export_display_glb(
+        ((name, shape, _DISPLAY_TINTS[0]),),
+        display_glb_path,
+        display_items=display_components,
+    )
     export_stl(print_shape, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
 
     try:
@@ -1248,7 +1332,10 @@ def export_part(
             steps={
                 f"step:{name}": (assemble_step_path, export_geometry_record(shape)),
             },
-            glb=(display_glb_path, [name]),
+            glb=(
+                display_glb_path,
+                [name, *[node_id for node_id, _, _ in display_components]],
+            ),
         )
     except ExportAuditError as error:
         raise BuildInvariantError(f"export read-back audit failed: {error}") from error
@@ -1282,9 +1369,10 @@ def export_part(
             f"step:{name}": artifact_record(
                 assemble_step_path, coordinateFrame="semantic"
             ),
-            "glb:display": artifact_record(
-                display_glb_path, coordinateFrame="semantic"
-            ),
+            "glb:display": {
+                **artifact_record(display_glb_path, coordinateFrame="semantic"),
+                **display_nodes,
+            },
             "exportAudit": artifact_record(export_audit_path),
         },
         "autoScale": False,
@@ -1506,7 +1594,8 @@ def export_assembly(
     assemble_step_path = output / f"{name}-assemble.step"
     display_glb_path = output / f"{name}-display.glb"
     export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)
-    _export_display_glb(
+    display_components = _display_components(scene_data, scene_path)
+    display_nodes = _export_display_glb(
         (
             (
                 part_name,
@@ -1520,6 +1609,7 @@ def export_assembly(
             for index, (part_name, (shape, _)) in enumerate(normalized.items())
         ),
         display_glb_path,
+        display_items=display_components,
     )
     artifacts["step:assembly"] = {
         "path": str(assemble_step_path.resolve()),
@@ -1532,6 +1622,7 @@ def export_assembly(
     artifacts["glb:display"] = {
         "path": str(display_glb_path.resolve()),
         "sha256": _digest(display_glb_path),
+        **display_nodes,
     }
 
     color_fields = {}
@@ -1624,7 +1715,13 @@ def export_assembly(
         export_audit = audit_exports(
             stls=audit_stls,
             steps=audit_steps,
-            glb=(display_glb_path, list(normalized)),
+            glb=(
+                display_glb_path,
+                [
+                    *normalized,
+                    *[node_id for node_id, _, _ in display_components],
+                ],
+            ),
         )
     except ExportAuditError as error:
         raise BuildInvariantError(f"export read-back audit failed: {error}") from error

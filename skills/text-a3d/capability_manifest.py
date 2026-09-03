@@ -108,7 +108,12 @@ MODE_CAPABILITIES = [
         "id": "brep-part",
         "physicalAuthority": "build123d solid",
         "outputs": ["STEP", "STL", "display GLB"],
-        "requirements": ["one valid solid", "named parameters", "unit scale"],
+        "requirements": [
+            "one valid solid",
+            "named parameters",
+            "scene display-only nodes remain GLB-only",
+            "unit scale",
+        ],
     },
     {
         "id": "brep-assembly",
@@ -118,6 +123,7 @@ MODE_CAPABILITIES = [
             "one valid solid per manufactured part",
             "source-authored placement",
             "declared interfaces",
+            "scene display-only nodes remain GLB-only",
         ],
     },
     {
