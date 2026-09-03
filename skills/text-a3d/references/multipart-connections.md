@@ -6,17 +6,24 @@ parts separate merely because a visual seam exists.
 
 ## Positive default for serviceable enclosures
 
-When a shell, cover, or base should be removable, ordinary driver access and
+Choose this default from assembly behavior rather than a fixed list of
+component names. Apply it when an installed item must enter an enclosed volume
+or remain accessible for assembly or service, ordinary driver access and
 purchased hardware are acceptable, and the user has not selected another
-fastening method (for example adhesive, snap-fit, dovetail, hinge, or insert
-hardware), start with this construction:
+closure. If an item only passes through or follows a surface, use the necessary
+opening, slot, channel, or local retention instead of creating a removable
+enclosure merely because an installed item exists.
+
+For a serviceable enclosure, start with this construction:
 
 1. Add one locating interface, normally `collar_socket()` around the seam or
    two well-spaced `pin_socket()` pairs. The locator controls position and
    resists shear.
-2. Add two symmetric M3 plastic thread-forming/self-tapping screw connections
-   with `self_tapping_screw_pair()`. The screws clamp the seam; they do not
-   replace the locator.
+2. Add a symmetric pattern of appropriately sized plastic
+   thread-forming/self-tapping screw connections with
+   `self_tapping_screw_pair()`. Choose the screw family and count from the
+   available boss volume, seam span, material, and expected service load. The
+   screws clamp the seam; they do not replace the locator.
 3. Put a clearance hole in the removable part and a blind pilot hole inside a
    printable boss on the receiving part. Put screw access on a reachable face.
 4. For a long or flexible perimeter, add fasteners around the seam as needed
@@ -43,7 +50,7 @@ are geometry requirements, even when no specialized helper recipe is used.
 `adhesive` and `loose` remain intentional exceptions. They are not substitutes
 for a missing connection on an enclosure part.
 
-## M3 printable starting geometry
+## M3 printable starting geometry example
 
 Use these as configurable starting dimensions for a common 3.0 mm plastic
 thread-forming/self-tapping screw with a 0.4 mm FDM process:

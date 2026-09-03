@@ -111,6 +111,12 @@ recesses, put flat fields directly on the feature: `kind`, `face`,
 `direction`, and `edge_crossing`. A bottom opening is allowed, but an opening
 that crosses the front/bottom edge must be declared explicitly.
 
+For a functional port or connector opening that serves an internal item, write
+its acceptance in terms of the complete passage: name the exterior face and the
+target interior cavity or component keepout. The physical cut must cross the
+full wall thickness. Describe a deliberately blind cosmetic depression as a
+recess instead of declaring it as a functional port.
+
 Use these semantic feature values:
 
 - `kind`: `port`, `hole`, `slot`, `cutout`, `window`, `cavity`, `recess`,

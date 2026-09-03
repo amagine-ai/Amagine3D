@@ -38,6 +38,29 @@ required `NAME-assemble.step` preserve physical mating positions, while
 `NAME-display.glb` preserves the display model instead of acting as
 printability evidence.
 
+## Constructive organic shells
+
+Decide the print direction and cavity topology before extracting the mesh.
+Use `organic_shell.build_organic_shell(...)` so these are inputs to the solid,
+not repairs applied after tessellation.
+
+- Prefer `open-cavity` for housings: make the service opening intersect the
+  inner offset and the exterior so supports, powder, and loose filament can be
+  removed. A cover remains an independent BRep part when its fit is critical.
+- For a deliberately sealed void printed in +Z, use
+  `self_supporting_cavity(...)`. Its arbitrary 2D footprint shrinks on every
+  layer to a roof of at least 45 degrees from horizontal; it rejects a closure
+  inset that would leave a flat suspended ceiling.
+- Set level-set edge length to no more than half the planned wall thickness.
+  Increase local radii or revise the field when the inner offset collapses;
+  never fill holes or smooth over the failure.
+- Choose a broad, intentional bed-contact region or a permitted assembly split.
+  Do not flatten identity-bearing outer geometry merely to obtain first-layer
+  contact.
+- Keep sockets, locating faces, bosses, covers, and other tolerance-bearing
+  features as independent BRep masters. Do not smooth or remesh those parts
+  after their interfaces are derived.
+
 ## Support-free construction
 
 The profile's support angle is measured up from the horizontal plane: 0
@@ -90,6 +113,6 @@ to fail.
 
 Do not optimize for warning-free QA. Preserve identity-bearing geometry,
 expected feature relationships, and visual landmarks over eliminating advisory
-warnings. At most three evidence-repair passes are allowed. At the limit,
-preserve the latest evidence and report `pass_with_warnings` or `fail`
-honestly.
+warnings. Use repeated or regressed diagnostics to reconsider the construction
+strategy, but do not impose a fixed retry count that can truncate a complex
+model. Preserve and report the latest evidence honestly.

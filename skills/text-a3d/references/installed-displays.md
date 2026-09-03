@@ -8,7 +8,10 @@ Derive the physical enclosure consequences before visual decoration: a visible
 aperture, a rear component keepout or seat with clearance, and any printable
 retention features. Use one component envelope and one screen datum for all of
 them. The full module keepout is not the visible opening, and the visual surface
-is not a cutting tool.
+is not a cutting tool. Apply the general installed-item assembly rule from the
+main skill: provide a feasible insertion path, and when the module enters an
+enclosed volume or needs service access, route to the removable-cover guidance
+in `multipart-connections.md` rather than sealing the body around it.
 
 Declare the aperture, module keepout/seat, and printed retainer as physical
 intent features owned by the receiving manufactured part. Represent the glass,

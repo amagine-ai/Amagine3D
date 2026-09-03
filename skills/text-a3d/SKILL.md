@@ -47,7 +47,12 @@ working directory.
 - `hybrid_compile.py` compiles mesh-master and mixed scenes.
 - `build_check.py` validates the unified report, artifact matrix, transforms,
   and every bound file hash.
+- `cad_diagnostics.py` carries typed geometry evidence across subprocesses.
 - `interface_recipes.py` derives paired printable connectors.
+- `organic_shell.py` constructs arbitrary signed-distance-field shells with a
+  declared open or self-supporting cavity strategy.
+- `mesh_topology.py` counts positive material bodies without treating enclosed
+  negative cavity surfaces as extra parts.
 - `plate_layout.py` performs profile-bound, translation-only plate packing.
 - `qa_check.py`, `assembly_check.py`, and `step_check.py` audit manufacturing
   artifacts.
@@ -172,7 +177,10 @@ document:
 python "<SKILL_DIR>/intent_contract.py" "<name>_intent.json"
 ```
 
-The intent is immutable during the build. It owns requested identity,
+The first valid intent accepted by `cad_compile` is runtime hash-bound for the
+whole user turn. Do not delete, regenerate, or rewrite that file during repair
+iterations. A later user request that explicitly changes the target requires a
+new intent filename; earlier intent files remain unchanged. The intent owns requested identity,
 dimensions, assumptions, coordinate semantics, manufacturing parts/interfaces,
 visual landmarks, profile hash, wall target, support policy, and acceptance.
 `dimensions_mm` always describes the complete physical assembly in semantic
@@ -223,10 +231,12 @@ Give every physical part one `representationMaster`:
   genuinely freeform, scanned, character-like, or identity-bearing surfaces.
   Do not claim a clean parametric STEP for it.
 
-The scene may mix masters. A typical appearance-first part uses a canonical
-mesh exterior plus build123d-derived cutters, bosses, sockets, and other precise
-tools, tessellated at unit scale and applied by the Hybrid backend. A primarily
-mechanical part remains BRep-master; its display mesh is derived from the BRep.
+The scene may mix masters across assembled parts. Keep an organic exterior as a
+mesh-master shell part and every fit-critical core, cover, bracket, socket, or
+connector island as an independent BRep-master part with genuine STEP. Connect
+them through declared interfaces. If those representations are fused into one
+printed body, the result is mesh-master and must not claim editable STEP
+authority.
 
 Three.js is an optional mesh authoring and display tool, not a second
 manufacturing authority. Never substitute an independently polished visual
@@ -234,25 +244,67 @@ proxy for the compiled physical surface.
 
 When an installed API, representation family, or helper signature is
 uncertain, call `cad_capabilities` with only the symbols being considered.
-Choose the construction from the requested controlling dimensions: scaled
-round volumes, revolved profiles, extrusions, sweeps, and source-positioned
-assemblies are alternatives, not a mandatory shape template. Do not inspect
+Choose the construction from the requested controlling dimensions: an arbitrary
+SDF shell, revolved profile, extrusion, sweep, or source-positioned assembly is
+selected from the evidence, not from a mandatory shape template. Do not inspect
 compiler internals or guess a symbol that the version-bound manifest reports
 as unavailable.
 
 ## 3. Model physical structure and manufactured color
 
 When the intent is an enclosure, build it as outer volume minus a real inner
-cavity. Openings, keepouts, receiving pockets, guides, bores, fasteners, and
-connector clearances must be physical manufacturing geometry. Every separate
-printable insert or cover needs a declared mating interface unless its intent
-explicitly marks it adhesive- or loose-installed.
+cavity. Build every cavity, pocket, recess, seat, or installed-component
+keepout by applying a real subtractive cutter to its owning part. `observe()`
+may preserve the cutter envelope as planning evidence, but it never replaces
+the cut. A functional port or connector opening for an internal item forms a
+continuous passage from its declared exterior face into the intended interior
+cavity or component keepout. Extend its cutter across the full wall thickness
+and beyond both boundaries before applying `checked_cut(...)`; a shallow
+exterior recess is not a functional opening. The installed item may be
+display-only, but the opening remains physical manufacturing geometry. Add the
+support surface, stop, retention, and insertion path that the assembly behavior
+requires. Every separate printable insert or cover needs a declared mating
+interface unless its intent explicitly marks it adhesive- or loose-installed.
+
+For a freeform shell, import `build_organic_shell` from `organic_shell.py` and
+supply a signed distance field in millimetres: positive inside, zero on the
+requested surface, negative outside. This is not an ellipsoid recipe. Derive
+the field from the user's silhouette, landmarks, asymmetry, and local shape
+controls. Choose exactly one constructive cavity plan before meshing:
+
+- `open-cavity` derives a uniform inset and requires a cutter field that joins
+  the cavity to the exterior;
+- `self-supporting-cavity` requires `self_supporting_cavity(...)`, which closes
+  the roof through layer-by-layer contours of at least 45 degrees from the
+  build plate.
+
+The constructor rejects clipped bounds, unresolved wall grids, collapsed
+insets, disconnected material bodies, unsafe closed roofs, and openings that
+do not actually expose the cavity. Export its returned canonical mesh directly.
+Do not call hole-filling repair, remesh a passing result, or reconstruct the
+shell from a pile of independent primitives.
+
+Reason about installed items from their spatial and maintenance requirements,
+not from a fixed list of component names. When an item must enter an enclosed
+volume or remain accessible for assembly or service, provide a real insertion
+path and normally a removable service cover. When an item only passes through
+or follows a surface, model the necessary opening, slot, channel, or local
+retention without turning that local need into a multipart enclosure. Read
+`multipart-connections.md` when the removable-cover default applies.
 
 Use the paired recipes in `interface_recipes.py` when applicable. Derive male
 and female geometry from one parameter set and apply one rigid transform to the
-pair. The conditional serviceable-enclosure default remains defined in
+pair. For a generic pair, keep the object returned by `paired_interface(...)`,
+read both geometry dimensions through `paired_dimensions(pair)`, and pass that
+same pair to `write_scene(...)`. There is no caller-supplied female-dimension
+path. The conditional serviceable-enclosure default remains defined in
 `multipart-connections.md`; do not load or apply it to unrelated multipart
 models. Keep purchased hardware out of printable artifacts.
+
+Use `checked_union(...)` for additive BRep features and `checked_cut(...)` for
+subtractive ones. Both require a measured material effect and attach the
+caller-supplied feature and part IDs to diagnostics; `checked_union(...)` also
+rejects disconnected solids. These are generic operations, not shape recipes.
 
 Treat physical parts, manufactured color regions, and display-only decoration as
 different concepts:
@@ -320,18 +372,20 @@ compact `evidence-cad-compile-result/v1` result. A failed result identifies the
 stage, stable error code, affected part/node/interface when known, observed and
 expected measurements, and a constructive repair hint. Independent source,
 backend, and applicable QA failures are aggregated until a missing or invalid
-upstream artifact makes further checks unsafe. Review the complete issue set,
-group issues with a shared root cause, and make one coordinated source change
-before calling `cad_compile` again. Preserve the intent and intended geometry.
-Read full audit files only when the compact diagnostic is insufficient; do not
-inspect compiler implementation during ordinary modeling.
+upstream artifact makes further checks unsafe. Before calling `cad_compile`
+again, review the complete issue set, identify shared root causes, and try to
+address related findings in one coordinated source change. Use judgment when a
+finding should be deferred and briefly explain that choice. Preserve the intent
+and intended geometry. Read full audit files only when the compact diagnostic
+is insufficient; do not inspect compiler implementation during ordinary
+modeling.
 
 Each attempt also writes a compact `<name>_repair-state.json` ledger and returns
 `repairDelta`. The ledger records failed and blocked issue identities, stages
 that passed, and which issues are new, newly unblocked, remaining, resolved, or
-regressed for the same immutable intent. It is factual cross-run memory for the
-same Agent loop, not a workflow state machine. Treat `blockedBy` as a dependency
-boundary and do not invent a downstream repair until the named evidence exists.
+regressed for the same immutable intent. Treat `blockedBy` as a dependency
+boundary. Use repeated or regressed evidence to reconsider the construction
+strategy without treating the ledger as a time or retry limit.
 
 Every compile attempt owns a UUID and every backend emits one atomically
 published `<name>_report.json` using
@@ -429,8 +483,8 @@ negative space, hidden-side assumptions, and manufactured color regions. Mesh
 QA cannot replace this visual gate.
 
 After any geometry or material change, call `cad_compile` again and read its new
-preview. Perform no more than three evidence-driven repair passes. Report
-remaining failures honestly.
+preview. Continue only from new evidence, and report remaining failures
+honestly.
 
 ## 7. Close and deliver
 

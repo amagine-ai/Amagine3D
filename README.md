@@ -121,7 +121,7 @@ Our goal is to let a hardware concept begin with reference images, physical comp
 - A model gateway compatible with an Amagine3D Agent runtime protocol
 
 The setup script creates a repository-local `.venv` and installs the pinned
-build123d, OCP, trimesh, and lib3mf dependencies. A desktop CAD application is
+build123d, OCP, Manifold, trimesh, and lib3mf dependencies. A desktop CAD application is
 not required.
 
 ### Install and Run
@@ -232,6 +232,7 @@ Amagine3D is built on the following open-source projects:
 | [Open CASCADE Technology](https://dev.opencascade.org/) and [CadQuery OCP](https://github.com/CadQuery/OCP) | Exact geometry kernel and Python bindings |
 | [Three.js](https://github.com/mrdoob/three.js)                                                             | 3D preview, selection, and measurement |
 | [trimesh](https://github.com/mikedh/trimesh)                                                               | Mesh processing and checks             |
+| [Manifold](https://github.com/elalish/manifold)                                                           | Watertight level-set meshes and booleans |
 | [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF writing and readback               |
 | [PI coding agent](https://github.com/earendil-works/pi)                                                    | Agent sessions, streaming, and tool calls |
 

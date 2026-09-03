@@ -102,6 +102,17 @@ export const curatedLicenses: CuratedLicense[] = [
     version: '5.0.0',
   },
   {
+    files: [{ href: '/licenses/apache-2.0.txt', label: 'Apache-2.0' }],
+    license: 'Apache-2.0',
+    name: 'Manifold',
+    source: 'https://github.com/elalish/manifold/tree/v3.5.2',
+    use: {
+      en: 'Watertight level-set meshing and mesh booleans',
+      zh: '水密等值面网格生成与 mesh 布尔运算',
+    },
+    version: '3.5.2',
+  },
+  {
     files: [{ href: '/licenses/rtree.txt', label: 'MIT' }],
     license: 'MIT',
     name: 'Rtree',

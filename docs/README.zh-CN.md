@@ -121,7 +121,7 @@ Amagine3D 会继续丰富这份共同 3D 上下文中的器件语义：让系统
 - 兼容 Amagine3D Agent 运行时协议的模型网关
 
 初始化脚本会在仓库内创建 `.venv`，并安装锁定版本的 build123d、
-OCP、trimesh 和 lib3mf。宿主电脑不需要安装桌面 CAD 软件。
+OCP、Manifold、trimesh 和 lib3mf。宿主电脑不需要安装桌面 CAD 软件。
 
 ### 安装并运行
 
@@ -226,6 +226,7 @@ Amagine3D 建立在以下开源项目之上：
 | [Open CASCADE Technology](https://dev.opencascade.org/) 与 [CadQuery OCP](https://github.com/CadQuery/OCP) | 精确几何内核与 Python 绑定 |
 | [Three.js](https://github.com/mrdoob/three.js)                                                             | 3D 预览、选择与测量       |
 | [trimesh](https://github.com/mikedh/trimesh)                                                               | mesh 处理与检查           |
+| [Manifold](https://github.com/elalish/manifold)                                                           | 水密等值面网格与布尔运算   |
 | [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF 写入与回读            |
 | [PI coding agent](https://github.com/earendil-works/pi)                                                    | Agent session、流式响应与工具调用 |
 

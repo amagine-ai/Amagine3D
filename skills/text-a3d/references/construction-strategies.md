@@ -9,8 +9,8 @@ through the same primitive stack.
 | clean orthographic silhouette | traced profile, constrained extrusion, then depth features | many hand-placed boxes |
 | pixel/icon source | deterministic occupied-cell union or relief | manually copied cells |
 | single product photo | primary envelope, landmark solids, then restrained hidden-side inference | claiming unseen details are exact |
-| organic/sculptural subject | a canonical watertight mesh master with semantic landmarks | hundreds of primitives that create a lumpy silhouette |
-| organic exterior plus precise interfaces | mesh-master body plus BRep-derived cutters, bosses, and sockets in one semantic scene | independent visual and manufacturing proxies |
+| organic/sculptural subject | a canonical watertight SDF mesh master driven by semantic landmarks | a scaled sphere/ellipsoid or hundreds of primitives |
+| organic exterior plus precise interfaces | an organic mesh shell part assembled to independent BRep mechanical parts | fusing the parts and still claiming editable STEP authority |
 
 ## Frame and feature graph
 
@@ -48,9 +48,21 @@ source model, delete underside volume, or make a relief while declaring
 from evidence or explicit assumptions, then rotate the finished body for
 printing if that improves support behavior.
 
-Give every measured or subtractive feature a stable ID. Call `observe()` before
-union and `checked_cut()` for subtraction. Failed operations raise immediately;
-do not continue with an unchanged body.
+Give every measured feature a stable ID. Use `checked_union()` for additive
+features and `checked_cut()` for subtraction. Both measure the material effect;
+the union also requires one connected solid. Use `observe()` for geometry that
+needs separate evidence before it disappears into a later operation. A
+declared cavity, pocket, recess, seat, or keepout is made by applying its cutter
+to the owning body; observing the cutter alone does not create the feature.
+For a functional port or connector opening serving an internal item, use one
+cutter that creates a continuous path from the declared exterior face into the
+target interior cavity or keepout. Extend it through the full wall thickness
+and beyond both boundaries before `checked_cut()`; do not substitute a shallow
+surface recess. The installed item may be display-only, but its opening belongs
+to the manufactured body. After the cut, add support, stops, retention, and a
+feasible insertion path when the intended assembly needs them. Failed
+operations identify the caller-supplied feature and part instead of silently
+continuing with an unchanged or disconnected body.
 
 For multipart work, give each printed part its own envelope, features, and
 mating-interface parameters. Every interface must be a printable connector or
@@ -96,8 +108,17 @@ state thickness. `surface-led` is appropriate when the recognizable form depends
 on a controlled outer surface more than internal mechanics.
 
 If build123d cannot represent an identity-bearing organic surface faithfully,
-use a canonical mesh master and compile precise BRep-derived manufacturing
-features into it through the same semantic scene. The mesh remains the physical
-authority, so do not fabricate a faceted STEP or maintain a separate polished
-visual proxy. Stop with an honest failed visual validation only when neither
-representation can satisfy the intent and evidence.
+use `organic_shell.build_organic_shell(...)`. SDF means **Signed Distance
+Field**: a function returning distance in millimetres, positive inside the
+form, zero on its boundary, and negative outside. It can encode any asymmetric
+user-driven form; it is not an ellipse type. Keep precise mechanical structure
+as independent BRep-master parts and assemble it to the shell. The mesh remains
+the physical authority for the shell, so do not fabricate a faceted STEP or
+maintain a separate polished visual proxy.
+
+Choose the cavity while constructing the shell. Use an exterior-connected
+opening for serviceable cavities. For a deliberately sealed void printed in
++Z, use the self-supporting cavity helper so the footprint shrinks on each layer
+to a sloped apex instead of ending in a flat suspended ceiling. The helper also
+requires mesh edge length no greater than half the requested wall thickness;
+do not generate a coarse mesh and attempt to heal it later.

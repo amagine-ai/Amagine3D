@@ -212,6 +212,8 @@ test('visual validation instructions require a hash-bound render report', () => 
   const instruction = visualValidationInstruction(true);
   assert.match(instruction, /mandatory visual gate/u);
   assert.match(instruction, /call cad_compile/u);
+  assert.match(instruction, /review the full issue set/u);
+  assert.match(instruction, /use judgment when an issue should be deferred/u);
   assert.match(instruction, /status=awaiting-visual-review/u);
   assert.match(instruction, /Use the read tool/u);
   assert.doesNotMatch(instruction, /If cad_compile is unavailable/u);
