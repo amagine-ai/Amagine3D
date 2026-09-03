@@ -71,11 +71,7 @@ async function runJsonProcess(
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(executable, args, {
       cwd: options.cwd,
-      env: {
-        ...process.env,
-        ...options.env,
-        PYTHONUTF8: '1',
-      },
+      env: options.env ?? process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -129,7 +125,12 @@ async function parameterSource(
   let parsed: ParameterSourceResponse;
   try {
     parsed = JSON.parse(
-      await runJsonProcess(pythonExecutable, [PARAMETER_SOURCE_SCRIPT], input),
+      await runJsonProcess(
+        pythonExecutable,
+        [PARAMETER_SOURCE_SCRIPT],
+        input,
+        { env: { PYTHONIOENCODING: 'utf-8' } },
+      ),
     ) as ParameterSourceResponse;
   } catch (error) {
     throw new ParameterBuildError(
