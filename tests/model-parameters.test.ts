@@ -259,7 +259,14 @@ output.mkdir(parents=True, exist_ok=True)
 stl = output / "model.stl"
 step = output / "model.step"
 display_glb = output / "model-display.glb"
-stl.write_text(f"solid {SIZE}\\nendsolid model\\n", encoding="utf-8")
+environment = (
+    f"PYTHONIOENCODING={os.environ.get('PYTHONIOENCODING')};"
+    f"PYTHONUTF8={os.environ.get('PYTHONUTF8')}"
+)
+stl.write_text(
+    f"solid {SIZE} {environment}\\nendsolid model\\n",
+    encoding="utf-8",
+)
 step.write_text(f"ISO-10303-21 {SIZE}\\n", encoding="utf-8")
 display_glb.write_bytes(b"glTF" + bytes(str(SIZE), encoding="utf-8"))
 digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -534,6 +541,41 @@ test('rebuilds the complete model in staging and commits source only after succe
       committedStep,
     );
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('scopes protocol encoding without changing model build environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-parameter-encoding-'));
+  const previousIoEncoding = process.env.PYTHONIOENCODING;
+  const previousUtf8 = process.env.PYTHONUTF8;
+  try {
+    process.env.PYTHONIOENCODING = 'ascii';
+    delete process.env.PYTHONUTF8;
+    await writeInitialBuild(root);
+    const [model] = await parameterModelsForWorkspace(root, PYTHON);
+    assert.ok(model);
+    assert.equal(model.parameters[0]?.labelZh, '局部偏移');
+    assert.equal(model.parameters[0]?.groupZh, '局部特征');
+    await rebuildModelWithParameters({
+      pythonExecutable: PYTHON,
+      request: {
+        primaryPreviewPath: model.primaryPreviewPath,
+        sourceHash: model.sourceHash,
+        sourcePath: model.sourcePath,
+        values: { 'local-offset': -1.5 },
+      },
+      workspaceRoot: root,
+    });
+    assert.match(
+      await readFile(join(root, 'model.stl'), 'utf8'),
+      /solid -1\.5 PYTHONIOENCODING=ascii;PYTHONUTF8=None/u,
+    );
+  } finally {
+    if (previousIoEncoding === undefined) delete process.env.PYTHONIOENCODING;
+    else process.env.PYTHONIOENCODING = previousIoEncoding;
+    if (previousUtf8 === undefined) delete process.env.PYTHONUTF8;
+    else process.env.PYTHONUTF8 = previousUtf8;
     await rm(root, { force: true, recursive: true });
   }
 });

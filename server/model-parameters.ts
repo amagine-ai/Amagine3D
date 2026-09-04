@@ -154,7 +154,7 @@ async function parameterSource(
         pythonExecutable,
         [PARAMETER_SOURCE_SCRIPT],
         input,
-        { env: { PYTHONIOENCODING: 'utf-8' } },
+        { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
       ),
     ) as ParameterSourceResponse;
   } catch (error) {
