@@ -125,7 +125,12 @@ async function parameterSource(
   let parsed: ParameterSourceResponse;
   try {
     parsed = JSON.parse(
-      await runJsonProcess(pythonExecutable, [PARAMETER_SOURCE_SCRIPT], input),
+      await runJsonProcess(
+        pythonExecutable,
+        [PARAMETER_SOURCE_SCRIPT],
+        input,
+        { env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
+      ),
     ) as ParameterSourceResponse;
   } catch (error) {
     throw new ParameterBuildError(
