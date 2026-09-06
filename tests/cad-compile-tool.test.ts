@@ -17,13 +17,21 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  CAD_COMPILE_AGENT_RESULT_MAX_BYTES,
   CAD_COMPILE_AGGREGATE_TIMEOUT_MS,
   CAD_COMPILE_DEADLINE_SETTLEMENT_GRACE_MS,
   CAD_COMPILE_HARD_TIMEOUT_MS,
+  CAD_COMPILE_ISSUES_TOOL_NAME,
   CAD_COMPILE_TOOL_NAME,
+  cadCompileIssueId,
+  compactCadCompileContextMessages,
+  createCadCompileIssuesTool,
   createCadCompileResultExtension,
   createCadCompileTool,
   isCadCompileResult,
+  projectCadCompileResultForAgent,
+  type CadCompileAgentResult,
+  type CadCompileIssue,
   type CadCompileResult,
 } from '../packages/a3d-runtime/src/cad-compile-tool.ts';
 
@@ -260,7 +268,7 @@ test(
       );
       assert.match(
         (tool.promptGuidelines ?? []).join('\n'),
-        /review the full issue set[\s\S]*Use judgment when an issue should be deferred/u,
+        /first result contains a compact issue index[\s\S]*later results are delta-only[\s\S]*cad_compile_issues/u,
       );
       assert.doesNotMatch(
         (tool.promptGuidelines ?? []).join('\n'),
@@ -284,12 +292,15 @@ test(
         typeof (details.artifacts.renderEvidence as { path: string }).path,
         'string',
       );
-      assert.deepEqual(
-        JSON.parse(
-          result.content[0]?.type === 'text' ? result.content[0].text : '',
-        ),
-        details,
-      );
+      const contentText =
+        result.content[0]?.type === 'text' ? result.content[0].text : '';
+      const projection = JSON.parse(contentText) as CadCompileAgentResult;
+      assert.equal(projection.schema, 'evidence-cad-compile-agent-result/v1');
+      assert.equal(projection.pass, true);
+      assert.equal(projection.diagnostics.mode, 'index');
+      assert.equal(projection.diagnostics.queryTool, CAD_COMPILE_ISSUES_TOOL_NAME);
+      assert.equal('issues' in projection, false);
+      assert.ok(Buffer.byteLength(contentText, 'utf8') <= CAD_COMPILE_AGENT_RESULT_MAX_BYTES);
       assert.ok(updates.length >= 2, 'each delayed log growth should refresh progress');
       assert.match(JSON.stringify(updates[0]), /stage=source/u);
       const lastUpdate = JSON.stringify(updates.at(-1));
@@ -312,17 +323,245 @@ test(
       assert.equal(details.pass, false);
       assert.equal(details.status, 'failed');
       assert.equal(details.issues[0]?.code, 'QA.MESH_FAILED');
-      assert.deepEqual(
-        JSON.parse(
-          result.content[0]?.type === 'text' ? result.content[0].text : '',
-        ),
-        details,
-      );
+      const contentText =
+        result.content[0]?.type === 'text' ? result.content[0].text : '';
+      const projection = JSON.parse(contentText) as CadCompileAgentResult;
+      assert.equal(projection.pass, false);
+      assert.equal(projection.diagnostics.mode, 'index');
+      assert.deepEqual(projection.diagnostics.issueGroups?.[0]?.ids, [
+        cadCompileIssueId(details.issues[0]!),
+      ]);
+      assert.equal('issues' in projection, false);
+      assert.ok(Buffer.byteLength(contentText, 'utf8') <= CAD_COMPILE_AGENT_RESULT_MAX_BYTES);
     } finally {
       await fixture.cleanup();
     }
   },
 );
+
+test('cad_compile Agent projection is bounded and later attempts are delta-only', () => {
+  const issues: CadCompileIssue[] = Array.from({ length: 40 }, (_, index) => ({
+    check: `check-${index}`,
+    code: `QA.FAILURE_${index}`,
+    message: 'x'.repeat(4_000),
+    observed: { trace: 'y'.repeat(4_000) },
+    part: `part-${index}`,
+    severity: 'error',
+    stage: `mesh-qa:${index}`,
+  }));
+  const full: CadCompileResult = {
+    artifacts: {},
+    issues,
+    pass: false,
+    repairDelta: {
+      new: issues.map((issue) => cadCompileIssueId(issue)),
+      newlyUnblocked: [],
+      regressed: [],
+      remaining: [],
+      resolved: [],
+    },
+    runId: '11111111-1111-4111-8111-111111111111',
+    schema: 'evidence-cad-compile-result/v1',
+    status: 'failed',
+  };
+
+  const first = projectCadCompileResultForAgent(full, {
+    deltaOnly: false,
+    workspaceRoot: '/workspace',
+  });
+  const later = projectCadCompileResultForAgent(full, {
+    deltaOnly: true,
+    workspaceRoot: '/workspace',
+  });
+
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(first), 'utf8') <=
+      CAD_COMPILE_AGENT_RESULT_MAX_BYTES,
+  );
+  assert.equal(first.diagnostics.mode, 'index');
+  assert.ok((first.diagnostics.unindexedIssueCount ?? 0) > 0);
+  assert.equal(later.diagnostics.mode, 'delta');
+  assert.equal(later.diagnostics.issueGroups, undefined);
+  assert.deepEqual(later.repairDelta, full.repairDelta);
+  assert.equal('issues' in later, false);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(later), 'utf8') <=
+      CAD_COMPILE_AGENT_RESULT_MAX_BYTES,
+  );
+});
+
+test(
+  'cad_compile emits only delta diagnostics after its first returned run',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const fixture = await createFixture('fail');
+    try {
+      const tool = createCadCompileTool({
+        intentScopeId: '11111111-1111-4111-8111-111111111111',
+        intentStatePath: fixture.intentStatePath,
+        projectRoot: fixture.projectRoot,
+        workspaceRoot: fixture.workspaceRoot,
+      });
+      const execute = () =>
+        tool.execute(
+          'compile-call',
+          {
+            intent: 'intent.json',
+            marker: '.generation-start',
+            output_dir: 'artifacts',
+            scene: 'scene.json',
+            source: 'model.py',
+          },
+          undefined,
+          undefined as never,
+          {} as never,
+        );
+      const first = await execute();
+      const later = await execute();
+      const firstProjection = JSON.parse(
+        first.content[0]?.type === 'text' ? first.content[0].text : '',
+      ) as CadCompileAgentResult;
+      const laterProjection = JSON.parse(
+        later.content[0]?.type === 'text' ? later.content[0].text : '',
+      ) as CadCompileAgentResult;
+      assert.equal(firstProjection.diagnostics.mode, 'index');
+      assert.equal(laterProjection.diagnostics.mode, 'delta');
+      assert.equal(laterProjection.diagnostics.issueGroups, undefined);
+      assert.equal('issues' in laterProjection, false);
+      assert.equal((later.details as CadCompileResult).issues.length, 1);
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test('cad_compile context projection replaces only superseded compile payloads', () => {
+  const earlier = {
+    content: [{ text: JSON.stringify({ issues: [{ message: 'large' }] }), type: 'text' }],
+    details: {
+      artifacts: {},
+      issues: [{ code: 'QA.OLD', severity: 'error' }],
+      pass: false,
+      runId: '11111111-1111-4111-8111-111111111111',
+      schema: 'evidence-cad-compile-result/v1',
+      status: 'failed',
+    },
+    role: 'toolResult',
+    toolCallId: 'old-call',
+    toolName: CAD_COMPILE_TOOL_NAME,
+  };
+  const unrelated = {
+    content: [{ text: 'keep me', type: 'text' }],
+    details: { value: 1 },
+    role: 'toolResult',
+    toolCallId: 'other-call',
+    toolName: 'other_tool',
+  };
+  const issueLookup = {
+    content: [{ text: JSON.stringify({ issues: [{ observed: 'large' }] }), type: 'text' }],
+    details: {
+      issues: [{ id: '1111111111111111', observed: 'large' }],
+      runId: '11111111-1111-4111-8111-111111111111',
+      schema: 'evidence-cad-compile-issue-details/v1',
+    },
+    role: 'toolResult',
+    toolCallId: 'issue-call',
+    toolName: CAD_COMPILE_ISSUES_TOOL_NAME,
+  };
+  const latest = {
+    ...earlier,
+    content: [{ text: 'latest full payload', type: 'text' }],
+    toolCallId: 'latest-call',
+  };
+  const compacted = compactCadCompileContextMessages(
+    [earlier, unrelated, issueLookup, latest] as never,
+  ) as unknown as Array<Record<string, unknown>>;
+
+  const compactedEarlier = compacted[0] as {
+    content: Array<{ text: string }>;
+    details: Record<string, unknown>;
+  };
+  assert.equal(
+    compactedEarlier.details.schema,
+    'evidence-cad-compile-superseded/v1',
+  );
+  assert.equal('issues' in compactedEarlier.details, false);
+  assert.match(compactedEarlier.content[0]!.text, /Superseded by a later/u);
+  assert.strictEqual(compacted[1], unrelated);
+  assert.equal(
+    (compacted[2] as { details: { schema: string } }).details.schema,
+    'evidence-cad-compile-superseded/v1',
+  );
+  assert.strictEqual(compacted[3], latest);
+});
+
+test('cad_compile_issues returns exact run-bound issue details on demand', async () => {
+  const fixture = await createFixture('pass');
+  const runId = '11111111-1111-4111-8111-111111111111';
+  const issue: CadCompileIssue = {
+    check: 'minimum_wall',
+    code: 'QA.MESH_FAILED',
+    expected: { minimumMm: 0.8 },
+    observed: { minimumMm: 0.42 },
+    part: 'shell',
+    repairHint: 'Increase the local wall while preserving the outer surface.',
+    severity: 'error',
+    stage: 'mesh-qa:shell',
+  };
+  try {
+    await mkdir(join(fixture.workspaceRoot, 'artifacts'), { recursive: true });
+    await writeFile(
+      join(fixture.workspaceRoot, 'artifacts', 'full-result.json'),
+      JSON.stringify({
+        artifacts: {},
+        issues: [issue],
+        pass: false,
+        runId,
+        schema: 'evidence-cad-compile-result/v1',
+        status: 'failed',
+      }),
+    );
+    const tool = createCadCompileIssuesTool(fixture.workspaceRoot);
+    assert.equal(tool.name, CAD_COMPILE_ISSUES_TOOL_NAME);
+    assert.equal(tool.executionMode, 'parallel');
+    const issueId = cadCompileIssueId(issue);
+    const result = await tool.execute(
+      'issue-call',
+      {
+        issue_ids: [issueId],
+        result: 'artifacts/full-result.json',
+        run_id: runId,
+      },
+      undefined,
+      undefined as never,
+      {} as never,
+    );
+    const payload = result.details as {
+      issues: Array<CadCompileIssue & { id: string }>;
+      schema: string;
+    };
+    assert.equal(payload.schema, 'evidence-cad-compile-issue-details/v1');
+    assert.equal(payload.issues[0]?.id, issueId);
+    assert.deepEqual(payload.issues[0]?.observed, issue.observed);
+    assert.equal(payload.issues[0]?.repairHint, issue.repairHint);
+    await assert.rejects(
+      tool.execute(
+        'stale-call',
+        {
+          issue_ids: [issueId],
+          result: 'artifacts/full-result.json',
+          run_id: '22222222-2222-4222-8222-222222222222',
+        },
+        undefined,
+        undefined as never,
+        {} as never,
+      ),
+      /TOOL\.RESULT_RUN_MISMATCH/u,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 test(
   'cad_compile rejects a returned artifact whose SHA-256 does not match',

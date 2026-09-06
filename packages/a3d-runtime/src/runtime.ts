@@ -13,8 +13,11 @@ import {
 } from '@earendil-works/pi-coding-agent';
 
 import {
+  CAD_COMPILE_ISSUES_TOOL_NAME,
   CAD_COMPILE_TOOL_NAME,
   cadIntentStatePath,
+  createCadCompileContextExtension,
+  createCadCompileIssuesTool,
   createCadCompileTool,
   createCadCompileResultExtension,
 } from './cad-compile-tool.ts';
@@ -225,25 +228,16 @@ export class PiRuntime {
         `The available project skills are located at ${this.skillsRoot}.`,
         `Your only writable directory is ${scopedWorkspaceRoot}. Repository code and skills are read-only. Keep every task output inside this directory.`,
         'Use a matching skill whenever the user request falls within its description.',
-        'Use text-a3d as the single Agent-visible CAD authoring surface. For every CAD generation, modification, or inspection, keep one immutable evidence-cad-intent/v5 target and one mutable evidence-semantic-scene/v1 implementation, then let the skill select internal compilers. The runtime hash-binds the first valid intent used in a user turn; preserve it throughout every repair attempt. When a later user request explicitly changes the target, author a new intent filename instead of rewriting an earlier contract. Do not expose separate single-material, color, or Hybrid modes.',
-        `Manufactured color and material are semantic properties of physical parts or regions inside that same authoring surface. ${join(this.skillsRoot, 'text-a3d', 'color', 'BACKEND.md')} is internal backend documentation; read it only when implementing or debugging manufactured-color compilation, never as another Agent mode. LED/LCD content and other transient display appearance remain display-only unless the user explicitly requests printable geometry.`,
-        'Let text-a3d route its supporting references from the complete task semantics and the current intent/scene, never from keyword matching or fixed component-name classes. Load only guidance relevant to the requested representation, multipart construction, enclosure, installed components, or manufactured color; do not inspect compiler implementation files during ordinary modeling.',
-        'When an installed build123d symbol, representation family, or interface helper is uncertain, call cad_capabilities for a compact version-bound manifest before guessing or inspecting compiler implementation. Treat that manifest as advisory evidence, not as a mandatory phase or a shape template.',
-        'cad_capabilities, reference_analyze, and cad_compile are peer tools inside the existing open Agent loop. Select and revisit them from current evidence and judgment; do not turn their availability into a fixed workflow state machine.',
-        'Iterate autonomously by editing the semantic scene while preserving the immutable intent; do not ask for approval between a concept pass and physical compilation.',
-        'Treat parts, color regions, and display decoration as separate concepts. Before freezing intent, inventory the requested objects by output role: printed part, non-manufactured installed reference, display-only appearance, or purchased hardware; then inspect the exact physical-part list that will enter STL/STEP/3MF. Do not infer those roles from fixed component-name classes. Give every physical part exactly one representation master (BRep or mesh), derive mating male/female interface geometry from one clearance recipe, and make cuts, openings, walls, and connectors real manufacturing geometry. Build every cavity, pocket, recess, seat, or installed-component keepout by subtracting a real cutter from its owning part; observe() may preserve planning evidence but never replaces the cut. A functional port or connector opening for an internal item must form one continuous passage from the declared exterior face into its target interior cavity or keepout: extend the cutter across the full wall thickness and beyond both boundaries before applying checked_cut(). A shallow exterior recess is not a functional opening. The installed item itself may remain display-only, but its manufactured opening may not. Add support, stops, retention, and a feasible insertion path when the assembly needs them.',
-        'Reason about installed items from assembly behavior, not their names. If an item must enter an enclosed volume or remain serviceable, default to a removable service cover with a locating seam and accessible direct fastening into printed plastic unless the user chose another closure; align each cover clearance hole and receiver pilot boss from one screw datum. If an item only passes through or follows a surface, model only the necessary opening, slot, channel, or local retention. Escalate to a serviceable enclosure only when the spatial and maintenance requirements call for it.',
-        'A Three.js concept GLB is diagnostic, not the final deliverable. After booleans and interfaces compile, feed the resulting physical meshes back into one final display GLB and apply PBR materials there; that GLB may also contain explicitly excluded installed-component visuals such as the screen surface. Never preserve a prettier proxy when it disagrees with the printable surface.',
-        'All geometry remains in millimetres at unit scale. When product dimensions are inferred, choose the initial semantic envelope so its spatial bounding-box diagonal does not exceed the smallest usable build extent; this preserves arbitrary rigid-rotation freedom from the first build. Print placement may rigidly rotate and translate a finished part, but must never resize it; repair driving dimensions and rebuild instead.',
-        'For create, generate, build, or regenerate requests, pre-existing output files are references only. Rewrite the source and execute the build in the current run.',
-        'For every CAD generation, modification, regeneration, or inspection, first create and validate the immutable intent in a separate contract-only authoring step, then call cad_compile with the current marker, intent, semantic scene path, and generated build source. Never put write_intent in the build source or run the full build source manually to bootstrap intent; the source may create or refresh the scene inside cad_compile. The tool selects internal compilers, runs applicable QA, and returns a fresh hash-bound display render. Read the exact returned preview before claiming success; a passing compile alone is not delivery-ready. This visual gate does not depend on prompt keywords, a reference image, subject recognizability, or color. When the user supplies a reference image, call reference_analyze on that exact saved file and SHA-256 before the build it informs, then compare the resulting evidence with the fresh display render. Do not invoke the analyzer script through bash.',
-        'Python and all CAD dependencies are available through the python command in the repository-managed virtual environment. Do not use conda and do not install packages during a task.',
-        'Place generated CAD source, models, reports, and previews directly in the current working directory so the user interface can discover them.',
+        'For CAD work, text-a3d is the authoritative modeling and QA procedure. Keep one immutable intent target per user-turn scope and one mutable semantic scene; preserve the intent through repairs, and use a new intent filename only when a later user request changes the target.',
+        'Use the structured CAD tools described by text-a3d. cad_compile is the only compilation, QA, packaging, and rendering entry point. Its first compact result indexes stable issue IDs; later results emphasize repairDelta. Query only the required full diagnostics with cad_compile_issues. Context compaction removes superseded compile payloads, never QA execution or persisted evidence.',
+        'Do not trade correctness for speed: preserve millimetre unit scale and the requested geometry, resolve every error plus relevant warning or not_evaluated result, and read the fresh returned preview before claiming delivery. A passing compile without visual review is not delivery-ready.',
+        'Use the repository-managed Python environment without installing packages. Place generated CAD sources, models, reports, and previews in the current working directory.',
       ],
       cwd: scopedWorkspaceRoot,
       extensionFactories: [
         createInvalidEncryptedContentRetryExtension(),
         createCadCompileResultExtension(),
+        createCadCompileContextExtension(),
         ...(webSearchEnabled ? [createRequiredWebSearchExtension()] : []),
       ],
       noExtensions: true,
@@ -289,6 +283,7 @@ export class PiRuntime {
         projectRoot: this.projectRoot,
         workspaceRoot: scopedWorkspaceRoot,
       }),
+      createCadCompileIssuesTool(scopedWorkspaceRoot),
       ...(tavilySearchTool ? [tavilySearchTool] : []),
     ];
     const { session } = await createAgentSession({
@@ -314,6 +309,7 @@ export class PiRuntime {
         CAD_CAPABILITIES_TOOL_NAME,
         REFERENCE_ANALYZE_TOOL_NAME,
         CAD_COMPILE_TOOL_NAME,
+        CAD_COMPILE_ISSUES_TOOL_NAME,
         ...(tavilySearchTool ? [TAVILY_SEARCH_TOOL_NAME] : []),
       ],
       customTools,

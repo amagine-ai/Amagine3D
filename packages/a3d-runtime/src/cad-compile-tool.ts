@@ -17,6 +17,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   defineTool,
+  type AgentSession,
   type AgentToolUpdateCallback,
   type InlineExtension,
 } from '@earendil-works/pi-coding-agent';
@@ -25,8 +26,12 @@ import { Type } from 'typebox';
 import { terminateProcessTree } from './python-json-process.ts';
 
 export const CAD_COMPILE_TOOL_NAME = 'cad_compile';
+export const CAD_COMPILE_ISSUES_TOOL_NAME = 'cad_compile_issues';
 
 const RESULT_SCHEMA = 'evidence-cad-compile-result/v1';
+const AGENT_RESULT_SCHEMA = 'evidence-cad-compile-agent-result/v1';
+const ISSUE_DETAILS_SCHEMA = 'evidence-cad-compile-issue-details/v1';
+const SUPERSEDED_RESULT_SCHEMA = 'evidence-cad-compile-superseded/v1';
 const INTENT_SESSION_SCHEMA = 'evidence-cad-intent-session/v1';
 export const CAD_INTENT_STATE_DIRECTORY = '.intent-sessions';
 const UUID =
@@ -45,6 +50,9 @@ export const CAD_COMPILE_HARD_TIMEOUT_MS =
 const MAX_CAPTURE_BYTES = 1_000_000;
 const MAX_LOG_READ_BYTES = 64_000;
 const MAX_LOG_UPDATE_CHARS = 4_000;
+const MAX_ISSUE_DETAILS = 12;
+export const CAD_COMPILE_AGENT_RESULT_MAX_BYTES = 3_072;
+const ISSUE_ID = /^[0-9a-f]{16}$/u;
 
 const cadCompileParameters = Type.Object({
   intent: Type.String({
@@ -72,6 +80,33 @@ const cadCompileParameters = Type.Object({
       'Output directory path, relative to the current session workspace. Use "." for the workspace root.',
     minLength: 1,
   }),
+});
+
+const cadCompileIssuesParameters = Type.Object({
+  issue_ids: Type.Optional(
+    Type.Array(Type.String({ pattern: '^[0-9a-f]{16}$' }), {
+      maxItems: MAX_ISSUE_DETAILS,
+      minItems: 1,
+    }),
+  ),
+  result: Type.String({
+    description:
+      'Full cad_compile result JSON path returned by the compact Agent projection, relative to the current session workspace.',
+    minLength: 1,
+  }),
+  run_id: Type.String({
+    description: 'Exact compile runId whose issues should be read.',
+    pattern:
+      '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+  }),
+  severity: Type.Optional(
+    Type.Union([
+      Type.Literal('error'),
+      Type.Literal('not_evaluated'),
+      Type.Literal('warning'),
+      Type.Literal('all'),
+    ]),
+  ),
 });
 
 export interface CadCompileArtifactReference {
@@ -106,6 +141,48 @@ interface CadCompileProgress {
 }
 
 type CadCompileToolDetails = CadCompileProgress | CadCompileResult;
+
+type AgentMessage = AgentSession['messages'][number];
+
+interface CadCompileIssueGroup {
+  check?: string;
+  code?: string;
+  count: number;
+  featureIds?: string[];
+  ids: string[];
+  interfaceIds?: string[];
+  parts?: string[];
+  severity: string;
+  stages?: string[];
+}
+
+export interface CadCompileAgentResult {
+  artifacts: Record<string, CadCompileArtifactReference>;
+  backend?: unknown;
+  deliveryReady: boolean;
+  diagnostics: {
+    indexedIssueCount?: number;
+    mode: 'delta' | 'index';
+    issueGroups?: CadCompileIssueGroup[];
+    queryTool: typeof CAD_COMPILE_ISSUES_TOOL_NAME;
+    unindexedIssueCount?: number;
+  };
+  fullResultSchema: typeof RESULT_SCHEMA;
+  issueCounts: {
+    error: number;
+    notEvaluated: number;
+    omitted: number;
+    total: number;
+    warning: number;
+  };
+  pass: boolean;
+  repairDelta: unknown;
+  result?: { path: string };
+  runId: string;
+  schema: typeof AGENT_RESULT_SCHEMA;
+  status: string;
+  visualReviewRequired: boolean;
+}
 
 export interface CadCompileToolTuning {
   /** Test-only latency tuning; production callers should use the default. */
@@ -164,6 +241,320 @@ export function isCadCompileResult(value: unknown): value is CadCompileResult {
     result.artifacts !== null &&
     !Array.isArray(result.artifacts)
   );
+}
+
+const ISSUE_IDENTITY_FIELDS = [
+  'code',
+  'stage',
+  'check',
+  'part',
+  'featureId',
+  'nodeId',
+  'interfaceId',
+  'offenderId',
+  'target',
+] as const;
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, canonicalJsonValue(nested)]),
+  );
+}
+
+export function cadCompileIssueId(issue: CadCompileIssue): string {
+  const identity: Record<string, unknown> = {};
+  for (const field of ISSUE_IDENTITY_FIELDS) {
+    if (issue[field] !== undefined && issue[field] !== null) {
+      identity[field] = issue[field];
+    }
+  }
+  if (!ISSUE_IDENTITY_FIELDS.slice(2).some((field) => field in identity)) {
+    identity.message = issue.message;
+  }
+  const canonical = canonicalJsonValue(identity);
+  return createHash('sha256')
+    .update(JSON.stringify(canonical), 'utf8')
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function issueGroups(issues: readonly CadCompileIssue[]): CadCompileIssueGroup[] {
+  const groups = new Map<
+    string,
+    CadCompileIssueGroup & {
+      featureIdsSet: Set<string>;
+      interfaceIdsSet: Set<string>;
+      partsSet: Set<string>;
+      stagesSet: Set<string>;
+    }
+  >();
+  for (const issue of issues) {
+    const severity =
+      typeof issue.severity === 'string' ? issue.severity : 'unknown';
+    const key = JSON.stringify([
+      severity,
+      issue.code ?? null,
+      issue.check ?? null,
+    ]);
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        ...(typeof issue.check === 'string' ? { check: issue.check } : {}),
+        ...(typeof issue.code === 'string' ? { code: issue.code } : {}),
+        count: 0,
+        featureIdsSet: new Set(),
+        ids: [],
+        interfaceIdsSet: new Set(),
+        partsSet: new Set(),
+        severity,
+        stagesSet: new Set(),
+      };
+      groups.set(key, group);
+    }
+    group.count += 1;
+    group.ids.push(cadCompileIssueId(issue));
+    if (typeof issue.featureId === 'string') {
+      group.featureIdsSet.add(issue.featureId);
+    }
+    if (typeof issue.interfaceId === 'string') {
+      group.interfaceIdsSet.add(issue.interfaceId);
+    }
+    if (typeof issue.part === 'string') group.partsSet.add(issue.part);
+    if (typeof issue.stage === 'string') group.stagesSet.add(issue.stage);
+  }
+  const severityRank = new Map([
+    ['error', 0],
+    ['warning', 1],
+  ]);
+  return [...groups.values()]
+    .sort(
+      (left, right) =>
+        (severityRank.get(left.severity) ?? 2) -
+        (severityRank.get(right.severity) ?? 2),
+    )
+    .map((group) => ({
+      ...(group.check ? { check: group.check } : {}),
+      ...(group.code ? { code: group.code } : {}),
+      count: group.count,
+      ...(group.featureIdsSet.size > 0
+        ? { featureIds: [...group.featureIdsSet].sort() }
+        : {}),
+      ids: [...group.ids].sort(),
+      ...(group.interfaceIdsSet.size > 0
+        ? { interfaceIds: [...group.interfaceIdsSet].sort() }
+        : {}),
+      ...(group.partsSet.size > 0
+        ? { parts: [...group.partsSet].sort() }
+        : {}),
+      severity: group.severity,
+      ...(group.stagesSet.size > 0
+        ? { stages: [...group.stagesSet].sort() }
+        : {}),
+    }));
+}
+
+function projectedArtifact(
+  value: unknown,
+  workspaceRoot: string,
+): CadCompileArtifactReference | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const reference = value as Partial<CadCompileArtifactReference>;
+  if (
+    typeof reference.path !== 'string' ||
+    typeof reference.sha256 !== 'string'
+  ) {
+    return undefined;
+  }
+  const path = relative(workspaceRoot, reference.path).split(sep).join('/');
+  if (!path || path === '..' || path.startsWith('../')) return undefined;
+  return { path, sha256: reference.sha256 };
+}
+
+function projectedResultPath(
+  result: CadCompileResult,
+  workspaceRoot: string,
+): { path: string } | undefined {
+  const raw = result.result;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const path = (raw as { path?: unknown }).path;
+  if (typeof path !== 'string') return undefined;
+  const projected = relative(workspaceRoot, path).split(sep).join('/');
+  if (!projected || projected === '..' || projected.startsWith('../')) {
+    return undefined;
+  }
+  return { path: projected };
+}
+
+export function projectCadCompileResultForAgent(
+  result: CadCompileResult,
+  options: { deltaOnly: boolean; workspaceRoot: string },
+): CadCompileAgentResult {
+  const artifacts: Record<string, CadCompileArtifactReference> = {};
+  for (const name of [
+    'buildReport',
+    'preview',
+    'referencePreview',
+    'renderEvidence',
+    'repairState',
+  ]) {
+    const projected = projectedArtifact(result.artifacts[name], options.workspaceRoot);
+    if (projected) artifacts[name] = projected;
+  }
+  const omittedIssueCount = Number(result.omittedIssueCount ?? 0);
+  const omittedErrorCount = Number(result.omittedErrorCount ?? 0);
+  const issueCounts = {
+    error:
+      result.issues.filter((issue) => issue.severity === 'error').length +
+      omittedErrorCount,
+    notEvaluated: result.issues.filter(
+      (issue) =>
+        issue.status === 'not_evaluated' ||
+        issue.code === 'INTERFACE.EVIDENCE_NOT_EVALUATED',
+    ).length,
+    omitted: omittedIssueCount,
+    total: result.issues.length + omittedIssueCount,
+    warning: result.issues.filter((issue) => issue.severity === 'warning').length,
+  };
+  const resultReference = projectedResultPath(result, options.workspaceRoot);
+  const projected: CadCompileAgentResult = {
+    artifacts,
+    ...(result.backend !== undefined ? { backend: result.backend } : {}),
+    deliveryReady: result.deliveryReady === true,
+    diagnostics: {
+      mode: options.deltaOnly ? 'delta' : 'index',
+      queryTool: CAD_COMPILE_ISSUES_TOOL_NAME,
+    },
+    fullResultSchema: RESULT_SCHEMA,
+    issueCounts,
+    pass: result.pass,
+    repairDelta: result.repairDelta ?? {
+      new: [],
+      newlyUnblocked: [],
+      regressed: [],
+      remaining: [],
+      resolved: [],
+    },
+    ...(resultReference ? { result: resultReference } : {}),
+    runId: result.runId,
+    schema: AGENT_RESULT_SCHEMA,
+    status: result.status,
+    visualReviewRequired: result.visualReviewRequired !== false,
+  };
+  if (options.deltaOnly) return projected;
+
+  const groups = issueGroups(result.issues);
+  projected.diagnostics.issueGroups = [];
+  projected.diagnostics.indexedIssueCount = 0;
+  projected.diagnostics.unindexedIssueCount = result.issues.length;
+  for (const group of groups) {
+    const candidateGroups = [
+      ...(projected.diagnostics.issueGroups ?? []),
+      group,
+    ];
+    const indexedIssueCount =
+      (projected.diagnostics.indexedIssueCount ?? 0) + group.ids.length;
+    const candidate: CadCompileAgentResult = {
+      ...projected,
+      diagnostics: {
+        ...projected.diagnostics,
+        indexedIssueCount,
+        issueGroups: candidateGroups,
+        unindexedIssueCount: Math.max(0, result.issues.length - indexedIssueCount),
+      },
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(candidate), 'utf8') >
+      CAD_COMPILE_AGENT_RESULT_MAX_BYTES
+    ) {
+      continue;
+    }
+    projected.diagnostics = candidate.diagnostics;
+  }
+  return projected;
+}
+
+function compactSupersededCompileMessage(message: AgentMessage): AgentMessage {
+  if (
+    message.role !== 'toolResult' ||
+    ![CAD_COMPILE_TOOL_NAME, CAD_COMPILE_ISSUES_TOOL_NAME].includes(
+      message.toolName,
+    )
+  ) {
+    return message;
+  }
+  const details = isCadCompileResult(message.details)
+    ? {
+        pass: message.details.pass,
+        runId: message.details.runId,
+        schema: SUPERSEDED_RESULT_SCHEMA,
+        status: message.details.status,
+      }
+    : {
+        ...(typeof message.details === 'object' &&
+        message.details !== null &&
+        'runId' in message.details &&
+        typeof message.details.runId === 'string'
+          ? { runId: message.details.runId }
+          : {}),
+        schema: SUPERSEDED_RESULT_SCHEMA,
+      };
+  return {
+    ...message,
+    content: [
+      {
+        text: JSON.stringify({
+          ...details,
+          note: 'Superseded by a later cad_compile run; use the latest result.',
+        }),
+        type: 'text',
+      },
+    ],
+    details,
+  } as AgentMessage;
+}
+
+export function compactCadCompileContextMessages(
+  messages: readonly AgentMessage[],
+): AgentMessage[] {
+  let latest = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message?.role === 'toolResult' &&
+      message.toolName === CAD_COMPILE_TOOL_NAME
+    ) {
+      latest = index;
+      break;
+    }
+  }
+  if (latest < 0) return [...messages];
+  return messages.map((message, index) =>
+    index < latest &&
+    message.role === 'toolResult' &&
+    [CAD_COMPILE_TOOL_NAME, CAD_COMPILE_ISSUES_TOOL_NAME].includes(
+      message.toolName,
+    )
+      ? compactSupersededCompileMessage(message)
+      : message,
+  );
+}
+
+export function createCadCompileContextExtension(): InlineExtension {
+  return {
+    factory(pi) {
+      pi.on('context', (event) => ({
+        messages: compactCadCompileContextMessages(event.messages),
+      }));
+    },
+    hidden: true,
+    name: 'cad-compile-context-compaction',
+  };
 }
 
 /** Mark semantic compile failures as PI tool errors without discarding details. */
@@ -1094,6 +1485,217 @@ async function hashStableArtifact(
   }
 }
 
+async function readStableWorkspaceFile(
+  workspaceRoot: string,
+  path: string,
+  label: string,
+  signal: AbortSignal | undefined,
+): Promise<Buffer> {
+  await assertPathEntriesAreSafe(workspaceRoot, path, label);
+  const initial = await lstat(path, { bigint: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      throw infrastructureError(
+        'TOOL.PATH_MISSING',
+        `${label} is unavailable: ${error.message}`,
+      );
+    },
+  );
+  if (!initial.isFile() || initial.nlink !== 1n) {
+    throw infrastructureError(
+      'TOOL.PATH_INVALID',
+      `${label} must be a single-linked regular file`,
+    );
+  }
+  if (initial.size > BigInt(MAX_CAPTURE_BYTES)) {
+    throw infrastructureError(
+      'TOOL.RESULT_TOO_LARGE',
+      `${label} exceeds the ${MAX_CAPTURE_BYTES} byte read limit`,
+    );
+  }
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+    const before = await handle.stat({ bigint: true });
+    if (!artifactSnapshotMatches(initial, before)) {
+      throw infrastructureError(
+        'TOOL.RESULT_CHANGED',
+        `${label} changed before it could be read`,
+      );
+    }
+    if (signal?.aborted) {
+      throw infrastructureError('TOOL.ABORTED', 'issue lookup was cancelled');
+    }
+    const bytes = await handle.readFile();
+    if (signal?.aborted) {
+      throw infrastructureError('TOOL.ABORTED', 'issue lookup was cancelled');
+    }
+    const after = await handle.stat({ bigint: true });
+    const published = await lstat(path, { bigint: true });
+    if (
+      !artifactSnapshotMatches(before, after) ||
+      !artifactSnapshotMatches(after, published)
+    ) {
+      throw infrastructureError(
+        'TOOL.RESULT_CHANGED',
+        `${label} changed while it was read`,
+      );
+    }
+    return bytes;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('{')) throw error;
+    if (signal?.aborted || (error as Error).name === 'AbortError') {
+      throw infrastructureError('TOOL.ABORTED', 'issue lookup was cancelled');
+    }
+    throw infrastructureError(
+      'TOOL.RESULT_INVALID',
+      `${label} could not be read: ${(error as Error).message}`,
+    );
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function repairStateHasPreviousRun(
+  workspaceRoot: string,
+  result: CadCompileResult,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const reference = result.artifacts.repairState;
+  if (!reference) return false;
+  try {
+    const bytes = await readStableWorkspaceFile(
+      workspaceRoot,
+      reference.path,
+      'repair state',
+      signal,
+    );
+    const state = JSON.parse(bytes.toString('utf8')) as {
+      previousRunId?: unknown;
+    };
+    return typeof state.previousRunId === 'string' && UUID.test(state.previousRunId);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // The repair-state artifact was already validated with the compile result.
+    // If its optional history metadata cannot be read, the in-memory run count
+    // still prevents repeated full projections in the active Agent session.
+    return false;
+  }
+}
+
+export function createCadCompileIssuesTool(workspaceRoot: string) {
+  return defineTool({
+    name: CAD_COMPILE_ISSUES_TOOL_NAME,
+    label: 'Inspect CAD Compile Issues',
+    description:
+      'Read exact diagnostics for selected issue IDs, one severity, or not_evaluated findings from a full, run-bound cad_compile result. Use only when the compact compile projection is insufficient.',
+    promptSnippet:
+      'Inspect exact diagnostics from the full result of one cad_compile run',
+    promptGuidelines: [
+      'Use the result path and runId returned by cad_compile. Prefer issue_ids from issueGroups or repairDelta; request a severity only when the compact counts require broader review.',
+      'Do not reread compiler internals or every audit file when this query provides the needed observed value, expectation, and repair hint.',
+    ],
+    parameters: cadCompileIssuesParameters,
+    executionMode: 'parallel',
+    async execute(_toolCallId, params, signal) {
+      const root = await canonicalWorkspaceRoot(workspaceRoot);
+      const resultPath = await resolveWorkspaceParameter(
+        root,
+        'result',
+        params.result,
+        { mustExist: true, type: 'file' },
+      );
+      const bytes = await readStableWorkspaceFile(
+        root,
+        resultPath,
+        'cad_compile result',
+        signal,
+      );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(bytes.toString('utf8'));
+      } catch (error) {
+        throw infrastructureError(
+          'TOOL.RESULT_INVALID',
+          `cad_compile result is not valid JSON: ${(error as Error).message}`,
+        );
+      }
+      if (!isCadCompileResult(parsed)) {
+        throw infrastructureError(
+          'TOOL.RESULT_INVALID',
+          `issue lookup requires a full ${RESULT_SCHEMA} result`,
+        );
+      }
+      if (parsed.runId !== params.run_id) {
+        throw infrastructureError(
+          'TOOL.RESULT_RUN_MISMATCH',
+          'cad_compile result no longer belongs to the requested run',
+          {
+            expectedRunId: params.run_id,
+            observedRunId: parsed.runId,
+          },
+        );
+      }
+      const requestedIds = new Set(params.issue_ids ?? []);
+      const severity = params.severity ?? (requestedIds.size > 0 ? 'all' : undefined);
+      if (requestedIds.size === 0 && severity === undefined) {
+        throw infrastructureError(
+          'TOOL.ISSUE_QUERY_EMPTY',
+          'provide issue_ids or severity for a bounded diagnostic query',
+        );
+      }
+      if ([...requestedIds].some((id) => !ISSUE_ID.test(id))) {
+        throw infrastructureError(
+          'TOOL.ISSUE_ID_INVALID',
+          'every issue id must contain exactly 16 lowercase hexadecimal characters',
+        );
+      }
+      const indexed = parsed.issues.map((issue) => ({
+        id: cadCompileIssueId(issue),
+        issue,
+      }));
+      const matched = indexed.filter(({ id, issue }) => {
+        if (requestedIds.size > 0 && !requestedIds.has(id)) return false;
+        if (severity === 'not_evaluated') {
+          return (
+            issue.status === 'not_evaluated' ||
+            issue.code === 'INTERFACE.EVIDENCE_NOT_EVALUATED'
+          );
+        }
+        return (
+          severity === undefined ||
+          severity === 'all' ||
+          issue.severity === severity
+        );
+      });
+      const returned = matched.slice(0, MAX_ISSUE_DETAILS);
+      const foundIds = new Set(indexed.map(({ id }) => id));
+      const payload = {
+        issues: returned.map(({ id, issue }) => ({ id, ...issue })),
+        missingIssueIds: [...requestedIds].filter((id) => !foundIds.has(id)).sort(),
+        remainingIssueIds: matched
+          .slice(MAX_ISSUE_DETAILS)
+          .map(({ id }) => id)
+          .sort(),
+        requested: {
+          issueIds: [...requestedIds].sort(),
+          severity: severity ?? 'all',
+        },
+        runId: parsed.runId,
+        schema: ISSUE_DETAILS_SCHEMA,
+      };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        details: payload,
+      };
+    },
+  });
+}
+
 /**
  * Create the sequential, session-scoped CAD compiler tool used by PI.
  *
@@ -1122,6 +1724,7 @@ export function createCadCompileTool(
     'text-a3d',
     'cad_compile.py',
   );
+  let returnedRunCount = 0;
 
   return defineTool<typeof cadCompileParameters, CadCompileToolDetails>({
     name: CAD_COMPILE_TOOL_NAME,
@@ -1135,7 +1738,8 @@ export function createCadCompileTool(
       'Before calling cad_compile, run a separate contract-only authoring step that creates and validates the immutable intent. Never put write_intent in the CAD build source or run the full build source manually to bootstrap intent; the build source may generate the scene inside cad_compile.',
       'The first valid intent used in this user turn is hash-bound by the runtime. Preserve that exact file and content throughout repair iterations. A later user-requested target change must use a new intent filename rather than rewriting an earlier contract.',
       'A pass result still requires reading the returned fresh preview before delivery.',
-      'Before calling cad_compile again, review the full issue set, identify shared root causes, and try to address related findings in one coordinated change. Use judgment when an issue should be deferred and briefly explain that choice. Use repairDelta and repairState to avoid regressing checks that already passed; blockedBy marks checks that require valid upstream evidence, not extra failures to guess around.',
+      'The first result contains a compact issue index; later results are delta-only. Use cad_compile_issues with the returned result path, runId, and selected issue IDs whenever exact observed values or repair hints are needed.',
+      'Before retrying, group related findings into one source change. Use repairDelta and repairState to avoid rerunning unchanged failures or regressing checks that passed.',
     ],
     parameters: cadCompileParameters,
     executionMode: 'sequential',
@@ -1273,8 +1877,17 @@ export function createCadCompileTool(
         );
       }
 
+      const deltaOnly =
+        returnedRunCount > 0 ||
+        (await repairStateHasPreviousRun(root, result, signal));
+      returnedRunCount += 1;
+      const agentResult = projectCadCompileResultForAgent(result, {
+        deltaOnly,
+        workspaceRoot: root,
+      });
+
       return {
-        content: [{ type: 'text', text: JSON.stringify(result) }],
+        content: [{ type: 'text', text: JSON.stringify(agentResult) }],
         details: result,
       };
     },
