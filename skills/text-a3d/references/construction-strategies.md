@@ -10,7 +10,14 @@ through the same primitive stack.
 | pixel/icon source | deterministic occupied-cell union or relief | manually copied cells |
 | single product photo | primary envelope, landmark solids, then restrained hidden-side inference | claiming unseen details are exact |
 | organic/sculptural subject | a canonical watertight SDF mesh master driven by semantic landmarks | a scaled sphere/ellipsoid or hundreds of primitives |
-| organic exterior plus precise interfaces | an organic mesh shell part assembled to independent BRep mechanical parts | fusing the parts and still claiming editable STEP authority |
+| organic exterior plus precise features | a mesh-master body modified by directly bound BRep additions/cutters, with independent BRep parts only where assembly calls for them | maintaining separate lookalike geometry or claiming STEP after fusion |
+
+Treat the final geometry's controlling evidence as the default selector. If an
+appearance-controlled freeform outer skin and dimension-controlled mechanical
+features belong to one printed body, make that body mesh-master and bind the
+BRep features into it. If exact dimensions and analytic profiles control the
+whole body, keep it BRep-master. This decision is independent of product and
+component names.
 
 ## Frame and feature graph
 
@@ -112,9 +119,10 @@ use `organic_shell.build_organic_shell(...)`. SDF means **Signed Distance
 Field**: a function returning distance in millimetres, positive inside the
 form, zero on its boundary, and negative outside. It can encode any asymmetric
 user-driven form; it is not an ellipse type. Keep precise mechanical structure
-as independent BRep-master parts and assemble it to the shell. The mesh remains
-the physical authority for the shell, so do not fabricate a faceted STEP or
-maintain a separate polished visual proxy.
+as build123d geometry. Bind a feature directly into the mesh-master part when it
+must be fused or cut; keep it as an independent BRep master only when it is a
+separate printed part. The fused mesh remains the physical authority, so do not
+fabricate a faceted STEP or maintain a separate polished visual proxy.
 
 Choose the cavity while constructing the shell. Use an exterior-connected
 opening for serviceable cavities. For a deliberately sealed void printed in

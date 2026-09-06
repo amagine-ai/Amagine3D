@@ -37,7 +37,7 @@ Amagine3D currently focuses on printable intelligent-hardware enclosures and rel
 
 The design process starts with internal components, arranging mounts and interfaces before creating the enclosure, controls, and thermal-management structures. When a design needs multiple parts, covers, hinges, or latches are developed together with assembly clearances and printing tolerances. For rigid mechanisms such as hinged or sliding covers, the system can also check collisions and operating clearances along a defined motion path.
 
-Every generation records one semantic scene containing its parts, features, interfaces, materials, and representation masters. Dimension-driven parts retain editable Python and build123d source and export genuine STEP; freeform mesh-master parts retain their canonical mesh instead of pretending to be parametric CAD. The same workflow emits STL, display GLB, and a profile-bound 3MF package when required, including permanent color regions inside a physical part.
+Every generation records one semantic scene containing its parts, features, interfaces, materials, and representation masters. Dimension-driven parts retain editable Python and build123d source and export genuine STEP; freeform mesh-master parts retain their canonical mesh instead of pretending to be parametric CAD. A mesh-master part can bind precise build123d cutters and additions directly into its mesh booleans without creating an intermediate STEP. The same workflow emits STL, display GLB, and a profile-bound 3MF package when required, including permanent color regions inside a physical part.
 
 Behind the scenes, the 3D-native Agent turns the request into an immutable intent and one mutable semantic scene. Internal BRep, mesh, mixed-geometry, and color backends compile that scene into one evidence contract. The Agent sees measured dimensions and checks for feature ownership, print orientation, plate fit, connectivity, interference, and exported-file readback, then renders and reads the latest result before accepting it.
 
@@ -200,9 +200,11 @@ internal compilers handle mixed geometry, permanent color regions, material
 planning, and 3MF packaging. Display-only content never enters manufacturing
 geometry. Color backend utilities live under `skills/text-a3d/color/` and have
 no independent intent contract or skill manifest.
-`cad_capabilities`, `reference_analyze`, and `cad_compile` are peer tools in
-the same open Agent loop; they provide versioned evidence and a unified build
-boundary without turning modeling into a fixed server-side state machine.
+`cad_capabilities`, `reference_analyze`, `cad_compile`, and the on-demand
+`cad_compile_issues` diagnostic reader are peer tools in the same open Agent
+loop. Compile results use a bounded Agent projection while retaining complete
+run-bound evidence on disk, so repair context stays small without weakening QA
+or turning modeling into a fixed server-side state machine.
 
 Each Agent session uses its own workspace. CAD scripts run with the server-managed Python environment, while the browser renders generated models with Three.js. Model credentials remain on the server. For more detail, see the [threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
 

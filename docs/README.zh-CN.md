@@ -194,9 +194,10 @@ Agent 运行时只暴露 `text-a3d` 一个 Skill 和一套语义场景工作流�
 BRep 或 mesh 表示主数据；内部编译器负责混合几何、永久颜色分区、材料计划与 3MF
 打包。仅用于显示的内容不会进入制造几何。颜色后端工具位于
 `skills/text-a3d/color/`，不再拥有独立 intent 契约或 Skill 清单。
-`cad_capabilities`、`reference_analyze` 与 `cad_compile` 是同一开放式 Agent
-loop 中的同级工具；它们提供版本化证据和统一编译边界，但不会把建模改成固定的
-服务端状态机。
+`cad_capabilities`、`reference_analyze`、`cad_compile` 与按需读取诊断的
+`cad_compile_issues` 是同一开放式 Agent loop 中的同级工具。编译结果进入上下文时
+使用有大小上限的 Agent 投影，同时在磁盘保留完整、绑定 run 的证据，因此可以缩小
+修复上下文，而不降低 QA 强度，也不会把建模改成固定的服务端状态机。
 
 每个 Agent 会话使用独立工作区。CAD 脚本由服务端管理的 Python 环境执行，浏览器通过 Three.js 渲染生成模型，模型凭据仅保留在服务端。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
 

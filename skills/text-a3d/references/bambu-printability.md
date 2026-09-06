@@ -46,7 +46,9 @@ not repairs applied after tessellation.
 
 - Prefer `open-cavity` for housings: make the service opening intersect the
   inner offset and the exterior so supports, powder, and loose filament can be
-  removed. A cover remains an independent BRep part when its fit is critical.
+  removed. A separately printed cover can remain a BRep master; precise bosses,
+  seats, and cutters fused into the shell are bound BRep features of the final
+  mesh-master body.
 - For a deliberately sealed void printed in +Z, use
   `self_supporting_cavity(...)`. Its arbitrary 2D footprint shrinks on every
   layer to a roof of at least 45 degrees from horizontal; it rejects a closure
@@ -57,9 +59,10 @@ not repairs applied after tessellation.
 - Choose a broad, intentional bed-contact region or a permitted assembly split.
   Do not flatten identity-bearing outer geometry merely to obtain first-layer
   contact.
-- Keep sockets, locating faces, bosses, covers, and other tolerance-bearing
-  features as independent BRep masters. Do not smooth or remesh those parts
-  after their interfaces are derived.
+- Construct sockets, locating faces, bosses, covers, and other
+  tolerance-bearing features as BRep geometry. Bind them into a mesh-master body
+  when they belong to that printed part; retain a separate BRep master only for
+  a separate printed part. Do not smooth their derived interfaces.
 
 ## Support-free construction
 

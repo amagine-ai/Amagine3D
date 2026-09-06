@@ -30,41 +30,33 @@ and manufacturing booleans. Use a physical part only for an explicitly printable
 dummy, lens, or bezel.
 
 The physical cutters and display plane share their center, normal, and component
-envelope parameters in source. BRep `export_part(...)` and
-`export_assembly(...)` consume the scene's display-only nodes for the display
-GLB without adding them to their physical parts argument. A typical compiled
-scene fragment is:
+envelope parameters in source. BRep `export_part(...)`, `export_assembly(...)`,
+and `color.export_regions(...)` consume the scene's display-only nodes for the
+display GLB without adding them to their physical parts argument. Bind the actual cutter
+objects rather than describing their dimensions again:
 
-```json
-[
-  {
-    "id": "screen-window-cutter",
-    "partId": "housing",
-    "featureId": "screen/window",
-    "role": "cutter",
-    "operation": "subtract",
-    "recipe": {
-      "kind": "sourceMesh",
-      "parameters": {"sourceMesh": "screen-window-tool.stl"}
-    }
-  },
-  {
-    "id": "screen-module-keepout-cutter",
-    "partId": "housing",
-    "featureId": "screen/module-keepout",
-    "role": "cutter",
-    "operation": "subtract",
-    "recipe": {
-      "kind": "sourceMesh",
-      "parameters": {"sourceMesh": "screen-module-keepout-tool.stl"}
-    }
-  },
+```python
+from geometry_binding import bind_brep_feature
+
+nodes = [
+  bind_brep_feature(
+    node_id="screen-window-cutter",
+    feature_id="screen/window",
+    role="cutter",
+    shape=window_cutter,
+    path="screen-window-tool.stl",
+  ),
+  bind_brep_feature(
+    node_id="screen-module-keepout-cutter",
+    feature_id="screen/module-keepout",
+    role="cutter",
+    shape=module_keepout_cutter,
+    path="screen-module-keepout-tool.stl",
+  ),
   {
     "id": "screen-active-surface",
-    "partId": "housing",
     "featureId": "display/screen-active-surface",
     "role": "display-only",
-    "operation": "none",
     "physicalFeatureRef": "screen/window",
     "recipe": {
       "kind": "displayComponent",
@@ -76,6 +68,9 @@ scene fragment is:
   }
 ]
 ```
+
+Nest these nodes under the receiving part passed to `write_scene(...)`; it
+derives `partId` and `operation`.
 
 Scene validation requires each display component's `physicalFeatureRef` to name
 an intent-backed physical feature on the same owning part. Build input binding

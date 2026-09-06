@@ -27,8 +27,9 @@ and validates the resulting scene.
 - An all-BRep scene requires the source to export `<intent.part>_report.json`
   through the existing `cad_helpers`/color exporter contract.
 - A scene containing any mesh-master part selects `hybrid_compile.py`. For a
-  mixed scene, the source must first generate and bind every required genuine
-  BRep master STEP plus mesh input.
+  mixed scene, the source binds ordinary Mesh and BRep feature geometry directly
+  from the authored objects. Only final BRep-master parts also bind genuine
+  STEP; BRep features fused into a mesh-master part do not.
 
 The external marker must predate the immutable intent and build source. The
 driver creates a separate UUID-bound attempt marker immediately before the
@@ -49,7 +50,14 @@ or server-side workflow state.
 
 ## Result semantics
 
-The command prints and persists `evidence-cad-compile-result/v1`. Errors use
+The Python command prints and persists `evidence-cad-compile-result/v1`. The
+PI tool retains that result as non-Agent audit detail while exposing a bounded
+`evidence-cad-compile-agent-result/v1` projection to model context. The first
+projection includes counts and a grouped stable-ID index; later attempts retain
+the result pointer and decision fields but expose only the repair delta instead
+of repeating diagnostic bodies. `cad_compile_issues` resolves selected IDs or a
+severity against the run-bound persisted result, up to a bounded page, without
+rerunning any audit. Errors use
 stable stage-level codes such as `CONTRACT.SCENE_INVALID`,
 `BACKEND.COMPILE_FAILED`, `BUILD.REPORT_INVALID`, and `QA.MESH_FAILED`.
 Checker-specific names remain in `issue.check`; structured details such as
@@ -61,7 +69,7 @@ deterministic report may be byte-identical to the prior attempt without being
 misclassified as stale.
 
 Checked source operations, Hybrid part/cutter/overlap checks, and applicable
-artifact QA collect independent failures into one result. The driver continues
+artifact QA collect independent failures into the full result. The driver continues
 only while the required upstream artifact remains structurally trustworthy; an
 issue with `blockedBy` explicitly identifies a dependency boundary instead of
 guessing a downstream diagnosis. The Agent should review the whole issue set,
@@ -96,13 +104,15 @@ rather than pretending a Python process can perform image review.
 ## Integration constraints
 
 - Register the driver as one PI tool, not a server-side state machine.
-- Register `cad_capabilities` and `reference_analyze` as optional peer tools in
-  the same Agent loop, not mandatory preprocessing states.
+- Register `cad_capabilities`, `reference_analyze`, and `cad_compile_issues` as
+  peer tools in the same Agent loop, not mandatory preprocessing states.
 - Resolve every supplied path under the current session workspace before
   spawning it, use the managed `.venv` Python, and propagate `AbortSignal` to
   the complete child process group.
-- Surface stage activity without returning the full compiler log to model
-  context. The compact result is intended for the next Agent decision.
+- Surface stage activity without returning the full compiler log or full issue
+  bodies to model context. Superseded compile results may be replaced in the
+  assembled context by a tiny run/status marker; persisted evidence and the
+  latest result remain unchanged.
 - Do not add automatic repair, geometry simplification, scaling, relaxed QA
   thresholds, motion semantics, or motion QA to this boundary.
 - The Python path checks and argv-only spawn reduce accidental misuse but are

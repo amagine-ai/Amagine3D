@@ -34,6 +34,9 @@ working directory.
   mechanical boilerplate such as hashes, ownership, and role operations.
 - `cad_compile` is the single Agent tool for compilation, applicable QA,
   packaging, rendering, and compact repair diagnostics.
+- `cad_compile_issues` reads exact, run-bound diagnostics by stable issue ID or
+  severity from the complete persisted compile result. Use it only when the
+  compact projection does not contain enough evidence for a repair decision.
 - `cad_capabilities` is a read-only, version-bound query for installed
   build123d symbols, generic construction families, artifact modes, and
   interface proof capabilities. Use it when the runtime surface is uncertain.
@@ -44,6 +47,8 @@ working directory.
 - `reference_analyze.py` is the internal deterministic backend for the
   `reference_analyze` tool; do not invoke it through shell commands.
 - `cad_helpers.py` builds and exports BRep-master parts and assemblies.
+- `geometry_binding.py` binds an authored Mesh or BRep feature to its canonical
+  Hybrid mesh artifact and scene node from the same geometry object.
 - `hybrid_compile.py` compiles mesh-master and mixed scenes.
 - `build_check.py` validates the unified report, artifact matrix, transforms,
   and every bound file hash.
@@ -105,10 +110,17 @@ import sys
 sys.path.insert(0, "<SKILL_DIR>")
 
 from authoring import write_scene
+from geometry_binding import bind_brep_feature, bind_mesh_feature
 
 # Scene nodes inherit partId; role deterministically supplies operation.
 scene_parts = {
-    "shell": {"representationMaster": "mesh", "nodes": [...]},
+    "shell": {
+        "representationMaster": "mesh",
+        "nodes": [
+            bind_mesh_feature(...),
+            bind_brep_feature(...),
+        ],
+    },
     "cover": {"representationMaster": "brep", "nodes": [...]},
 }
 
@@ -240,18 +252,31 @@ parts or physical features that have no immutable intent identity.
 
 Give every physical part one `representationMaster`:
 
-- `brep`: build123d owns the physical solid and genuine STEP. Use for shells,
-  bores, pockets, walls, fitted interfaces, and other dimension-driven geometry.
+- `brep`: build123d owns the physical solid and genuine STEP. Use when exact
+  dimensions and analytic profiles control the final body, including regular
+  shells, bores, pockets, walls, and fitted interfaces.
 - `mesh`: a watertight canonical mesh owns the physical surface. Use for
-  genuinely freeform, scanned, character-like, or identity-bearing surfaces.
-  Do not claim a clean parametric STEP for it.
+  freeform, scanned, character-like, or other surfaces whose silhouette and
+  curvature control the result more than analytic dimensions. Do not claim a
+  clean parametric STEP for it.
 
-The scene may mix masters across assembled parts. Keep an organic exterior as a
-mesh-master shell part and every fit-critical core, cover, bracket, socket, or
-connector island as an independent BRep-master part with genuine STEP. Connect
-them through declared interfaces. If those representations are fused into one
-printed body, the result is mesh-master and must not claim editable STEP
-authority.
+Choose from that controlling geometry, never from a component or product name.
+When one printed part combines an appearance-controlled freeform outer skin
+with dimension-controlled cavities, openings, bosses, or connectors, default
+the part to mesh-master. Use `bind_mesh_feature(...)` for its outer positive
+volume and `bind_brep_feature(...)` for its precise cutters and additions. Do
+not downgrade the outer surface to a convenient BRep approximation merely
+because the part also has mechanical features. Conversely, keep an entirely
+dimension-driven part BRep-master rather than adding Mesh just because it is an
+enclosure.
+
+The scene may mix masters across assembled parts. Both binding helpers persist
+the canonical mesh and create its scene node from the same authored object. A
+BRep feature inside a mesh-master part is tessellated directly and never creates
+a temporary STEP. Keep a cover, bracket, or other separately printable
+precision part as a BRep master when editable STEP is useful. Once Mesh and BRep
+features are fused into one printed body, that body is mesh-master and must not
+claim STEP authority.
 
 Three.js is an optional mesh authoring and display tool, not a second
 manufacturing authority. Never substitute an independently polished visual
@@ -387,18 +412,25 @@ intent, preflights the build source, executes that source, then validates the
 generated scene. The build source must not call `write_intent(...)`; it may
 call `write_scene(...)`. The tool then selects the BRep or Hybrid backend from
 each part's `representationMaster`, runs every
-applicable audit, creates the package and fresh display render, and returns a
-compact `evidence-cad-compile-result/v1` result. A failed result identifies the
-stage, stable error code, affected part/node/interface when known, observed and
-expected measurements, and a constructive repair hint. Independent source,
-backend, and applicable QA failures are aggregated until a missing or invalid
-upstream artifact makes further checks unsafe. Before calling `cad_compile`
-again, review the complete issue set, identify shared root causes, and try to
+applicable audit, creates the package and fresh display render, and persists the
+complete `evidence-cad-compile-result/v1` evidence. Its Agent-visible content is
+a bounded `evidence-cad-compile-agent-result/v1` projection: the first result
+contains counts plus grouped stable issue IDs, while later repair results omit
+the repeated issue index and emphasize `repairDelta`. This projection changes
+only context size; the compiler still runs every applicable audit and keeps the
+full result. Use `cad_compile_issues` with the returned `result.path`, `runId`,
+and selected IDs whenever exact observed/expected measurements or repair hints
+are needed. A severity query can enumerate findings omitted from the bounded
+index, and `remainingIssueIds` supports another bounded request.
+
+Independent source, backend, and applicable QA failures are aggregated until a
+missing or invalid upstream artifact makes further checks unsafe. Before
+calling `cad_compile` again, review the relevant complete issue set through the
+index, delta, and bounded detail queries; identify shared root causes and try to
 address related findings in one coordinated source change. Use judgment when a
 finding should be deferred and briefly explain that choice. Preserve the intent
-and intended geometry. Read full audit files only when the compact diagnostic
-is insufficient; do not inspect compiler implementation during ordinary
-modeling.
+and intended geometry. Read full audit files only when these diagnostics are
+insufficient; do not inspect compiler implementation during ordinary modeling.
 
 Each attempt also writes a compact `<name>_repair-state.json` ledger and returns
 `repairDelta`. The ledger records failed and blocked issue identities, stages
@@ -427,7 +459,10 @@ scale it. All part-print and plate-print transforms are explicit rigid 4x4
 matrices in the report. The selected profile must prove bed fit before package
 delivery.
 
-For every BRep part in a mixed scene, Hybrid imports the bound master STEP
+In a Hybrid scene, every ordinary physical node is bound from its actual source
+object with `bind_mesh_feature(...)` or `bind_brep_feature(...)`; handwritten
+`sourceMesh` physical-node recipes are unsupported. For every final BRep-master
+part, Hybrid imports the bound master STEP
 through build123d/OCCT, requires one valid solid, tessellates it at unit scale,
 and compares it with that part's final compiled semantic mesh. Dimensions,
 bidirectional surface distance, and volume must all pass. A header-only STEP,
@@ -483,10 +518,11 @@ For mesh or mixed compilation, run shape consistency against the generated
 `<name>_scene_artifacts.json`, never the unbound source scene. The bound scene
 contains the exact compiled STL/GLB paths, transforms, and hashes being compared.
 
-Read every `fail`, `warning`, and `not_evaluated` result. Geometry validity,
-contract dimensions, feature ownership, interface correctness, and identity
-outrank warning-free support metrics. Do not distort requested geometry merely
-to remove a localized advisory warning.
+Account for every `fail`, `warning`, and `not_evaluated` result using the compact
+counts/index and `cad_compile_issues` as needed. Geometry validity, contract
+dimensions, feature ownership, interface correctness, and identity outrank
+warning-free support metrics. Do not distort requested geometry merely to
+remove a localized advisory warning.
 
 ## 6. Render and read every CAD result
 
