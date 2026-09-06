@@ -1,5 +1,5 @@
 {
-  "schema": "evidence-cad-intent/v4",
+  "schema": "evidence-cad-intent/v5",
   "part": "example-bracket",
   "task_mode": "specification",
   "representation": "full-3d",
@@ -36,6 +36,32 @@
       "acceptance": "A through-hole removes material through the full Z height."
     }
   ],
+  "color_regions": [
+    {
+      "name": "bracket-body",
+      "part": "example-bracket",
+      "hex": "#D8D2C8",
+      "purpose": "primary structural color",
+      "boundary": "the parent body excluding the shallow top accent",
+      "evidence": "The example specifies a warm neutral body.",
+      "continuity": "continuous-core",
+      "material": {"transmission": "opaque"}
+    },
+    {
+      "name": "top-accent",
+      "part": "example-bracket",
+      "hex": "#262A30",
+      "purpose": "contrasting orientation accent",
+      "boundary": "a shallow inset region on the top face",
+      "evidence": "The example specifies a dark top accent.",
+      "continuity": "surface-detail",
+      "material": {"transmission": "opaque"}
+    }
+  ],
+  "palette_reduction": {
+    "applied": false,
+    "reason": "The two requested semantic colors map directly to two printable regions."
+  },
   "manufacturing": {
     "mode": "single-part"
   },
@@ -46,14 +72,18 @@
     },
     "build_axis": "+Z",
     "bed_contact": "z-min",
+    "print_package_mode": "co_print_body",
     "support_policy": "support-free",
     "minimum_wall_target_mm": 0.9,
     "critical_features": ["mounting-hole"]
   },
   "visual": {
-    "required": false,
+    "required": true,
     "reference_view": "top",
-    "landmarks": []
+    "landmarks": [
+      "The centered mounting hole is visible in the top view.",
+      "The dark top accent remains inside the warm structural body."
+    ]
   },
   "assumptions": [
     "The unspecified thickness is inferred as 8 mm."

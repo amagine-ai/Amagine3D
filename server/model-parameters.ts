@@ -4,12 +4,21 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 
 import type {
   ArtifactSummary,
@@ -44,7 +53,7 @@ export class ParameterBuildError extends Error {
   }
 }
 
-function sha256(value: string): string {
+function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
@@ -52,6 +61,22 @@ function safeTopLevelPath(path: string, label: string): string {
   if (path !== basename(path) || dirname(path) !== '.') {
     throw new ParameterBuildError(
       `${label} must be a top-level session artifact.`,
+      400,
+    );
+  }
+  return path;
+}
+
+function safeGeneratedArtifactPath(path: string, label: string): string {
+  const segments = path.split(/[\\/]/u);
+  if (
+    isAbsolute(path) ||
+    path.includes('\0') ||
+    segments.length === 0 ||
+    segments.some((segment) => !segment || segment === '.' || segment === '..')
+  ) {
+    throw new ParameterBuildError(
+      `${label} must stay inside the session workspace.`,
       400,
     );
   }
@@ -184,10 +209,18 @@ export async function parameterModelsForWorkspace(
   artifacts?: readonly ArtifactSummary[],
 ): Promise<ParameterModel[]> {
   const availableArtifacts = artifacts ?? (await scanArtifacts(workspaceRoot));
-  const builds = await discoverModelBuilds(workspaceRoot, availableArtifacts);
+  const builds = (
+    await discoverModelBuilds(workspaceRoot, availableArtifacts)
+  ).filter(
+    (build): build is ModelBuild & { sourcePath: string } =>
+      typeof build.sourcePath === 'string',
+  );
   return Promise.all(
     builds.map(async (build) => {
-      const source = await readFile(resolve(workspaceRoot, build.sourcePath), 'utf8');
+      const source = await readFile(
+        resolve(workspaceRoot, build.sourcePath),
+        'utf8',
+      );
       try {
         return {
           ...build,
@@ -215,7 +248,7 @@ async function requireCandidateFiles(
 ): Promise<string[]> {
   const paths = [...new Set([...build.artifactPaths, build.reportPath])];
   for (const path of paths) {
-    safeTopLevelPath(path, 'Generated artifact');
+    safeGeneratedArtifactPath(path, 'Generated artifact');
     try {
       const metadata = await stat(join(outDir, path));
       if (!metadata.isFile()) throw new Error('not a file');
@@ -237,23 +270,28 @@ async function requireCandidateFiles(
 
 function rebaseReportPaths(
   value: unknown,
-  outDir: string,
+  outputRoots: readonly string[],
   workspaceRoot: string,
 ): unknown {
   if (typeof value === 'string') {
-    const prefix = `${outDir}${sep}`;
-    return value.startsWith(prefix)
-      ? join(workspaceRoot, value.slice(prefix.length))
-      : value;
+    for (const outputRoot of outputRoots) {
+      const prefix = `${outputRoot}${sep}`;
+      if (value.startsWith(prefix)) {
+        return join(workspaceRoot, value.slice(prefix.length));
+      }
+    }
+    return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => rebaseReportPaths(item, outDir, workspaceRoot));
+    return value.map((item) =>
+      rebaseReportPaths(item, outputRoots, workspaceRoot),
+    );
   }
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
         key,
-        rebaseReportPaths(item, outDir, workspaceRoot),
+        rebaseReportPaths(item, outputRoots, workspaceRoot),
       ]),
     );
   }
@@ -272,23 +310,95 @@ async function prepareCandidateReport(
     string,
     unknown
   >;
-  const report = rebaseReportPaths(raw, outDir, workspaceRoot) as Record<
-    string,
-    unknown
-  >;
-  report.source = {
-    path: join(workspaceRoot, sourcePath),
+  const canonicalOutDir = await realpath(outDir);
+  const canonicalWorkspaceRoot = await realpath(workspaceRoot);
+  const report = rebaseReportPaths(
+    raw,
+    [...new Set([outDir, canonicalOutDir])],
+    canonicalWorkspaceRoot,
+  ) as Record<string, unknown>;
+  const rawArtifacts = raw.artifacts as Record<string, unknown> | undefined;
+  const rawAuditReference = rawArtifacts?.exportAudit as
+    | Record<string, unknown>
+    | undefined;
+  if (rawAuditReference) {
+    if (
+      typeof rawAuditReference.path !== 'string' ||
+      typeof rawAuditReference.sha256 !== 'string'
+    ) {
+      throw new ParameterBuildError(
+        'BRep export audit reference is malformed.',
+        422,
+      );
+    }
+    const auditCandidate = isAbsolute(rawAuditReference.path)
+      ? rawAuditReference.path
+      : resolve(dirname(reportPath), rawAuditReference.path);
+    const auditPath = await realpath(auditCandidate);
+    const auditRelativePath = relative(canonicalOutDir, auditPath);
+    if (
+      auditRelativePath === '' ||
+      auditRelativePath === '..' ||
+      auditRelativePath.startsWith(`..${sep}`)
+    ) {
+      throw new ParameterBuildError(
+        'BRep export audit must stay inside the staged output.',
+        422,
+      );
+    }
+    const auditBytes = await readFile(auditPath);
+    if (sha256(auditBytes) !== rawAuditReference.sha256) {
+      throw new ParameterBuildError(
+        'BRep export audit hash does not match its staged bytes.',
+        422,
+      );
+    }
+    const rawAudit = JSON.parse(auditBytes.toString('utf8')) as unknown;
+    const audit = rebaseReportPaths(
+      rawAudit,
+      [...new Set([outDir, canonicalOutDir])],
+      canonicalWorkspaceRoot,
+    );
+    const auditPayload = `${JSON.stringify(audit, null, 2)}\n`;
+    await writeFile(auditPath, auditPayload, 'utf8');
+    const artifacts = report.artifacts as Record<string, unknown> | undefined;
+    const auditReference = artifacts?.exportAudit as
+      | Record<string, unknown>
+      | undefined;
+    const backendData = report.backendData as
+      | Record<string, unknown>
+      | undefined;
+    if (!auditReference || !backendData) {
+      throw new ParameterBuildError(
+        'BRep export audit bindings are incomplete.',
+        422,
+      );
+    }
+    auditReference.path = join(canonicalWorkspaceRoot, auditRelativePath);
+    auditReference.sha256 = sha256(auditPayload);
+    backendData.exportAudit = audit;
+  }
+  if (!report.inputs || typeof report.inputs !== 'object') {
+    throw new ParameterBuildError(
+      'Unified build report has no inputs object.',
+      422,
+    );
+  }
+  (report.inputs as Record<string, unknown>).source = {
+    path: join(canonicalWorkspaceRoot, sourcePath),
+    schema: 'python-source/v1',
     sha256: sourceHash,
   };
-  if (report.parameters && typeof report.parameters === 'object') {
-    const parameters = report.parameters as Record<
-      string,
-      Record<string, unknown>
-    >;
-    for (const [id, parameterValue] of Object.entries(values)) {
-      if (parameters[id]) {
-        parameters[id].default = parameterValue;
-        parameters[id].value = parameterValue;
+  const backendData = report.backendData;
+  if (backendData && typeof backendData === 'object') {
+    const parameters = (backendData as Record<string, unknown>).parameters;
+    if (parameters && typeof parameters === 'object') {
+      const records = parameters as Record<string, Record<string, unknown>>;
+      for (const [id, parameterValue] of Object.entries(values)) {
+        if (records[id]) {
+          records[id].default = parameterValue;
+          records[id].value = parameterValue;
+        }
       }
     }
   }
@@ -314,6 +424,7 @@ async function promoteFiles(
       backups.push({ from: backup, to: file.to });
     }
     for (const file of files) {
+      await mkdir(dirname(file.to), { recursive: true });
       await rename(file.from, file.to);
       installed.push(file.to);
     }
@@ -378,7 +489,9 @@ export async function rebuildModelWithParameters(options: {
       409,
     );
   }
-  build.artifactPaths.forEach((path) => safeTopLevelPath(path, 'Model artifact'));
+  build.artifactPaths.forEach((path) =>
+    safeGeneratedArtifactPath(path, 'Model artifact'),
+  );
   safeTopLevelPath(build.reportPath, 'Build report');
   const sourcePath = join(workspaceRoot, request.sourcePath);
   const source = await readFile(sourcePath, 'utf8');
@@ -394,11 +507,7 @@ export async function rebuildModelWithParameters(options: {
     request.values,
   );
   const rewrittenSourceHash = sha256(rewrittenSource);
-  const buildsRoot = join(
-    workspaceRoot,
-    '.amagine-state',
-    'parameter-builds',
-  );
+  const buildsRoot = join(workspaceRoot, '.amagine-state', 'parameter-builds');
   await mkdir(buildsRoot, { recursive: true });
   const jobRoot = await mkdtemp(join(buildsRoot, 'job-'));
   const outDir = join(jobRoot, 'out');

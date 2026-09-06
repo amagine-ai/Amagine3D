@@ -84,6 +84,7 @@ def _pixel_grid(
 
 
 def analyze(path: Path) -> dict:
+    path = path.resolve()
     raw = path.read_bytes()
     with Image.open(path) as source:
         rgba = np.asarray(source.convert("RGBA"))
@@ -103,6 +104,11 @@ def analyze(path: Path) -> dict:
         for color, count in colors.most_common(16)
     ]
     return {
+        "schema": "evidence-reference-analysis/v1",
+        "source": {
+            "path": str(path),
+            "sha256": sha256(raw).hexdigest(),
+        },
         "background": {"method": background_method, "rgba": background},
         "foreground": {
             "aspect_ratio": round(bbox[2] / bbox[3], 6),

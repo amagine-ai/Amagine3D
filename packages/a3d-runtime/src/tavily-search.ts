@@ -27,7 +27,7 @@ const acceptedImageTypes = new Set([
   'image/png',
   'image/webp',
 ]);
-const gatedCadTools = new Set(['bash', 'edit', 'write']);
+const gatedCadTools = new Set(['bash', 'cad_compile', 'edit', 'write']);
 
 const searchParameters = Type.Object({
   query: Type.String({
@@ -434,7 +434,7 @@ export function createRequiredWebSearchExtension(): InlineExtension {
           return {
             block: true,
             reason:
-              'Web reference mode requires a successful web_search before CAD shell commands or file mutations. Call web_search, then retry this tool.',
+              'Web reference mode requires a successful web_search before CAD compilation, shell commands, or file mutations. Call web_search, then retry this tool.',
           };
         }
         return undefined;

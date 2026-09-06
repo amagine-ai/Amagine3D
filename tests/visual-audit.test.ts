@@ -1,11 +1,27 @@
+import { createHash } from 'node:crypto';
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { mkdtemp, realpath, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
 import {
   auditCadVisualValidation,
-  requiresCadVisualValidation,
+  CadVisualAuditTrail,
+  type VisualAuditOptions,
+  visualValidationInstruction,
   visualValidationRepairInstruction,
 } from '../server/visual-audit.ts';
+import { writeUnifiedBuildFixture } from './unified-build-fixture.ts';
+
+const SKILLS_ROOT = resolve(import.meta.dirname, '..', 'skills');
+const RENDER_SCRIPT = join(SKILLS_ROOT, 'text-a3d', 'render_preview.py');
+const SHAPE_SCRIPT = join(SKILLS_ROOT, 'text-a3d', 'shape_consistency.py');
+
+function digest(value: string | Buffer): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function assistantTool(
   name: string,
@@ -33,7 +49,7 @@ function imageReadResult(id = 'call-read') {
 
 function bashResult(id = 'call-bash') {
   return {
-    content: [{ text: 'rendered', type: 'text' }],
+    content: [{ text: 'ok', type: 'text' }],
     isError: false,
     role: 'toolResult',
     toolCallId: id,
@@ -41,183 +57,954 @@ function bashResult(id = 'call-bash') {
   };
 }
 
-test('requires visual validation for referenced and appearance-sensitive CAD', () => {
-  assert.equal(requiresCadVisualValidation('根据图片生成一个模型文件', 1), true);
-  assert.equal(requiresCadVisualValidation('建模并复刻这个外观', 0), true);
-  assert.equal(requiresCadVisualValidation('做一个多色 3MF', 0), true);
-  assert.equal(requiresCadVisualValidation('做一个多色模型', 0), true);
-  assert.equal(requiresCadVisualValidation('分析这张普通照片', 1), false);
-  assert.equal(
-    requiresCadVisualValidation('创建一个 CAD 支架，不用视觉检查', 1),
-    false,
+function cadCompileResult(
+  renderReport: string,
+  pass = true,
+  id = 'call-cad-compile',
+  runIdOverride?: string,
+) {
+  const buildReport = renderReport.replace(/_render\.json$/u, '_report.json');
+  const buildReportBytes = readFileSync(buildReport);
+  const runId = (
+    JSON.parse(buildReportBytes.toString('utf8')) as { runId?: unknown }
+  ).runId;
+  return {
+    content: [{ text: pass ? 'CAD compile passed' : 'CAD compile failed', type: 'text' }],
+    details: {
+      artifacts: pass
+        ? {
+            buildReport: {
+              path: buildReport,
+              sha256: digest(buildReportBytes),
+            },
+            renderEvidence: {
+              path: renderReport,
+              sha256: digest(readFileSync(renderReport)),
+            },
+          }
+        : {},
+      pass,
+      runId: runIdOverride ?? runId,
+      schema: 'evidence-cad-compile-result/v1',
+      status: pass ? 'awaiting-visual-review' : 'failed',
+    },
+    isError: false,
+    role: 'toolResult',
+    toolCallId: id,
+    toolName: 'cad_compile',
+  };
+}
+
+function referenceAnalyzeResult(
+  reportPath: string,
+  reportSha256: string,
+  sourcePath: string,
+  sourceSha256: string,
+  id = 'call-reference',
+) {
+  return {
+    content: [{ text: 'Reference analysis passed', type: 'text' }],
+    details: {
+      artifacts: {
+        report: { path: reportPath, sha256: reportSha256 },
+      },
+      pass: true,
+      schema: 'evidence-reference-analysis-tool-result/v1',
+      source: { path: sourcePath, sha256: sourceSha256 },
+    },
+    isError: false,
+    role: 'toolResult',
+    toolCallId: id,
+    toolName: 'reference_analyze',
+  };
+}
+
+function captureMessages(messages: readonly unknown[], workspaceRoot: string) {
+  const trail = new CadVisualAuditTrail(workspaceRoot);
+  for (const message of messages) trail.record(message);
+  return trail.entries;
+}
+
+async function auditMessages(
+  messages: readonly unknown[],
+  options: VisualAuditOptions,
+) {
+  return await auditCadVisualValidation(
+    captureMessages(messages, options.workspaceRoot),
+    options,
   );
-  assert.equal(
-    requiresCadVisualValidation('创建一个 CAD 支架，不用做本地验收', 1),
-    false,
+}
+
+interface EvidenceFixture {
+  display: string;
+  messages: unknown[];
+  options: VisualAuditOptions;
+  preview: string;
+  renderReport: string;
+  root: string;
+  runId: string;
+}
+
+async function evidenceFixture(): Promise<EvidenceFixture> {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'amagine-visual-evidence-')),
   );
-  assert.equal(
-    auditCadVisualValidation([
-      assistantTool('bash', {
-        command: 'python skills/text-a3d/render_preview.py part.stl',
-      }),
-      bashResult(),
-      assistantTool('read', {
-        path: '/workspace/sessions/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93/part_views.png',
-      }),
-      imageReadResult(),
-      assistantTool('write', {
-        content: 'new source',
-        path: '/workspace/sessions/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93/part.py',
-      }),
-    ]).pass,
-    false,
+  const turnStartedAtMs = Date.now() - 1_000;
+  const build = await writeUnifiedBuildFixture({
+    backend: 'brep-part',
+    name: 'part',
+    root,
+  });
+  const display = build.displayPath;
+  const preview = join(root, 'part_views.png');
+  const renderReport = join(root, 'part_render.json');
+  const displayPayload = Buffer.from('glTF-display');
+  const previewPayload = Buffer.from('fresh-png-evidence');
+  const runId = String(build.report.runId);
+  await writeFile(preview, previewPayload);
+  await writeFile(
+    renderReport,
+    JSON.stringify({
+      meshes: [{ path: display, sha256: digest(displayPayload) }],
+      preview: { path: preview, sha256: digest(previewPayload) },
+      runId,
+      schema: 'evidence-render/v2',
+    }),
   );
-  const referenceAudit = auditCadVisualValidation(
-    [
+  const messages = [
+    assistantTool(
+      'cad_compile',
+      {
+        intent: 'intent.json',
+        marker: '.turn-marker',
+        output_dir: '.',
+        scene: 'scene.json',
+        source: 'model.py',
+      },
+      'call-cad-compile',
+    ),
+    cadCompileResult(renderReport),
+    assistantTool('read', { path: preview }, 'call-read'),
+    imageReadResult('call-read'),
+  ];
+  return {
+    display,
+    messages,
+    options: { turnStartedAtMs, workspaceRoot: root },
+    preview,
+    renderReport,
+    root,
+    runId,
+  };
+}
+
+const failedAudit = {
+  buildBound: false,
+  pass: false,
+  previewRead: false,
+  referenceAnalyzed: false,
+  renderCalled: false,
+  renderReportValid: false,
+};
+
+test('visual validation instructions require a hash-bound render report', () => {
+  assert.equal(visualValidationInstruction(false), '');
+  const instruction = visualValidationInstruction(true);
+  assert.match(instruction, /mandatory visual gate/u);
+  assert.match(instruction, /call cad_compile/u);
+  assert.match(instruction, /review the full issue set/u);
+  assert.match(instruction, /use judgment when an issue should be deferred/u);
+  assert.match(instruction, /status=awaiting-visual-review/u);
+  assert.match(instruction, /Use the read tool/u);
+  assert.doesNotMatch(instruction, /If cad_compile is unavailable/u);
+  assert.doesNotMatch(instruction, /reference_analyze\.py/u);
+  const referencedInstruction = visualValidationInstruction(true, true);
+  assert.match(referencedInstruction, /structured reference_analyze tool/u);
+  assert.doesNotMatch(referencedInstruction, /reference_analyze\.py/u);
+  assert.ok(
+    referencedInstruction.indexOf('reference_analyze tool') <
+      referencedInstruction.indexOf('call cad_compile'),
+  );
+});
+
+test('accepts successful cad_compile render evidence only after reading its exact preview', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const compileMessages = [
       assistantTool(
-        'bash',
-        { command: 'python skills/text-a3d/reference_analyze.py ref.png' },
-        'call-analyze',
+        'cad_compile',
+        {
+          intent: 'intent.json',
+          marker: '.turn-marker',
+          output_dir: '.',
+          scene: 'scene.json',
+          source: 'model.py',
+        },
+        'call-cad-compile',
       ),
-      bashResult('call-analyze'),
+      cadCompileResult(fixture.renderReport),
+    ];
+    const beforeRead = await auditMessages(
+      compileMessages,
+      fixture.options,
+    );
+    assert.equal(beforeRead.renderCalled, true);
+    assert.equal(beforeRead.renderReportValid, true);
+    assert.equal(beforeRead.buildBound, true);
+    assert.equal(beforeRead.previewRead, false);
+    assert.equal(beforeRead.pass, false);
+
+    assert.deepEqual(
+      await auditMessages(
+        [
+          ...compileMessages,
+          assistantTool('read', { path: fixture.preview }, 'call-read'),
+          imageReadResult('call-read'),
+        ],
+        fixture.options,
+      ),
+      {
+        buildBound: true,
+        pass: true,
+        previewRead: true,
+        referenceAnalyzed: false,
+        renderCalled: true,
+        renderReportValid: true,
+      },
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('does not accept failed cad_compile output as render evidence', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    assert.deepEqual(
+      await auditMessages(
+        [
+          assistantTool(
+            'cad_compile',
+            {
+              intent: 'intent.json',
+              marker: '.turn-marker',
+              output_dir: '.',
+              scene: 'scene.json',
+              source: 'model.py',
+            },
+            'call-cad-compile',
+          ),
+          cadCompileResult(fixture.renderReport, false),
+          assistantTool('read', { path: fixture.preview }, 'call-read'),
+          imageReadResult('call-read'),
+        ],
+        fixture.options,
+      ),
+      failedAudit,
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('accepts only a fresh render report, exact preview read, and latest build display binding', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    assert.deepEqual(
+      await auditMessages(fixture.messages, fixture.options),
+      {
+        buildBound: true,
+        pass: true,
+        previewRead: true,
+        referenceAnalyzed: false,
+        renderCalled: true,
+        renderReportValid: true,
+      },
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('direct render commands cannot replace a successful cad_compile result', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    assert.deepEqual(
+      await auditMessages(
+        [
+          assistantTool(
+            'bash',
+            {
+              command: `true # python render_preview.py "${fixture.display}" --report "${fixture.renderReport}"`,
+            },
+            'call-render',
+          ),
+          bashResult('call-render'),
+          assistantTool('read', { path: fixture.preview }, 'call-read'),
+          imageReadResult('call-read'),
+        ],
+        fixture.options,
+      ),
+      failedAudit,
+    );
+    assert.deepEqual(
+      await auditMessages(
+        [
+          assistantTool(
+            'bash',
+            {
+              command: `python "${RENDER_SCRIPT}" "${fixture.display}" --out "${fixture.preview}" --report "${fixture.renderReport}"`,
+            },
+            'call-render',
+          ),
+          bashResult('call-render'),
+          assistantTool('read', { path: fixture.preview }, 'call-read'),
+          imageReadResult('call-read'),
+        ],
+        fixture.options,
+      ),
+      failedAudit,
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('rejects fake scripts, interpreter wrappers, flags, and shell composition', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const fakeScript = join(fixture.root, 'render_preview.py');
+    const fakeInterpreter = join(fixture.root, 'python');
+    await writeFile(fakeScript, 'raise SystemExit(0)\n');
+    await writeFile(fakeInterpreter, '#!/bin/sh\nexit 0\n');
+    const commands = [
+      `python "${fakeScript}" "${fixture.display}" --out "${fixture.preview}" --report "${fixture.renderReport}"`,
+      `"${fakeInterpreter}" "${RENDER_SCRIPT}" "${fixture.display}" --out "${fixture.preview}" --report "${fixture.renderReport}"`,
+      `python -u "${RENDER_SCRIPT}" "${fixture.display}" --out "${fixture.preview}" --report "${fixture.renderReport}"`,
+      `python "${RENDER_SCRIPT}" "${fixture.display}" --out "${fixture.preview}" --report "${fixture.renderReport}"\ntrue`,
+      `python "${RENDER_SCRIPT}" "${fixture.display}" --out "${fixture.preview}" --report "${fixture.renderReport}" \`true\``,
+    ];
+    for (const command of commands) {
+      const messages = [
+        assistantTool('bash', { command }, 'call-render'),
+        bashResult('call-render'),
+        assistantTool('read', { path: fixture.preview }, 'call-read'),
+        imageReadResult('call-read'),
+      ];
+      const audit = await auditMessages(messages, fixture.options);
+      assert.equal(audit.renderCalled, false, command);
+      assert.equal(audit.pass, false, command);
+    }
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('old reports and previews cannot pass in a new turn', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const audit = await auditMessages(fixture.messages, {
+      ...fixture.options,
+      turnStartedAtMs: Date.now() + 10_000,
+    });
+    assert.equal(audit.renderCalled, true);
+    assert.equal(audit.renderReportValid, false);
+    assert.equal(audit.previewRead, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('a fresh render cannot reuse a build report from an earlier turn', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const old = new Date(Date.now() - 10_000);
+    await utimes(join(fixture.root, 'part_report.json'), old, old);
+    const turnStartedAtMs = Date.now() - 100;
+    const previewPayload = Buffer.from('new-render-of-an-old-build');
+    await writeFile(fixture.preview, previewPayload);
+    await writeFile(
+      fixture.renderReport,
+      JSON.stringify({
+        meshes: [
+          {
+            path: fixture.display,
+            sha256: digest(Buffer.from('glTF-display')),
+          },
+        ],
+        preview: {
+          path: fixture.preview,
+          sha256: digest(previewPayload),
+        },
+        runId: fixture.runId,
+        schema: 'evidence-render/v2',
+      }),
+    );
+    const audit = await auditMessages(
+      [
+        fixture.messages[0],
+        cadCompileResult(fixture.renderReport),
+        fixture.messages[2],
+        fixture.messages[3],
+      ],
+      {
+        ...fixture.options,
+        turnStartedAtMs,
+      },
+    );
+    assert.equal(audit.renderReportValid, true);
+    assert.equal(audit.previewRead, true);
+    assert.equal(audit.buildBound, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('a fresh report cannot relabel an old build artifact as current', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const old = new Date(Date.now() - 10_000);
+    await utimes(fixture.display, old, old);
+    const turnStartedAtMs = Date.now() - 100;
+    const current = new Date();
+    await utimes(join(fixture.root, 'part_report.json'), current, current);
+    await utimes(fixture.preview, current, current);
+    await utimes(fixture.renderReport, current, current);
+    const audit = await auditMessages(fixture.messages, {
+      ...fixture.options,
+      turnStartedAtMs,
+    });
+    assert.equal(audit.renderReportValid, true);
+    assert.equal(audit.previewRead, true);
+    assert.equal(audit.buildBound, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('preview path and hash must match both evidence report and read call', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const otherPreview = join(fixture.root, 'other.png');
+    await writeFile(otherPreview, 'another image');
+    const wrongRead = structuredClone(fixture.messages) as Array<{
+      content?: Array<{ arguments?: { path?: string } }>;
+    }>;
+    wrongRead[2]!.content![0]!.arguments!.path = otherPreview;
+    const readAudit = await auditMessages(wrongRead, fixture.options);
+    assert.equal(readAudit.renderReportValid, true);
+    assert.equal(readAudit.previewRead, false);
+    assert.equal(readAudit.pass, false);
+
+    await writeFile(fixture.preview, 'tampered after render');
+    const hashAudit = await auditMessages(
+      fixture.messages,
+      fixture.options,
+    );
+    assert.equal(hashAudit.renderReportValid, false);
+    assert.equal(hashAudit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('read-time snapshot rejects a preview and report replaced after the read', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+
+    const replacement = Buffer.from('replacement-preview-after-read');
+    await writeFile(fixture.preview, replacement);
+    await writeFile(
+      fixture.renderReport,
+      JSON.stringify({
+        meshes: [
+          {
+            path: fixture.display,
+            sha256: digest(Buffer.from('glTF-display')),
+          },
+        ],
+        preview: {
+          path: fixture.preview,
+          sha256: digest(replacement),
+        },
+        schema: 'evidence-render/v2',
+      }),
+    );
+
+    const audit = await auditCadVisualValidation(
+      trail.entries,
+      fixture.options,
+    );
+    assert.equal(audit.renderReportValid, false);
+    assert.equal(audit.previewRead, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('a display artifact replaced after compile and preview read fails closed', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+    await writeFile(fixture.display, 'replacement-display-after-read');
+    const audit = await auditCadVisualValidation(
+      trail.entries,
+      fixture.options,
+    );
+    assert.equal(audit.renderReportValid, true);
+    assert.equal(audit.previewRead, true);
+    assert.equal(audit.buildBound, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('render meshes bind the exact cad_compile build even if another report appears', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    await writeUnifiedBuildFixture({
+      backend: 'brep-part',
+      name: 'newer',
+      root: fixture.root,
+    });
+    const audit = await auditMessages(
+      fixture.messages,
+      fixture.options,
+    );
+    assert.equal(audit.renderReportValid, true);
+    assert.equal(audit.previewRead, true);
+    assert.equal(audit.buildBound, true);
+    assert.equal(audit.pass, true);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('cad_compile evidence binds exact report bytes and compile runId', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const wrongRun = await auditMessages(
+      [
+        fixture.messages[0],
+        cadCompileResult(
+          fixture.renderReport,
+          true,
+          'call-cad-compile',
+          '11111111-1111-4111-8111-111111111111',
+        ),
+        fixture.messages[2],
+        fixture.messages[3],
+      ],
+      fixture.options,
+    );
+    assert.equal(wrongRun.renderReportValid, false);
+    assert.equal(wrongRun.buildBound, false);
+    assert.equal(wrongRun.pass, false);
+
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+    const buildReport = join(fixture.root, 'part_report.json');
+    const replacement = JSON.parse(
+      readFileSync(buildReport, 'utf8'),
+    ) as Record<string, unknown>;
+    replacement.runId = '22222222-2222-4222-8222-222222222222';
+    await writeFile(buildReport, JSON.stringify(replacement));
+    const overwritten = await auditCadVisualValidation(
+      trail.entries,
+      fixture.options,
+    );
+    assert.equal(overwritten.renderReportValid, true);
+    assert.equal(overwritten.buildBound, false);
+    assert.equal(overwritten.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('render evidence must carry the exact cad_compile runId', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const report = JSON.parse(
+      readFileSync(fixture.renderReport, 'utf8'),
+    ) as Record<string, unknown>;
+    report.runId = '22222222-2222-4222-8222-222222222222';
+    await writeFile(fixture.renderReport, JSON.stringify(report));
+    const messages = [
+      fixture.messages[0],
+      cadCompileResult(fixture.renderReport),
+      fixture.messages[2],
+      fixture.messages[3],
+    ];
+
+    const audit = await auditMessages(messages, fixture.options);
+    assert.equal(audit.renderReportValid, false);
+    assert.equal(audit.buildBound, false);
+    assert.equal(audit.pass, false);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('evidence files disappearing during audit fail closed', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const trail = new CadVisualAuditTrail(fixture.root);
+    for (const message of fixture.messages) trail.record(message);
+    await rm(fixture.renderReport);
+    assert.deepEqual(
+      await auditCadVisualValidation(trail.entries, fixture.options),
+      {
+        buildBound: false,
+        pass: false,
+        previewRead: false,
+        referenceAnalyzed: false,
+        renderCalled: true,
+        renderReportValid: false,
+      },
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test('reference CAD requires hash-bound structured reference_analyze evidence before compile', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const reference = join(fixture.root, 'reference.png');
+    const referencePayload = Buffer.from('uploaded-reference-image');
+    const referenceSha256 = digest(referencePayload);
+    const referenceReport = join(fixture.root, 'reference_analysis.json');
+    await writeFile(reference, referencePayload);
+    const withoutReference = await auditMessages(
+      fixture.messages,
+      {
+        ...fixture.options,
+        referenceImages: [
+          { path: reference, sha256: referenceSha256 },
+        ],
+        requireReferenceAnalysis: true,
+      },
+    );
+    assert.equal(withoutReference.pass, false);
+    assert.equal(withoutReference.referenceAnalyzed, false);
+
+    const referenceReportPayload = JSON.stringify({
+      image: { sha256: referenceSha256 },
+      schema: 'evidence-reference-analysis/v1',
+      source: { path: reference, sha256: referenceSha256 },
+    });
+    await writeFile(referenceReport, referenceReportPayload);
+    const withReference = [
+      assistantTool(
+        'reference_analyze',
+        {
+          expected_sha256: referenceSha256,
+          image: 'reference.png',
+          report: 'reference_analysis.json',
+        },
+        'call-reference',
+      ),
+      referenceAnalyzeResult(
+        referenceReport,
+        digest(referenceReportPayload),
+        reference,
+        referenceSha256,
+      ),
+      ...fixture.messages,
+    ];
+    const referenceOptions = {
+      ...fixture.options,
+      referenceImages: [
+        { path: reference, sha256: referenceSha256 },
+      ],
+      requireReferenceAnalysis: true,
+    };
+    const lateAnalysis = await auditMessages(withReference, referenceOptions);
+    assert.equal(lateAnalysis.referenceAnalyzed, false);
+    assert.equal(lateAnalysis.pass, false);
+
+    const orderedAt = Date.now();
+    await utimes(
+      referenceReport,
+      new Date(orderedAt - 400),
+      new Date(orderedAt - 400),
+    );
+    await utimes(
+      join(fixture.root, 'part_report.json'),
+      new Date(orderedAt - 300),
+      new Date(orderedAt - 300),
+    );
+    await utimes(
+      fixture.preview,
+      new Date(orderedAt - 200),
+      new Date(orderedAt - 200),
+    );
+    await utimes(
+      fixture.renderReport,
+      new Date(orderedAt - 100),
+      new Date(orderedAt - 100),
+    );
+    const audit = await auditMessages(withReference, referenceOptions);
+    assert.equal(audit.referenceAnalyzed, true);
+    assert.equal(audit.pass, true);
+
+    const mismatchedResultId = [
+      withReference[0],
+      referenceAnalyzeResult(
+        referenceReport,
+        digest(referenceReportPayload),
+        reference,
+        referenceSha256,
+        'call-reference-other',
+      ),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(mismatchedResultId, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const wrongArtifactHash = [
+      withReference[0],
+      referenceAnalyzeResult(
+        referenceReport,
+        '0'.repeat(64),
+        reference,
+        referenceSha256,
+      ),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(wrongArtifactHash, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const wrongSourceHash = [
+      withReference[0],
+      referenceAnalyzeResult(
+        referenceReport,
+        digest(referenceReportPayload),
+        reference,
+        'f'.repeat(64),
+      ),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(wrongSourceHash, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const shellOnly = [
       assistantTool(
         'bash',
         {
-          command:
-            'python skills/text-a3d/render_preview.py part.stl --out part_views.png',
+          command: `python reference_analyze.py "${reference}" --out "${referenceReport}"`,
         },
-        'call-render',
+        'call-reference-shell',
       ),
-      bashResult('call-render'),
-      assistantTool('read', {
-        path: '/workspace/sessions/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93/part_views.png',
-      }),
-      imageReadResult(),
-    ],
-    { requireReferenceAnalysis: true },
-  );
-  assert.deepEqual(referenceAudit, {
-    pass: true,
-    previewRead: true,
-    referenceAnalyzed: true,
-    renderCalled: true,
-  });
+      bashResult('call-reference-shell'),
+      ...fixture.messages,
+    ];
+    assert.equal(
+      (
+        await auditMessages(shellOnly, {
+          ...fixture.options,
+          referenceImages: [
+            { path: reference, sha256: referenceSha256 },
+          ],
+          requireReferenceAnalysis: true,
+        })
+      ).referenceAnalyzed,
+      false,
+    );
+
+    const afterCompile = [
+      ...fixture.messages.slice(0, 2),
+      ...withReference.slice(0, 2),
+      ...fixture.messages.slice(2),
+    ];
+    assert.equal(
+      (
+        await auditMessages(afterCompile, referenceOptions)
+      ).referenceAnalyzed,
+      false,
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
 });
 
-test('visual audit requires preview render followed by preview read', () => {
-  assert.deepEqual(auditCadVisualValidation([]), {
-    pass: false,
-    previewRead: false,
-    referenceAnalyzed: false,
-    renderCalled: false,
-  });
-  assert.deepEqual(
-    auditCadVisualValidation([
-      assistantTool('read', { path: '/tmp/reference.png' }),
-      imageReadResult(),
-      assistantTool('bash', {
-        command: 'python skills/text-a3d/render_preview.py part.stl',
-      }),
-      bashResult(),
-    ]),
-    {
-      pass: false,
-      previewRead: false,
-      referenceAnalyzed: false,
-      renderCalled: true,
-    },
-  );
-  assert.deepEqual(
-    auditCadVisualValidation([
-      assistantTool('bash', {
-        command:
-          'python skills/text-a3d/render_preview.py part.stl --out part_views.png',
-      }),
-      bashResult(),
-      assistantTool('read', {
-        path: '/workspace/sessions/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93/part_views.png',
-      }),
-      imageReadResult(),
-    ]),
-    {
-      pass: true,
-      previewRead: true,
-      referenceAnalyzed: false,
-      renderCalled: true,
-    },
-  );
-  assert.equal(
-    auditCadVisualValidation([
-      assistantTool('bash', {
-        command: 'python skills/text-a3d/render_preview.py part.stl',
-      }),
-      bashResult(),
-      assistantTool('read', {
-        path: '/workspace/sessions/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93/part_views.png',
-      }),
-      {
-        content: [{ text: 'file not found', type: 'text' }],
-        isError: true,
-        role: 'toolResult',
-        toolCallId: 'call-read',
-        toolName: 'read',
-      },
-    ]).pass,
-    false,
-  );
-  assert.equal(
-    auditCadVisualValidation(
-      [
-        assistantTool('bash', {
-          command:
-            'python skills/text-a3d/render_preview.py part.stl --out part_views.png',
-        }),
-        bashResult(),
-        assistantTool('read', {
-          path: '/workspace/sessions/3b0d4f25-1707-4cc8-92cf-6f5c28edfc93/part_views.png',
-        }),
-        imageReadResult(),
+test('a malformed earlier reference report does not poison a corrected repair', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    const reference = join(fixture.root, 'reference.png');
+    const referencePayload = Buffer.from('uploaded-reference-image');
+    const referenceSha256 = digest(referencePayload);
+    const badReport = join(fixture.root, 'bad-reference.json');
+    const goodReport = join(fixture.root, 'good-reference.json');
+    await writeFile(reference, referencePayload);
+    const badReportPayload = '{}';
+    const goodReportPayload = JSON.stringify({
+      image: { sha256: referenceSha256 },
+      schema: 'evidence-reference-analysis/v1',
+      source: { path: reference, sha256: referenceSha256 },
+    });
+    await writeFile(badReport, badReportPayload);
+    await writeFile(goodReport, goodReportPayload);
+    const orderedAt = Date.now();
+    await utimes(
+      goodReport,
+      new Date(orderedAt - 400),
+      new Date(orderedAt - 400),
+    );
+    await utimes(
+      join(fixture.root, 'part_report.json'),
+      new Date(orderedAt - 300),
+      new Date(orderedAt - 300),
+    );
+    await utimes(
+      fixture.preview,
+      new Date(orderedAt - 200),
+      new Date(orderedAt - 200),
+    );
+    await utimes(
+      fixture.renderReport,
+      new Date(orderedAt - 100),
+      new Date(orderedAt - 100),
+    );
+    const messages = [
+      assistantTool(
+        'reference_analyze',
+        {
+          expected_sha256: referenceSha256,
+          image: reference,
+          report: 'bad-reference.json',
+        },
+        'call-reference-bad',
+      ),
+      referenceAnalyzeResult(
+        badReport,
+        digest(badReportPayload),
+        reference,
+        referenceSha256,
+        'call-reference-bad',
+      ),
+      assistantTool(
+        'reference_analyze',
+        {
+          expected_sha256: referenceSha256,
+          image: reference,
+          report: 'good-reference.json',
+        },
+        'call-reference-good',
+      ),
+      referenceAnalyzeResult(
+        goodReport,
+        digest(goodReportPayload),
+        reference,
+        referenceSha256,
+        'call-reference-good',
+      ),
+      ...fixture.messages,
+    ];
+    const audit = await auditMessages(messages, {
+      ...fixture.options,
+      referenceImages: [
+        { path: reference, sha256: referenceSha256 },
       ],
-      { requireReferenceAnalysis: true },
-    ).pass,
-    false,
-  );
+      requireReferenceAnalysis: true,
+    });
+    assert.equal(audit.referenceAnalyzed, true);
+    assert.equal(audit.pass, true);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
 });
 
-test('visual repair instruction names missing evidence and attempt budget', () => {
-  const instruction = visualValidationRepairInstruction(
-    {
-      pass: false,
-      previewRead: false,
-      referenceAnalyzed: false,
-      renderCalled: false,
-    },
-    {
-      attempt: 2,
-      maxAttempts: 3,
-      requireReferenceAnalysis: true,
-    },
-  );
+test('any post-compile mutation or bash command invalidates compile evidence', async () => {
+  const fixture = await evidenceFixture();
+  try {
+    assert.equal(
+      (
+        await auditMessages(
+          [
+            ...fixture.messages,
+            assistantTool('write', {
+              content: 'post-review bytes',
+              path: join(fixture.root, 'notes.txt'),
+            }),
+          ],
+          fixture.options,
+        )
+      ).pass,
+      false,
+    );
+    assert.equal(
+      (
+        await auditMessages(
+          [
+            ...fixture.messages,
+            assistantTool(
+              'bash',
+              { command: 'sed -i.bak s/old/new/ model.obj' },
+              'call-shell-mutation',
+            ),
+            bashResult('call-shell-mutation'),
+          ],
+          fixture.options,
+        )
+      ).pass,
+      false,
+    );
+    assert.equal(
+      (
+        await auditMessages(
+          [
+            ...fixture.messages,
+            assistantTool(
+              'bash',
+              {
+                command: `python "${SHAPE_SCRIPT}" --manifest scene.json`,
+              },
+              'call-shape',
+            ),
+            bashResult('call-shape'),
+          ],
+          fixture.options,
+        )
+      ).pass,
+      false,
+    );
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
 
-  assert.match(instruction, /attempt 2\/3/);
-  assert.match(instruction, /reference_analyze\.py/);
-  assert.match(instruction, /render_preview\.py/);
-  assert.match(instruction, /read tool/);
-
-  const readOnlyRepair = visualValidationRepairInstruction(
-    {
-      pass: false,
-      previewRead: false,
-      referenceAnalyzed: true,
-      renderCalled: true,
-    },
-    {
-      attempt: 1,
-      maxAttempts: 3,
-      requireReferenceAnalysis: true,
-    },
-  );
-  assert.doesNotMatch(readOnlyRepair, /run the selected skill's reference_analyze/);
-  assert.doesNotMatch(readOnlyRepair, /render a fresh preview/);
-  assert.match(readOnlyRepair, /read tool/);
+test('visual repair instruction names file evidence and attempt budget', () => {
+  const instruction = visualValidationRepairInstruction(failedAudit, {
+    attempt: 2,
+    maxAttempts: 3,
+    requireReferenceAnalysis: true,
+  });
+  assert.match(instruction, /attempt 2\/3/u);
+  assert.match(instruction, /structured reference_analyze tool/u);
+  assert.doesNotMatch(instruction, /reference_analyze\.py/u);
+  assert.match(instruction, /evidence-render\/v2/u);
+  assert.match(instruction, /evidence-a3d-build\/v1/u);
+  assert.match(instruction, /read tool/u);
+  assert.match(instruction, /then rebuild the final CAD/u);
 });

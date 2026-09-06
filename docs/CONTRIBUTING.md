@@ -2,7 +2,7 @@
 
 > **简体中文**：[查看中文版](./CONTRIBUTING.zh-CN.md)
 
-Use Node.js 20.19 or newer, Python 3.10 through 3.13, and npm.
+Use Node.js 22.19.0 or newer, Python 3.10 through 3.13, and npm.
 
 ```bash
 npm ci

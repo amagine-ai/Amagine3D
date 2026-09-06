@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   SessionManager,
   parseSessionEntries,
+  stripInternalPromptSuffix,
   type SessionInfo,
 } from '@amagine3d/a3d-runtime';
 
@@ -25,9 +26,6 @@ import {
 } from '../src/lib/chat-turn.ts';
 
 const BUILTIN_CREATED_AT = '2026-08-19T15:34:44.000Z';
-const INTERNAL_PROMPT_SUFFIX =
-  /\n*<(?:uploaded_image_files|web_reference_(?:mode|repair)|visual_validation_(?:required|repair))\b[\s\S]*$/u;
-
 export const BUILTIN_POMODORO_SESSION: SessionSummary = {
   createdAt: BUILTIN_CREATED_AT,
   id: BUNDLED_POMODORO_SESSION_ID,
@@ -39,7 +37,7 @@ export const BUILTIN_POMODORO_SESSION: SessionSummary = {
 };
 
 function visibleUserText(value: string): string {
-  return value.replace(INTERNAL_PROMPT_SUFFIX, '').trim();
+  return stripInternalPromptSuffix(value);
 }
 
 function cleanTitle(value: string): string {

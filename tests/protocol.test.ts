@@ -11,6 +11,7 @@ test('accepts a valid chat request', () => {
     isChatRequest({
       message: '创建一个 CAD 零件',
       sessionId: '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93',
+      taskType: 'cad',
     }),
     true,
   );
@@ -18,7 +19,16 @@ test('accepts a valid chat request', () => {
     isChatRequest({
       message: '搜索产品尺寸后建模',
       sessionId: '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93',
+      taskType: 'cad',
       webSearchEnabled: true,
+    }),
+    true,
+  );
+  assert.equal(
+    isChatRequest({
+      message: '解释一下 BRep 和 mesh 的区别',
+      sessionId: '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93',
+      taskType: 'chat',
     }),
     true,
   );
@@ -36,6 +46,7 @@ test('accepts image attachments, including an image-only request', () => {
       ],
       message: '',
       sessionId: '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93',
+      taskType: 'cad',
     }),
     true,
   );
@@ -44,11 +55,24 @@ test('accepts image attachments, including an image-only request', () => {
 test('rejects malformed or empty chat requests', () => {
   assert.equal(isChatRequest({ message: '', sessionId: crypto.randomUUID() }), false);
   assert.equal(isChatRequest({ message: 'hello', sessionId: 'not-a-uuid' }), false);
+  assert.equal(
+    isChatRequest({ message: 'hello', sessionId: crypto.randomUUID() }),
+    false,
+  );
+  assert.equal(
+    isChatRequest({
+      message: 'hello',
+      sessionId: crypto.randomUUID(),
+      taskType: 'analysis',
+    }),
+    false,
+  );
   assert.equal(isChatRequest(null), false);
   assert.equal(
     isChatRequest({
       message: 'hello',
       sessionId: crypto.randomUUID(),
+      taskType: 'chat',
       webSearchEnabled: 'true',
     }),
     false,
@@ -58,6 +82,7 @@ test('rejects malformed or empty chat requests', () => {
       images: [{ data: 'not base64!', mimeType: 'image/png', name: 'part.png' }],
       message: '查看图片',
       sessionId: crypto.randomUUID(),
+      taskType: 'chat',
     }),
     false,
   );
@@ -72,6 +97,7 @@ test('rejects malformed or empty chat requests', () => {
       ],
       message: '查看图片',
       sessionId: crypto.randomUUID(),
+      taskType: 'chat',
     }),
     false,
   );
@@ -85,14 +111,16 @@ test('parses provider/model while preserving slashes in model id', () => {
   assert.throws(() => parseModelSpec('gpt-5.5'), /provider\/model/);
 });
 
-test('PI discovers the copied repository skills', () => {
+test('PI discovers one unified semantic-scene CAD skill', () => {
   const result = loadSkillsFromDir({
     dir: resolve(import.meta.dirname, '..', 'skills'),
     source: 'test',
   });
-  assert.deepEqual(
-    result.skills.map((skill) => skill.name).sort(),
-    ['text-a3d', 'text-a3d-color'],
+  assert.deepEqual(result.skills.map((skill) => skill.name), ['text-a3d']);
+  assert.match(result.skills[0]?.description ?? '', /semantic-scene/u);
+  assert.match(
+    result.skills[0]?.filePath ?? '',
+    /skills[/\\]text-a3d[/\\]SKILL\.md$/u,
   );
   assert.deepEqual(result.diagnostics, []);
 });

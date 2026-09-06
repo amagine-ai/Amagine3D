@@ -3,7 +3,10 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import trash from 'trash';
 
-import { SessionManager } from '@amagine3d/a3d-runtime';
+import {
+  cadIntentStatePath,
+  SessionManager,
+} from '@amagine3d/a3d-runtime';
 
 import { USER_SESSION_ID } from '../src/session-id.ts';
 import { sessionWorkspaceRoot } from './sessions.ts';
@@ -64,6 +67,10 @@ export async function moveSessionsToTrash(
       const path = await existingPath(workspace);
       if (path) trashPaths.push(path);
     }
+    const intentState = await existingPath(
+      cadIntentStatePath(sessionRoot, sessionId),
+    );
+    if (intentState) trashPaths.push(intentState);
   }
 
   await moveToTrash(trashPaths);

@@ -150,6 +150,7 @@ test('chat reports a failed message_end instead of a false complete event', asyn
       body: JSON.stringify({
         message: 'Create a test part.',
         sessionId: SESSION_ID,
+        taskType: 'chat',
       }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
@@ -168,6 +169,166 @@ test('chat reports a failed message_end instead of a false complete event', asyn
     assert.equal(terminal.message, 'provider request failed');
     assert.equal(typeof terminal.finishedAt, 'number');
     assert.ok(persistedStatuses.includes('failed'));
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    if (previousApiKey === undefined) delete process.env.LLM_API_KEY;
+    else process.env.LLM_API_KEY = previousApiKey;
+  }
+});
+
+test('idle timeout aborts once and cannot enter web or visual repair prompts', async () => {
+  const prompts: string[] = [];
+  let abortCalls = 0;
+  let releasePrompt!: () => void;
+  const blockedPrompt = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  const session = {
+    abort: async () => {
+      abortCalls += 1;
+      releasePrompt();
+    },
+    abortBash: () => undefined,
+    abortCompaction: () => undefined,
+    dispose: () => undefined,
+    messages: [],
+    prompt: async (prompt: string) => {
+      prompts.push(prompt);
+      await blockedPrompt;
+    },
+    sessionManager: {
+      appendCustomEntry: () => undefined,
+    },
+    subscribe: () => () => undefined,
+  } as unknown as AgentSession;
+  const runtime = {
+    createSession: async () => session,
+    modelName: 'openai/test-model',
+    skills: [],
+    stateRoot: '/tmp/amagine3d-test-state',
+    workspaceRoot: '/tmp/amagine3d-test-workspace',
+  } as unknown as PiRuntime;
+  const app = express();
+  app.use(express.json());
+  registerChatRoute(app, {
+    abortGraceMs: 100,
+    firstBuildReminderMs: 0,
+    python: { executable: 'python', ready: true, version: '3.13' },
+    runtime,
+    runtimeError: undefined,
+    timeouts: { hardTimeoutMs: 500, idleTimeoutMs: 40 },
+  });
+
+  const previousApiKey = process.env.LLM_API_KEY;
+  const previousTavilyKey = process.env.TAVILY_API_KEY;
+  process.env.LLM_API_KEY = 'test-key';
+  process.env.TAVILY_API_KEY = 'test-key';
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${String(port)}/api/chat`, {
+      body: JSON.stringify({
+        message: 'Create a CAD model.',
+        sessionId: SESSION_ID,
+        taskType: 'cad',
+        webSearchEnabled: true,
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    });
+    const events = (await response.text())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as AgentEvent);
+
+    assert.equal(prompts.length, 1);
+    assert.equal(abortCalls, 1);
+    const terminal = events.at(-1);
+    assert.equal(terminal?.type, 'error');
+    if (terminal?.type !== 'error') throw new Error('Expected an error event.');
+    assert.equal(terminal.code, 'run_timeout');
+    assert.match(terminal.message, /没有模型或工具进展/u);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    if (previousApiKey === undefined) delete process.env.LLM_API_KEY;
+    else process.env.LLM_API_KEY = previousApiKey;
+    if (previousTavilyKey === undefined) delete process.env.TAVILY_API_KEY;
+    else process.env.TAVILY_API_KEY = previousTavilyKey;
+  }
+});
+
+test('cad task type enforces visual validation without prompt keyword inference', async () => {
+  const messages: unknown[] = [];
+  const prompts: string[] = [];
+  const session = {
+    abort: async () => undefined,
+    dispose: () => undefined,
+    messages,
+    prompt: async (prompt: string) => {
+      prompts.push(prompt);
+      const event = assistantEnd(
+        'stop',
+        undefined,
+        'No visual tool evidence was produced.',
+      );
+      if (event.type !== 'message_end') throw new Error('Invalid test event.');
+      messages.push(event.message);
+    },
+    sessionManager: {
+      appendCustomEntry: () => undefined,
+    },
+    subscribe: () => () => undefined,
+  } as unknown as AgentSession;
+  const runtime = {
+    createSession: async () => session,
+    modelName: 'openai/test-model',
+    skills: [],
+    stateRoot: '/tmp/amagine3d-test-state',
+    workspaceRoot: '/tmp/amagine3d-test-workspace',
+  } as unknown as PiRuntime;
+  const app = express();
+  app.use(express.json());
+  registerChatRoute(app, {
+    python: { executable: 'python', ready: true, version: '3.13' },
+    runtime,
+    runtimeError: undefined,
+  });
+
+  const previousApiKey = process.env.LLM_API_KEY;
+  process.env.LLM_API_KEY = 'test-key';
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${String(port)}/api/chat`, {
+      body: JSON.stringify({
+        message: 'hello',
+        sessionId: SESSION_ID,
+        taskType: 'cad',
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    });
+    const events = (await response.text())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as AgentEvent);
+
+    assert.equal(response.status, 200);
+    assert.equal(prompts.length, 4);
+    assert.match(prompts[0] ?? '', /<visual_validation_required>/u);
+    assert.equal(events.some(({ type }) => type === 'complete'), false);
+    const terminal = events.at(-1);
+    assert.equal(terminal?.type, 'error');
+    if (terminal?.type !== 'error') throw new Error('Expected an error event.');
+    assert.equal(terminal.code, 'visual_validation_required');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -255,6 +416,7 @@ test('chat persists the same interleaved turn that it streams before completing'
       body: JSON.stringify({
         message: 'Create a test part.',
         sessionId: SESSION_ID,
+        taskType: 'chat',
       }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',

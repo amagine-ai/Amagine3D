@@ -3,6 +3,7 @@ import {
   MAX_IMAGE_BYTES,
   MAX_IMAGE_COUNT,
   MAX_TOTAL_IMAGE_BYTES,
+  type ChatTaskType,
   type ImageAttachment,
 } from '../src/types.ts';
 
@@ -12,6 +13,7 @@ export interface ChatRequest {
   images?: ImageAttachment[];
   message: string;
   sessionId: string;
+  taskType: ChatTaskType;
   webSearchEnabled?: boolean;
 }
 
@@ -54,6 +56,7 @@ export function isChatRequest(value: unknown): value is ChatRequest {
     images.reduce((total, image) => total + base64ByteLength(image.data), 0) <=
       MAX_TOTAL_IMAGE_BYTES &&
     (candidate.message.trim().length > 0 || images.length > 0) &&
+    (candidate.taskType === 'cad' || candidate.taskType === 'chat') &&
     (candidate.webSearchEnabled === undefined ||
       typeof candidate.webSearchEnabled === 'boolean') &&
     typeof candidate.sessionId === 'string' &&

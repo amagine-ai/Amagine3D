@@ -22,7 +22,10 @@ interface PreviewPanelProps {
   logCollapsed: boolean;
   onLogResize: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onToggleLog: () => void;
+  onTogglePrintPreview: () => void;
   previewArtifact: ArtifactSummary | undefined;
+  printPreview: boolean;
+  printPreviewAvailable: boolean;
   running: boolean;
   runtimeEntries: RuntimeEntry[];
   runtimeReady: boolean;
@@ -37,7 +40,10 @@ export function PreviewPanel({
   logCollapsed,
   onLogResize,
   onToggleLog,
+  onTogglePrintPreview,
   previewArtifact,
+  printPreview,
+  printPreviewAvailable,
   running,
   runtimeEntries,
   runtimeReady,
@@ -45,6 +51,10 @@ export function PreviewPanel({
   selectedText,
 }: PreviewPanelProps) {
   const text = translator(language);
+  const headingArtifact =
+    selectedArtifact?.kind === 'image' || selectedText !== undefined
+      ? selectedArtifact
+      : previewArtifact;
   const timeFormatter = new Intl.DateTimeFormat(
     language === 'zh' ? 'zh-CN' : 'en',
     { hour: '2-digit', minute: '2-digit', second: '2-digit' },
@@ -54,9 +64,9 @@ export function PreviewPanel({
       <header className={styles.canvasToolbar}>
         <div className={styles.canvasHeading}>
           <div className={styles.canvasHeadingCopy}>
-            <h2>{selectedArtifact?.name ?? text('Model preview', '模型预览')}</h2>
+            <h2>{headingArtifact?.name ?? text('Model preview', '模型预览')}</h2>
             <span className={styles.canvasLabel}>
-              {selectedArtifact?.path ?? connectionStatus}
+              {headingArtifact?.path ?? connectionStatus}
             </span>
           </div>
         </div>
@@ -70,6 +80,24 @@ export function PreviewPanel({
           <span className={styles.phase}>
             {running ? 'RUNNING' : runtimeReady ? 'READY' : 'OFFLINE'}
           </span>
+          <button
+            aria-checked={printPreview}
+            aria-label={text('Toggle print preview', '切换打印预览')}
+            className={styles.previewSwitch}
+            disabled={!printPreviewAvailable}
+            onClick={onTogglePrintPreview}
+            role="switch"
+            title={text(
+              'Show the 3MF or STL print package',
+              '显示 3MF 或 STL 打印文件',
+            )}
+            type="button"
+          >
+            <span>{text('Print preview', '打印预览')}</span>
+            <span aria-hidden="true" className={styles.switchTrack}>
+              <span />
+            </span>
+          </button>
         </div>
       </header>
 

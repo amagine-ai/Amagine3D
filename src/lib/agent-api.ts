@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   ArtifactCollection,
+  ChatTaskType,
   HealthResponse,
   ImageAttachment,
   ParameterBuildResult,
@@ -18,6 +19,7 @@ interface StreamAgentOptions {
   onEvent: (event: AgentEvent) => void;
   sessionId: string;
   signal: AbortSignal;
+  taskType: ChatTaskType;
   webSearchEnabled: boolean;
 }
 
@@ -136,10 +138,17 @@ export async function streamAgent({
   onEvent,
   sessionId,
   signal,
+  taskType,
   webSearchEnabled,
 }: StreamAgentOptions): Promise<void> {
   const response = await fetch('/api/chat', {
-    body: JSON.stringify({ images, message, sessionId, webSearchEnabled }),
+    body: JSON.stringify({
+      images,
+      message,
+      sessionId,
+      taskType,
+      webSearchEnabled,
+    }),
     headers: { 'Content-Type': 'application/json' },
     method: 'POST',
     signal,

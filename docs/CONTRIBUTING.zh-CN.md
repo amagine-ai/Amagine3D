@@ -2,7 +2,7 @@
 
 > **English**: [View the English version](./CONTRIBUTING.md)
 
-使用 Node.js 20.19 或更新版本、Python 3.10 至 3.13 和 npm。
+使用 Node.js 22.19.0 或更新版本、Python 3.10 至 3.13 和 npm。
 
 ```bash
 npm ci

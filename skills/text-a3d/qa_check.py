@@ -11,6 +11,14 @@ import sys
 import numpy as np
 import trimesh
 
+from build_manifest import SEMANTIC_ENVELOPE_TOLERANCE_MM
+from coordinate_frames import (
+    bounds_overlap,
+    transform_bounds,
+    validated_rigid_matrix,
+)
+from mesh_topology import MeshTopologyError, physical_body_count
+
 
 FACE_AXES = {
     "back": (1, "max"),
@@ -29,6 +37,7 @@ PLACED_OPENING_KINDS = {
     "slot",
     "window",
 }
+BUILD_SCHEMA = "evidence-a3d-build/v1"
 
 
 class Audit:
@@ -125,11 +134,22 @@ def _intent_dimensions(intent: dict | None) -> tuple[float, float, float] | None
 
 def _report_print_dimensions(
     report: dict | None,
+    artifact_key: str | None,
     part_name: str | None,
 ) -> tuple[float, float, float] | None:
-    if not isinstance(report, dict) or part_name is not None:
+    if not isinstance(report, dict):
         return None
-    value = report.get("print", {}).get("bbox_mm", {}).get("size")
+    if report.get("schema") != BUILD_SCHEMA:
+        return None
+    frame = _report_coordinate_frame(report, artifact_key)
+    if frame == "part-print" and part_name is not None:
+        record = report.get("parts", {}).get(part_name, {}).get("print")
+    elif frame == "plate-print":
+        record = report.get("backendData", {}).get("printPlate")
+    else:
+        return None
+    bounds = record.get("boundsMm", {}) if isinstance(record, dict) else {}
+    value = bounds.get("size") if isinstance(bounds, dict) else None
     if not isinstance(value, list) or len(value) != 3:
         return None
     try:
@@ -243,7 +263,11 @@ def _bbox_size(record: dict) -> list[float] | None:
 
 
 def _bbox_bounds(record: dict) -> np.ndarray | None:
-    bbox = record.get("bbox_mm", {}) if isinstance(record, dict) else {}
+    bbox = (
+        record.get("boundsMm", record.get("bbox_mm", {}))
+        if isinstance(record, dict)
+        else {}
+    )
     if not isinstance(bbox.get("min"), list) or not isinstance(bbox.get("max"), list):
         return None
     try:
@@ -259,12 +283,80 @@ def _owned_by(record: dict, part_name: str | None) -> bool:
     return part_name is None or record.get("part") == part_name
 
 
-def _report_part_for_stl(
+def _intent_feature_owners(intent: dict | None) -> dict[str, str]:
+    if not isinstance(intent, dict):
+        return {}
+    multipart = intent.get("manufacturing", {}).get("mode") == "multipart"
+    default_owner = intent.get("part") if not multipart else None
+    return {
+        item["id"]: item.get("part", default_owner)
+        for item in intent.get("features", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("part", default_owner), str)
+    }
+
+
+def _critical_feature_ids(intent: dict, part_name: str | None) -> set[str]:
+    critical = {
+        item
+        for item in intent.get("printability", {}).get("critical_features", [])
+        if isinstance(item, str) and item.strip()
+    }
+    if part_name is None:
+        return critical
+    owners = _intent_feature_owners(intent)
+    return {feature_id for feature_id in critical if owners.get(feature_id) == part_name}
+
+
+def feature_ownership_observation(intent: dict | None, report: dict | None) -> dict:
+    result = {"examined": 0, "offenders": [], "passed_feature_ids": []}
+    if not isinstance(intent, dict) or not isinstance(report, dict):
+        return result
+    expected = _intent_feature_owners(intent)
+    multipart = intent.get("manufacturing", {}).get("mode") == "multipart"
+    records: list[tuple[str, dict, str]] = []
+    records.extend(
+        (feature_id, record, "feature")
+        for feature_id, record in report.get("features", {}).items()
+        if isinstance(feature_id, str) and isinstance(record, dict)
+    )
+    records.extend(
+        (event["id"], event, f"event:{event.get('kind', 'operation')}")
+        for event in report.get("events", [])
+        if isinstance(event, dict) and isinstance(event.get("id"), str)
+    )
+    passed: set[str] = set()
+    for feature_id, record, source in records:
+        if feature_id not in expected:
+            continue
+        result["examined"] += 1
+        observed_owner = record.get("part")
+        expected_owner = expected[feature_id]
+        owner_matches = (
+            observed_owner == expected_owner
+            if multipart
+            else observed_owner in {None, expected_owner}
+        )
+        if owner_matches:
+            passed.add(feature_id)
+        else:
+            result["offenders"].append({
+                "expected_part": expected_owner,
+                "feature_id": feature_id,
+                "observed_part": observed_owner,
+                "source": source,
+            })
+    result["passed_feature_ids"] = sorted(passed)
+    return result
+
+
+def _report_artifact_for_stl(
     report: dict | None,
     stl_path: Path,
     report_dir: Path | None = None,
 ) -> str | None:
-    if report is None or report.get("schema") != "evidence-cad-assembly-build/v3":
+    if report is None or report.get("schema") != BUILD_SCHEMA:
         return None
     digest = sha256(stl_path.read_bytes()).hexdigest()
     matches = [
@@ -288,14 +380,29 @@ def _report_part_for_stl(
     if len(path_matches) == 1:
         matches = path_matches
     elif len(matches) != 1:
-        raise ValueError("assembly build report does not bind the audited STL")
-    key = matches[0]
-    if key == "stl":
+        raise ValueError("build report does not bind the audited STL")
+    return matches[0]
+
+
+def _artifact_part_name(report: dict | None, artifact_key: str | None) -> str | None:
+    if not isinstance(report, dict) or not isinstance(artifact_key, str):
         return None
-    part_name = key.removeprefix("stl:")
+    if artifact_key == "stl":
+        return None
+    part_name = artifact_key.removeprefix("stl:")
     if part_name not in report.get("parts", {}):
-        raise ValueError("assembly build report references an unknown STL part")
+        raise ValueError("build report references an unknown STL part")
     return part_name
+
+
+def _report_coordinate_frame(
+    report: dict | None,
+    artifact_key: str | None,
+) -> str | None:
+    if not isinstance(report, dict) or not isinstance(artifact_key, str):
+        return None
+    artifact = report.get("artifacts", {}).get(artifact_key, {})
+    return artifact.get("coordinateFrame") if isinstance(artifact, dict) else None
 
 
 def feature_measurements(
@@ -374,36 +481,38 @@ def evidence_feature_ids(
 
 def _body_bounds(report: dict, part_name: str | None) -> np.ndarray | None:
     if part_name is not None:
-        record = report.get("parts", {}).get(part_name, {})
+        record = report.get("parts", {}).get(part_name, {}).get("semantic", {})
         return _bbox_bounds(record)
-    if isinstance(report.get("shape"), dict):
-        bounds = _bbox_bounds(report["shape"])
-        if bounds is not None:
-            return bounds
-    assembly = report.get("assembly", {})
-    if isinstance(assembly, dict):
-        return _bbox_bounds(assembly.get("shape", {}))
-    return None
+    assembly = report.get("backendData", {}).get("semanticAssembly", {})
+    return _bbox_bounds(assembly) if isinstance(assembly, dict) else None
 
 
 def _feature_records(
     report: dict,
     feature_id: str,
     part_name: str | None,
+    *,
+    allow_unowned: bool = False,
 ) -> list[dict]:
     records = []
     for event in report.get("events", []):
         if (
             isinstance(event, dict)
             and event.get("id") == feature_id
-            and _owned_by(event, part_name)
+            and (
+                _owned_by(event, part_name)
+                or (allow_unowned and event.get("part") is None)
+            )
         ):
             source = f"event:{event.get('kind', 'operation')}"
             bounds = _bbox_bounds(event.get("tool", {})) if event.get("kind") == "cut" else None
             if bounds is not None:
                 records.append({"bounds": bounds, "source": source})
     feature = report.get("features", {}).get(feature_id)
-    if isinstance(feature, dict) and _owned_by(feature, part_name):
+    if isinstance(feature, dict) and (
+        _owned_by(feature, part_name)
+        or (allow_unowned and feature.get("part") is None)
+    ):
         bounds = _bbox_bounds(feature)
         if bounds is not None:
             records.append({"bounds": bounds, "source": "feature"})
@@ -447,25 +556,30 @@ def semantic_placement_observation(
     tolerance: float = 0.25,
 ) -> dict:
     result = {
+        "blocked": [],
         "examined": 0,
+        "observations": [],
         "offenders": [],
         "passed_feature_ids": [],
+        "scope": "owner-part",
         "skipped": [],
         "tolerance_mm": tolerance,
     }
     if intent is None or report is None:
         return result
-    body_bounds = _body_bounds(report, part_name)
-    if body_bounds is None:
-        result["skipped"].append({
-            "feature_id": None,
-            "reason": "body bounds are unavailable",
-        })
-        return result
+    owners = _intent_feature_owners(intent)
+    multipart = intent.get("manufacturing", {}).get("mode") == "multipart"
+    report_parts = report.get("parts", {})
+    report_parts = report_parts if isinstance(report_parts, dict) else {}
     for feature in intent.get("features", []):
         if not isinstance(feature, dict):
             continue
         feature_id = feature.get("id")
+        if (
+            part_name is not None
+            and owners.get(feature_id) != part_name
+        ):
+            continue
         kind = feature.get("kind")
         face = feature.get("face")
         edge_crossing = feature.get("edge_crossing", "allowed")
@@ -484,11 +598,44 @@ def semantic_placement_observation(
                 "reason": f"face {face!r} is not an auditable outside face",
             })
             continue
-        records = _feature_records(report, feature_id, part_name)
         result["examined"] += 1
+        owner_part = owners.get(feature_id)
+        if owner_part is None and not multipart:
+            declared_report_part = report.get("part")
+            if (
+                isinstance(declared_report_part, str)
+                and declared_report_part in report_parts
+            ):
+                owner_part = declared_report_part
+            elif len(report_parts) == 1:
+                owner_part = next(iter(report_parts))
+        if not isinstance(owner_part, str) or owner_part not in report_parts:
+            result["blocked"].append({
+                "blockedBy": "OWNER_UNRESOLVED",
+                "feature_id": feature_id,
+                "owner_part": owner_part,
+                "reason": "feature owner does not resolve to one report part",
+            })
+            continue
+        body_bounds = _body_bounds(report, owner_part)
+        if body_bounds is None:
+            result["blocked"].append({
+                "blockedBy": "OWNER_BOUNDS_UNAVAILABLE",
+                "feature_id": feature_id,
+                "owner_part": owner_part,
+                "reason": "owner semantic bounds are unavailable",
+            })
+            continue
+        records = _feature_records(
+            report,
+            feature_id,
+            owner_part,
+            allow_unowned=not multipart,
+        )
         if not records:
             result["offenders"].append({
                 "feature_id": feature_id,
+                "owner_part": owner_part,
                 "reason": "no observed feature or checked cut bounds",
             })
             continue
@@ -515,6 +662,17 @@ def semantic_placement_observation(
             or (edge_crossing == "forbidden" and not adjacent_faces)
             or (edge_crossing == "required" and bool(adjacent_faces))
         )
+        observation = {
+            "coordinate_frame": "semantic",
+            "edge_crossing": edge_crossing,
+            "expected_face": face,
+            "feature_id": feature_id,
+            "owner_bounds_mm": _rounded_bounds(body_bounds),
+            "owner_part": owner_part,
+            "records": record_results,
+            "touches_declared_face": touches_declared,
+        }
+        result["observations"].append(observation)
         if touches_declared and crossing_ok:
             result["passed_feature_ids"].append(feature_id)
         else:
@@ -524,6 +682,8 @@ def semantic_placement_observation(
                 "expected_face": face,
                 "feature_id": feature_id,
                 "kind": kind,
+                "owner_bounds_mm": _rounded_bounds(body_bounds),
+                "owner_part": owner_part,
                 "records": record_results,
             })
     return result
@@ -532,7 +692,7 @@ def semantic_placement_observation(
 def _report_feature_bounds(
     report: dict | None,
     part_name: str | None = None,
-) -> list[tuple[str, np.ndarray]]:
+) -> list[dict]:
     if report is None:
         return []
     records = []
@@ -541,28 +701,87 @@ def _report_feature_bounds(
             continue
         bbox = record.get("bbox_mm", {})
         if isinstance(bbox.get("min"), list) and isinstance(bbox.get("max"), list):
-            records.append((feature_id, np.asarray([bbox["min"], bbox["max"]], dtype=float)))
+            records.append({
+                "bounds": np.asarray([bbox["min"], bbox["max"]], dtype=float),
+                "feature_id": feature_id,
+                "part": record.get("part"),
+            })
     for event in report.get("events", []):
         if not isinstance(event, dict) or not _owned_by(event, part_name):
             continue
         bbox = event.get("tool", {}).get("bbox_mm", {})
         if isinstance(bbox.get("min"), list) and isinstance(bbox.get("max"), list):
-            records.append((event.get("id", "unnamed-cut"), np.asarray([bbox["min"], bbox["max"]], dtype=float)))
+            records.append({
+                "bounds": np.asarray([bbox["min"], bbox["max"]], dtype=float),
+                "feature_id": event.get("id", "unnamed-cut"),
+                "part": event.get("part"),
+            })
     return records
+
+
+def _feature_print_transform(
+    report: dict,
+    *,
+    artifact_key: str | None,
+    part_name: str | None,
+    owner: str | None,
+) -> tuple[object | None, str | None]:
+    coordinate_frames = report.get("coordinateFrames", {})
+    artifact = report.get("artifacts", {}).get(artifact_key, {})
+    frame = artifact.get("coordinateFrame") if isinstance(artifact, dict) else None
+    if frame not in {"part-print", "plate-print"}:
+        return None, "artifact has no supported print coordinate frame"
+    feature_owner = owner or part_name or report.get("part")
+    if not isinstance(feature_owner, str) or not feature_owner:
+        return None, "feature has no physical part owner for attribution"
+    transform = (
+        coordinate_frames.get(frame, {})
+        .get("partTransforms", {})
+        .get(feature_owner)
+    )
+    if transform is None:
+        return None, "semantic-to-print transform is missing"
+    return transform, None
 
 
 def _affected_features(
     bounds: np.ndarray | None,
     report: dict | None,
+    *,
+    artifact_key: str | None = None,
     part_name: str | None = None,
-) -> list[str]:
+) -> dict:
     if bounds is None:
-        return []
-    result = []
-    for feature_id, feature_bounds in _report_feature_bounds(report, part_name):
-        if np.all(bounds[1] >= feature_bounds[0]) and np.all(feature_bounds[1] >= bounds[0]):
-            result.append(feature_id)
-    return sorted(set(result))
+        return {"feature_ids": [], "status": "not_applicable"}
+    if not isinstance(report, dict):
+        return {
+            "feature_ids": [],
+            "reason": "build report is unavailable",
+            "status": "not_evaluated",
+        }
+    transformed_records: list[tuple[str, np.ndarray]] = []
+    for record in _report_feature_bounds(report, part_name):
+        transform, reason = _feature_print_transform(
+            report,
+            artifact_key=artifact_key,
+            part_name=part_name,
+            owner=record["part"],
+        )
+        if reason is not None:
+            return {"feature_ids": [], "reason": reason, "status": "not_evaluated"}
+        matrix, reason = validated_rigid_matrix(transform)
+        if reason is not None or matrix is None:
+            return {"feature_ids": [], "reason": reason, "status": "not_evaluated"}
+        transformed_records.append((
+            record["feature_id"],
+            transform_bounds(record["bounds"], matrix),
+        ))
+    identifiers = sorted({
+        feature_id
+        for feature_id, feature_bounds in transformed_records
+        if bounds_overlap(bounds, feature_bounds)
+    })
+    return {"feature_ids": identifiers, "status": "evaluated"}
 
 
 def thickness_observation(
@@ -571,6 +790,7 @@ def thickness_observation(
     target_mm: float,
     sample_limit: int,
     report: dict | None,
+    artifact_key: str | None = None,
     part_name: str | None = None,
 ) -> dict:
     triangle_centers = np.asarray(mesh.triangles_center, dtype=float)
@@ -620,8 +840,15 @@ def thickness_observation(
     cumulative = np.cumsum(weights[order])
     p05_index = int(np.searchsorted(cumulative, cumulative[-1] * 0.05, side="left"))
     p05 = float(sorted_values[min(p05_index, len(sorted_values) - 1)])
+    attribution = _affected_features(
+        risk_bounds,
+        report,
+        artifact_key=artifact_key,
+        part_name=part_name,
+    )
     return {
-        "affected_feature_ids": _affected_features(risk_bounds, report, part_name),
+        "affected_feature_attribution": attribution,
+        "affected_feature_ids": attribution["feature_ids"],
         "minimum_mm": round(float(values.min()), 5),
         "p05_mm": round(p05, 5),
         "risk_bounds_mm": risk_bounds.round(5).tolist() if risk_bounds is not None else None,
@@ -639,6 +866,7 @@ def overhang_observation(
     threshold_deg: float,
     build_plane_tolerance: float,
     report: dict | None,
+    artifact_key: str | None = None,
     part_name: str | None = None,
 ) -> dict:
     normals = np.asarray(mesh.face_normals, dtype=float)
@@ -653,6 +881,10 @@ def overhang_observation(
     risky = downward & above_build_plane & (slopes < threshold_deg)
     if not risky.any():
         return {
+            "affected_feature_attribution": {
+                "feature_ids": [],
+                "status": "not_applicable",
+            },
             "affected_feature_ids": [],
             "area_mm2": 0.0,
             "face_count": 0,
@@ -661,8 +893,15 @@ def overhang_observation(
         }
     points = triangles[risky].reshape((-1, 3))
     risk_bounds = np.asarray([points.min(axis=0), points.max(axis=0)])
+    attribution = _affected_features(
+        risk_bounds,
+        report,
+        artifact_key=artifact_key,
+        part_name=part_name,
+    )
     return {
-        "affected_feature_ids": _affected_features(risk_bounds, report, part_name),
+        "affected_feature_attribution": attribution,
+        "affected_feature_ids": attribution["feature_ids"],
         "area_mm2": round(float(areas[risky].sum()), 5),
         "face_count": int(np.count_nonzero(risky)),
         "minimum_slope_deg": round(float(slopes[risky].min()), 5),
@@ -691,28 +930,56 @@ def main() -> int:
 
     try:
         profile, profile_hash = _load_profile(args.profile) if args.profile else (None, None)
-        intent = _load_json(args.intent) if args.intent else None
         report = _load_json(args.report) if args.report else None
-        report_part = _report_part_for_stl(
+        intent_path = Path(args.intent).resolve() if args.intent else None
+        if intent_path is None and isinstance(report, dict) and args.report:
+            intent_reference = report.get("inputs", {}).get("intent")
+            raw_path = (
+                intent_reference.get("path")
+                if isinstance(intent_reference, dict)
+                else None
+            )
+            expected_digest = (
+                intent_reference.get("sha256")
+                if isinstance(intent_reference, dict)
+                else None
+            )
+            if isinstance(raw_path, str) and raw_path.strip():
+                candidate = Path(raw_path)
+                if not candidate.is_absolute():
+                    candidate = Path(args.report).resolve().parent / candidate
+                intent_path = candidate.resolve()
+                if sha256(intent_path.read_bytes()).hexdigest() != expected_digest:
+                    raise ValueError("build report hash-bound intent does not match its file")
+        intent = _load_json(str(intent_path)) if intent_path is not None else None
+        report_artifact = _report_artifact_for_stl(
             report,
             Path(args.stl),
             Path(args.report).resolve().parent if args.report else None,
         )
+        report_part = _artifact_part_name(report, report_artifact)
         expected_dimensions = _report_print_dimensions(
             report,
+            report_artifact,
             report_part,
         ) or _intent_dimensions(intent)
-        if (
-            isinstance(report, dict)
-            and report.get("schema") == "evidence-cad-assembly-build/v3"
-        ):
-            expected_dimensions = None
-        if intent is not None:
+        if args.intent:
             if profile is None:
                 raise ValueError("--intent requires the resolved --profile")
             expected_hash = intent.get("printability", {}).get("profile", {}).get("sha256")
             if expected_hash != profile_hash:
                 raise ValueError("printer profile does not match the intent contract hash")
+        if report is not None:
+            if report.get("schema") != BUILD_SCHEMA:
+                raise ValueError(f"build report must use {BUILD_SCHEMA}")
+            if args.intent and intent is not None and report.get("inputs", {}).get("intent", {}).get(
+                "sha256"
+            ) != sha256(intent_path.read_bytes()).hexdigest():
+                raise ValueError("build report is not bound to the supplied intent")
+            if profile is not None and report.get("inputs", {}).get("profile", {}).get(
+                "sha256"
+            ) != profile_hash:
+                raise ValueError("build report is not bound to the supplied profile")
     except Exception as error:
         print(json.dumps({"pass": False, "error": str(error)}, indent=2))
         return 2
@@ -752,19 +1019,17 @@ def main() -> int:
     )
 
     try:
-        components = (
-            len(mesh.split(only_watertight=False, repair=False)) if len(faces) else 0
-        )
+        components = physical_body_count(mesh) if len(faces) else 0
         audit.add(
-            "connected_components",
+            "physical_body_count",
             components == args.components,
             components,
             args.components,
         )
-    except Exception as error:
+    except MeshTopologyError as error:
         components = None
         audit.add(
-            "connected_components",
+            "physical_body_count",
             False,
             {"error": str(error)},
             args.components,
@@ -775,6 +1040,46 @@ def main() -> int:
 
     bounds = np.asarray(mesh.bounds, dtype=float) if finite_vertices else None
     dims = bounds[1] - bounds[0] if bounds is not None and bounds.shape == (2, 3) else None
+    intent_dimensions = _intent_dimensions(intent)
+    semantic_dimensions = None
+    if isinstance(report, dict):
+        record = report.get("backendData", {}).get("semanticAssembly")
+        semantic_bounds = record.get("boundsMm") if isinstance(record, dict) else None
+        value = semantic_bounds.get("size") if isinstance(semantic_bounds, dict) else None
+        if isinstance(value, list) and len(value) == 3:
+            try:
+                candidate = tuple(float(item) for item in value)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None and all(
+                np.isfinite(item) and item > 0 for item in candidate
+            ):
+                semantic_dimensions = candidate
+    report_frame = _report_coordinate_frame(report, report_artifact)
+    if report_frame == "plate-print" and intent_dimensions is not None and semantic_dimensions is not None:
+        for index, axis in enumerate("xyz"):
+            audit.add(
+                f"semantic_envelope_dimension_{axis}",
+                abs(semantic_dimensions[index] - intent_dimensions[index])
+                <= SEMANTIC_ENVELOPE_TOLERANCE_MM,
+                semantic_dimensions[index],
+                {
+                    "value": intent_dimensions[index],
+                    "tolerance": SEMANTIC_ENVELOPE_TOLERANCE_MM,
+                },
+                category="dimensions",
+            )
+    elif report_frame == "plate-print":
+        audit.add(
+            "semantic_envelope_metrics_available",
+            False,
+            {
+                "intent_dimensions_mm": intent_dimensions,
+                "semantic_dimensions_mm": semantic_dimensions,
+            },
+            "hash-bound intent dimensions and final semantic assembly bounds",
+            category="dimensions",
+        )
     if dims is not None:
         for index, axis in enumerate("xyz"):
             expected = getattr(args, f"expect_{axis}")
@@ -868,8 +1173,9 @@ def main() -> int:
             if isinstance(critical, list) and all(
                 isinstance(item, str) and item.strip() for item in critical
             ):
+                expected_critical = _critical_feature_ids(intent, report_part)
                 observed_ids = evidence_feature_ids(report, report_part)
-                missing_critical = sorted(set(critical) - observed_ids)
+                missing_critical = sorted(expected_critical - observed_ids)
                 audit.add(
                     "printability_critical_feature_coverage",
                     not missing_critical,
@@ -877,7 +1183,10 @@ def main() -> int:
                         "observed_feature_ids": sorted(observed_ids),
                         "missing_feature_ids": missing_critical,
                     },
-                    {"critical_feature_ids": sorted(set(critical))},
+                    {
+                        "critical_feature_ids": sorted(expected_critical),
+                        "scope_part": report_part,
+                    },
                     category="printability",
                     repair={
                         "goal": "Observe every critical feature or record its checked operation."
@@ -892,11 +1201,23 @@ def main() -> int:
                     category="printability",
                     repair="Validate the intent contract before QA.",
                 )
+            ownership = feature_ownership_observation(intent, report)
+            if ownership["examined"] or ownership["offenders"]:
+                audit.add(
+                    "intent_report_feature_ownership",
+                    not ownership["offenders"],
+                    ownership,
+                    "build evidence owner equals intent feature.part",
+                    category="geometry",
+                    repair={
+                        "goal": "Record each feature and operation against its intent-declared physical part."
+                    },
+                )
             semantic = semantic_placement_observation(intent, report, report_part)
-            if semantic["examined"] or semantic["offenders"]:
+            if semantic["examined"] or semantic["offenders"] or semantic["blocked"]:
                 audit.add(
                     "semantic_feature_placement",
-                    not semantic["offenders"],
+                    not semantic["offenders"] and not semantic["blocked"],
                     semantic,
                     "declared feature face and edge crossing",
                     category="geometry",
@@ -949,6 +1270,7 @@ def main() -> int:
                     target_mm=target,
                     sample_limit=max(args.thickness_samples, 32),
                     report=report,
+                    artifact_key=report_artifact,
                     part_name=report_part,
                 )
                 audit.add(
@@ -978,6 +1300,9 @@ def main() -> int:
                     "printability_local_thin_region",
                     thickness["violating_count"] == 0,
                     {
+                        "affected_feature_attribution": thickness[
+                            "affected_feature_attribution"
+                        ],
                         "affected_feature_ids": thickness["affected_feature_ids"],
                         "minimum_mm": thickness["minimum_mm"],
                         "risk_bounds_mm": thickness["risk_bounds_mm"],
@@ -1018,6 +1343,7 @@ def main() -> int:
                 ),
                 build_plane_tolerance=1e-4,
                 report=report,
+                artifact_key=report_artifact,
                 part_name=report_part,
             )
             audit.add(
@@ -1074,7 +1400,7 @@ def main() -> int:
             "volume_mm3": round(volume, 5) if volume is not None else None,
         },
         "pass": audit.passed,
-        "intent": str(Path(args.intent).resolve()) if args.intent else None,
+        "intent": str(intent_path) if intent_path is not None else None,
         "printer_profile": (
             {
                 "id": profile["id"],
@@ -1085,7 +1411,11 @@ def main() -> int:
             else None
         ),
         "report": str(Path(args.report).resolve()) if args.report else None,
+        "report_artifact": report_artifact,
         "report_part": report_part,
+        "report_coordinate_frame": _report_coordinate_frame(
+            report, report_artifact
+        ),
         "schema": "evidence-mesh-audit/v3",
         "status": audit.status,
         "stl": str(Path(args.stl).resolve()),

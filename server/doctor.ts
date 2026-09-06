@@ -10,12 +10,12 @@ const serverDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(serverDirectory, '..');
 const nodeVersion = process.versions.node;
 const [nodeMajor, nodeMinor] = nodeVersion.split('.').map(Number);
-const nodeReady = nodeMajor > 20 || (nodeMajor === 20 && nodeMinor >= 19);
+const nodeReady = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 19);
 const python = activateProjectPython(projectRoot);
 
 const checks: Array<{ detail: string; name: string; ready: boolean }> = [
   {
-    detail: `Node ${nodeVersion} (requires >= 20.19)`,
+    detail: `Node ${nodeVersion} (requires >= 22.19.0)`,
     name: 'Node',
     ready: nodeReady,
   },

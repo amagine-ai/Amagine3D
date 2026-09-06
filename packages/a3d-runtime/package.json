@@ -4,6 +4,9 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

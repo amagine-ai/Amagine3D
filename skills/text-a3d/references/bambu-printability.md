@@ -33,9 +33,36 @@ For same-material multipart assemblies, keep every printed part as one valid
 solid, export them with `export_assembly()`, audit each part STL individually,
 then audit `<name>.stl` as the arranged print-bed layout and use
 `assembly_check.py` for report integrity. Every printed STL that leaves the
-helper is in print coordinates with `Z-min = 0`; `NAME-assemble.step` preserves
-physical mating positions and `NAME-display.glb` preserves the display model
-instead of acting as printability evidence.
+helper is in print coordinates with `Z-min = 0`; every `NAME-PART.step` and the
+required `NAME-assemble.step` preserve physical mating positions, while
+`NAME-display.glb` preserves the display model instead of acting as
+printability evidence.
+
+## Constructive organic shells
+
+Decide the print direction and cavity topology before extracting the mesh.
+Use `organic_shell.build_organic_shell(...)` so these are inputs to the solid,
+not repairs applied after tessellation.
+
+- Prefer `open-cavity` for housings: make the service opening intersect the
+  inner offset and the exterior so supports, powder, and loose filament can be
+  removed. A separately printed cover can remain a BRep master; precise bosses,
+  seats, and cutters fused into the shell are bound BRep features of the final
+  mesh-master body.
+- For a deliberately sealed void printed in +Z, use
+  `self_supporting_cavity(...)`. Its arbitrary 2D footprint shrinks on every
+  layer to a roof of at least 45 degrees from horizontal; it rejects a closure
+  inset that would leave a flat suspended ceiling.
+- Set level-set edge length to no more than half the planned wall thickness.
+  Increase local radii or revise the field when the inner offset collapses;
+  never fill holes or smooth over the failure.
+- Choose a broad, intentional bed-contact region or a permitted assembly split.
+  Do not flatten identity-bearing outer geometry merely to obtain first-layer
+  contact.
+- Construct sockets, locating faces, bosses, covers, and other
+  tolerance-bearing features as BRep geometry. Bind them into a mesh-master body
+  when they belong to that printed part; retain a separate BRep master only for
+  a separate printed part. Do not smooth their derived interfaces.
 
 ## Support-free construction
 
@@ -89,6 +116,6 @@ to fail.
 
 Do not optimize for warning-free QA. Preserve identity-bearing geometry,
 expected feature relationships, and visual landmarks over eliminating advisory
-warnings. At most three evidence-repair passes are allowed. At the limit,
-preserve the latest evidence and report `pass_with_warnings` or `fail`
-honestly.
+warnings. Use repeated or regressed diagnostics to reconsider the construction
+strategy, but do not impose a fixed retry count that can truncate a complex
+model. Preserve and report the latest evidence honestly.

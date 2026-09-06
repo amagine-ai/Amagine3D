@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { CURRENT_SESSION_VERSION } from '@amagine3d/a3d-runtime';
+import {
+  cadIntentStatePath,
+  CURRENT_SESSION_VERSION,
+} from '@amagine3d/a3d-runtime';
 
 import { CHAT_TURN_CUSTOM_TYPE } from '../src/lib/chat-turn.ts';
 import {
@@ -15,6 +18,7 @@ import {
   userSessionArtifacts,
 } from '../server/sessions.ts';
 import { moveSessionsToTrash } from '../server/session-trash.ts';
+import { writeUnifiedBuildFixture } from './unified-build-fixture.ts';
 
 const SESSION_ID = '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93';
 const OTHER_SESSION_ID = '78a8b125-4c0f-49ac-a246-06bff8a4cc7e';
@@ -238,6 +242,9 @@ test('moves session metadata and workspace folders to trash together', async () 
     await mkdir(selectedRoot, { recursive: true });
     await writeFile(join(selectedRoot, 'selected.stl'), 'solid selected');
     const sessionPath = await writeSession(sessionRoot, selectedRoot);
+    const intentState = cadIntentStatePath(sessionRoot, SESSION_ID);
+    await mkdir(join(intentState, '..'), { recursive: true });
+    await writeFile(intentState, '{}');
     let movedPaths: string[] = [];
 
     const trashed = await moveSessionsToTrash(
@@ -251,7 +258,10 @@ test('moves session metadata and workspace folders to trash together', async () 
     );
 
     assert.equal(trashed, 1);
-    assert.deepEqual(new Set(movedPaths), new Set([sessionPath, selectedRoot]));
+    assert.deepEqual(
+      new Set(movedPaths),
+      new Set([intentState, sessionPath, selectedRoot]),
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -319,6 +329,7 @@ test('removes every internal prompt suffix from visible user history', async () 
       '<web_reference_repair>内部联网补救提示</web_reference_repair>',
       '<visual_validation_required>内部视觉验证提示</visual_validation_required>',
       '<visual_validation_repair>内部视觉补救提示</visual_validation_repair>',
+      '<first_build_reminder>内部首次构建提醒</first_build_reminder>',
     ];
 
     for (const suffix of suffixes) {
@@ -489,32 +500,37 @@ test('marks the build report display GLB as featured', async () => {
   try {
     const selectedRoot = sessionWorkspaceRoot(root, SESSION_ID)!;
     await mkdir(selectedRoot, { recursive: true });
-    const sourcePath = join(selectedRoot, 'part.py');
-    const stlPath = join(selectedRoot, 'part.stl');
-    const assembleStepPath = join(selectedRoot, 'part-assemble.step');
-    const displayGlbPath = join(selectedRoot, 'part-display.glb');
-    await writeFile(sourcePath, 'print("part")\n');
-    await writeFile(stlPath, 'solid part\nendsolid part\n');
-    await writeFile(assembleStepPath, 'assemble step');
-    await writeFile(displayGlbPath, 'display glb');
-    await writeFile(
-      join(selectedRoot, 'part_report.json'),
-      JSON.stringify({
-        artifacts: {
-          stl: { path: stlPath },
-          'step:assemble': { path: assembleStepPath },
-          'glb:display': { path: displayGlbPath },
-        },
-        part: 'part',
-        schema: 'evidence-cad-build/v4',
-        source: { path: sourcePath },
-      }),
-    );
+    await writeUnifiedBuildFixture({
+      backend: 'brep-part',
+      name: 'part',
+      root: selectedRoot,
+    });
 
     const collection = await userSessionArtifacts(root, SESSION_ID);
     assert.equal(
       collection?.artifacts.find(({ featured }) => featured)?.path,
       'part-display.glb',
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('marks the physical GLB from a hybrid scene build as featured', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-hybrid-featured-'));
+  try {
+    const selectedRoot = sessionWorkspaceRoot(root, SESSION_ID)!;
+    await mkdir(selectedRoot, { recursive: true });
+    await writeUnifiedBuildFixture({
+      backend: 'hybrid-mesh',
+      name: 'companion',
+      root: selectedRoot,
+    });
+
+    const collection = await userSessionArtifacts(root, SESSION_ID);
+    assert.equal(
+      collection?.artifacts.find(({ featured }) => featured)?.path,
+      'companion-display.glb',
     );
   } finally {
     await rm(root, { force: true, recursive: true });

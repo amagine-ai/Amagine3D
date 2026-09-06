@@ -22,14 +22,31 @@ import type {
   PythonHealth,
 } from '../../src/types.ts';
 import { assistantMessageOutcome } from '../agent-events.ts';
-import { durationFromEnv, errorMessage } from '../http-utils.ts';
+import {
+  FIRST_BUILD_REMINDER,
+  FirstBuildReminder,
+} from '../first-build-reminder.ts';
+import { errorMessage } from '../http-utils.ts';
 import { isChatRequest } from '../protocol.ts';
+import {
+  agentRunTimeoutsFromEnv,
+  DEFAULT_FIRST_BUILD_REMINDER_MS,
+  type AgentRunTimeouts,
+} from '../run-config.ts';
+import {
+  type RunOutcome,
+  RunStopped,
+  RunSupervisor,
+} from '../run-supervisor.ts';
 import { acquireSessionActivity } from '../session-activity.ts';
-import { userSessionArtifacts } from '../sessions.ts';
+import {
+  sessionWorkspaceRoot,
+  userSessionArtifacts,
+} from '../sessions.ts';
 import { appendSavedImageContext, saveImageAttachments } from '../uploads.ts';
 import {
   auditCadVisualValidation,
-  requiresCadVisualValidation,
+  CadVisualAuditTrail,
   visualValidationInstruction,
   visualValidationRepairInstruction,
 } from '../visual-audit.ts';
@@ -40,11 +57,20 @@ import {
 
 const MAX_VISUAL_REPAIR_ATTEMPTS = 3;
 const MAX_WEB_SEARCH_REPAIR_ATTEMPTS = 2;
+const DEFAULT_ABORT_GRACE_MS = 5_000;
+
+interface CompletedRun {
+  replyText: string;
+  sourceStepId?: string;
+}
 
 export interface ChatRouteDependencies {
+  abortGraceMs?: number;
+  firstBuildReminderMs?: number;
   python: PythonHealth;
   runtime: PiRuntime | undefined;
   runtimeError: string | undefined;
+  timeouts?: AgentRunTimeouts;
 }
 
 function writeEvent(response: Response, event: AgentEvent): void {
@@ -56,11 +82,14 @@ function writeEvent(response: Response, event: AgentEvent): void {
 function toolActivity(toolName: string): string {
   const labels: Record<string, string> = {
     bash: '正在执行 CAD 命令',
+    cad_capabilities: '正在检查 CAD 能力',
+    cad_compile: '正在编译并审计 CAD',
     edit: '正在修改参数化源码',
     find: '正在查找文件',
     grep: '正在检索工作区',
     ls: '正在检查输出目录',
     read: '正在读取文件或预览图',
+    reference_analyze: '正在分析参考图',
     web_search: '正在搜索网络资料',
     write: '正在写入生成文件',
   };
@@ -92,14 +121,39 @@ function finalAssistantText(session: AgentSession): string {
   return '';
 }
 
+function finishRunOutcome(
+  outcome: RunOutcome<CompletedRun>,
+  finish: (
+    status: 'cancelled' | 'completed' | 'failed',
+    replyText: string,
+    sourceStepId?: string,
+  ) => ChatTurn,
+): ChatTurn {
+  if (outcome.status === 'completed') {
+    return finish(
+      'completed',
+      outcome.value.replyText,
+      outcome.value.sourceStepId,
+    );
+  }
+  if (outcome.status === 'cancelled') return finish('cancelled', '');
+  return finish('failed', outcome.message);
+}
+
 export function registerChatRoute(
   app: Express,
   dependencies: ChatRouteDependencies,
 ): void {
+  const timeouts = dependencies.timeouts ?? agentRunTimeoutsFromEnv();
+  const abortGraceMs = dependencies.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS;
+  const firstBuildReminderMs =
+    dependencies.firstBuildReminderMs ?? DEFAULT_FIRST_BUILD_REMINDER_MS;
+
   app.post('/api/chat', async (request, response) => {
     if (!isChatRequest(request.body)) {
       response.status(400).json({
-        message: 'The request needs a valid sessionId plus text or images.',
+        message:
+          'The request needs taskType (cad or chat), a valid sessionId, and text or images.',
       });
       return;
     }
@@ -127,6 +181,7 @@ export function registerChatRoute(
       images = [],
       message,
       sessionId,
+      taskType,
       webSearchEnabled = false,
     } = request.body;
     if (webSearchEnabled && !process.env.TAVILY_API_KEY?.trim()) {
@@ -150,16 +205,27 @@ export function registerChatRoute(
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.flushHeaders();
 
+    const supervisor = new RunSupervisor<CompletedRun>({
+      abortGraceMs,
+      hardTimeoutMs: timeouts.hardTimeoutMs,
+      idleTimeoutMs: timeouts.idleTimeoutMs,
+      sessionId,
+      timeoutMessages: {
+        hard: '本轮执行超过最大时间限制，已停止。',
+        idle: '本轮执行长时间没有模型或工具进展，已停止。',
+      },
+    });
     let session: AgentSession | undefined;
     let unsubscribe: (() => void) | undefined;
-    let clientDisconnected = false;
-    let terminalEventSent = false;
+    let firstBuildReminder: FirstBuildReminder | undefined;
     let providerError: string | undefined;
     let runTurn = emptyChatTurn();
     let activeResponseStepId: string | undefined;
     let lastResponseStepId: string | undefined;
     let streamedMessageText = '';
     let webSearchSucceeded = false;
+    let collectVisualAuditMessages = false;
+    let visualAuditTrail: CadVisualAuditTrail | undefined;
 
     const startStep = (label: string, stage = 'agent'): ChatStep => {
       const active = runTurn.steps.at(-1);
@@ -194,49 +260,44 @@ export function registerChatRoute(
         status,
       });
       if (session && runTurn.steps.length > 0) {
-        session.sessionManager.appendCustomEntry(
-          CHAT_TURN_CUSTOM_TYPE,
-          runTurn,
-        );
+        try {
+          session.sessionManager.appendCustomEntry(
+            CHAT_TURN_CUSTOM_TYPE,
+            runTurn,
+          );
+        } catch (error) {
+          console.error(`Could not persist chat turn: ${errorMessage(error)}`);
+        }
       }
       return runTurn;
     };
     const sendFailure = (message: string, code: string) => {
-      if (terminalEventSent || clientDisconnected) return;
-      const turn = finishRun('failed', message);
-      terminalEventSent = true;
-      writeEvent(response, {
-        code,
-        finishedAt: turn.finishedAt!,
-        message,
-        type: 'error',
-      });
+      supervisor.fail(code, message);
     };
 
     const abortForDisconnect = () => {
       if (response.writableEnded) return;
-      clientDisconnected = true;
-      void session?.abort().catch(() => undefined);
+      supervisor.disconnect();
     };
     request.once('aborted', abortForDisconnect);
     response.once('close', abortForDisconnect);
 
-    const timeout = setTimeout(() => {
-      if (terminalEventSent || clientDisconnected) return;
-      sendFailure('本轮执行超过时间限制，已停止。', 'run_timeout');
-      void session?.abort().catch(() => undefined);
-    }, durationFromEnv(process.env.AGENT_RUN_TIMEOUT_MS, 1_800_000));
-
     try {
       startStep('正在启动 Amagine3D Agent', 'start');
-      session = await runtime.createSession(sessionId, { webSearchEnabled });
-      if (clientDisconnected || terminalEventSent) {
-        await session.abort();
-        return;
-      }
+      session = await supervisor.createSession(() =>
+        runtime.createSession(sessionId, {
+          intentScopeId: randomUUID(),
+          webSearchEnabled,
+        }),
+      );
 
       unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-        if (terminalEventSent || clientDisconnected) return;
+        firstBuildReminder?.observe(event);
+        supervisor.observe(event);
+        if (!supervisor.running) return;
+        if (collectVisualAuditMessages && event.type === 'message_end') {
+          visualAuditTrail?.record(event.message);
+        }
         if (event.type === 'agent_start') {
           providerError = undefined;
           return;
@@ -338,20 +399,20 @@ export function registerChatRoute(
 
       startStep(`Amagine3D Agent 已启动 ${runtime.modelName}`, 'agent');
       if (images.length > 0) startStep('正在保存参考图片', 'image');
-      const savedImages = await saveImageAttachments(
-        runtime.stateRoot,
-        sessionId,
-        images,
+      const savedImages = await supervisor.run(() =>
+        saveImageAttachments(runtime.stateRoot, sessionId, images),
       );
-      const visualValidationRequired = requiresCadVisualValidation(
-        message,
-        images.length,
-      );
+      const visualValidationRequired = taskType === 'cad';
+      const referenceAnalysisRequired =
+        visualValidationRequired && images.length > 0;
       const basePrompt = message.trim() || '请查看并分析我上传的图片。';
       const promptText = [
         appendSavedImageContext(basePrompt, savedImages),
         requiredWebSearchInstruction(webSearchEnabled),
-        visualValidationInstruction(visualValidationRequired, images.length > 0),
+        visualValidationInstruction(
+          visualValidationRequired,
+          referenceAnalysisRequired,
+        ),
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -360,14 +421,39 @@ export function registerChatRoute(
         mimeType,
         type: 'image' as const,
       }));
-      const currentTurnStart = session.messages.length;
-      await session.prompt(promptText, {
-        images: imageContents,
-        source: 'rpc',
-      });
+      const visualWorkspaceRoot = sessionWorkspaceRoot(
+        runtime.workspaceRoot,
+        sessionId,
+      );
+      if (!visualWorkspaceRoot) {
+        throw new Error('Invalid session workspace for visual validation.');
+      }
+      const turnStartedAtMs = Date.now();
+      visualAuditTrail = visualValidationRequired
+        ? new CadVisualAuditTrail(visualWorkspaceRoot)
+        : undefined;
+      collectVisualAuditMessages = visualValidationRequired;
+      if (visualValidationRequired) {
+        firstBuildReminder = new FirstBuildReminder(
+          firstBuildReminderMs,
+          async () => {
+            if (!supervisor.running || !session) return;
+            startStep('尚未开始正式编译，已提醒 Agent 尽快构建', 'build-reminder');
+            await session.steer(FIRST_BUILD_REMINDER);
+          },
+        );
+      }
+      supervisor.touch();
+      await supervisor.run(() =>
+        session!.prompt(promptText, {
+          images: imageContents,
+          source: 'rpc',
+        }),
+      );
 
       let webSearchRepairAttempts = 0;
       while (webSearchEnabled && !webSearchSucceeded) {
+        if (!supervisor.running) return;
         if (providerError) {
           sendFailure(errorMessage(providerError), 'provider_error');
           return;
@@ -386,32 +472,48 @@ export function registerChatRoute(
           `未完成联网参考，正在强制搜索 ${webSearchRepairAttempts}/${MAX_WEB_SEARCH_REPAIR_ATTEMPTS}`,
           'web-search-audit',
         );
-        await session.prompt(
-          webSearchRepairInstruction(
-            webSearchRepairAttempts,
-            MAX_WEB_SEARCH_REPAIR_ATTEMPTS,
+        supervisor.touch();
+        await supervisor.run(() =>
+          session!.prompt(
+            webSearchRepairInstruction(
+              webSearchRepairAttempts,
+              MAX_WEB_SEARCH_REPAIR_ATTEMPTS,
+            ),
+            { source: 'rpc' },
           ),
-          { source: 'rpc' },
         );
       }
 
       let visualRepairAttempts = 0;
       while (true) {
-        if (terminalEventSent || clientDisconnected) return;
+        if (!supervisor.running) return;
         if (providerError) {
           sendFailure(errorMessage(providerError), 'provider_error');
           return;
         }
         if (!visualValidationRequired) break;
 
-        const audit = auditCadVisualValidation(
-          session.messages.slice(currentTurnStart),
-          { requireReferenceAnalysis: images.length > 0 },
+        if (!visualAuditTrail) {
+          throw new Error('Visual validation trail is unavailable.');
+        }
+        const audit = await supervisor.run(() =>
+          auditCadVisualValidation(visualAuditTrail!.entries, {
+            referenceImages: savedImages.map(({ path, sha256 }) => ({
+              path,
+              sha256,
+            })),
+            requireReferenceAnalysis: referenceAnalysisRequired,
+            turnStartedAtMs,
+            workspaceRoot: visualWorkspaceRoot,
+          }),
         );
         if (audit.pass) break;
         if (visualRepairAttempts >= MAX_VISUAL_REPAIR_ATTEMPTS) {
+          const missingEvidence = referenceAnalysisRequired
+            ? '参考图分析、最新预览渲染与读图闭环'
+            : '最新预览渲染与读图闭环';
           sendFailure(
-            '本轮 CAD 任务未完成必需的参考分析、最新预览渲染与读图闭环。结果已拦截，不能仅凭尺寸或网格检查声称外观匹配。',
+            `本轮 CAD 任务未完成必需的${missingEvidence}。结果已拦截，不能仅凭尺寸或网格检查声称外观匹配。`,
             'visual_validation_required',
           );
           return;
@@ -422,13 +524,16 @@ export function registerChatRoute(
           `视觉审计未通过，正在自动补救 ${visualRepairAttempts}/${MAX_VISUAL_REPAIR_ATTEMPTS}`,
           'visual-audit',
         );
-        await session.prompt(
-          visualValidationRepairInstruction(audit, {
-            attempt: visualRepairAttempts,
-            maxAttempts: MAX_VISUAL_REPAIR_ATTEMPTS,
-            requireReferenceAnalysis: images.length > 0,
-          }),
-          { source: 'rpc' },
+        supervisor.touch();
+        await supervisor.run(() =>
+          session!.prompt(
+            visualValidationRepairInstruction(audit, {
+              attempt: visualRepairAttempts,
+              maxAttempts: MAX_VISUAL_REPAIR_ATTEMPTS,
+              requireReferenceAnalysis: referenceAnalysisRequired,
+            }),
+            { source: 'rpc' },
+          ),
         );
       }
 
@@ -441,9 +546,8 @@ export function registerChatRoute(
         return;
       }
       startStep('正在整理生成文件', 'files');
-      const artifactCollection = await userSessionArtifacts(
-        runtime.workspaceRoot,
-        sessionId,
+      const artifactCollection = await supervisor.run(() =>
+        userSessionArtifacts(runtime.workspaceRoot, sessionId),
       );
       if (artifactCollection) {
         startStep(
@@ -456,35 +560,49 @@ export function registerChatRoute(
           type: 'artifacts',
         });
       }
-      const completedTurn = finishRun(
-        'completed',
-        answer,
-        lastResponseStepId,
-      );
-      writeEvent(response, {
-        content: answer,
-        finishedAt: completedTurn.finishedAt!,
-        sessionId,
+      supervisor.complete({
+        replyText: answer,
         sourceStepId: lastResponseStepId,
-        type: 'complete',
       });
-      terminalEventSent = true;
     } catch (error) {
-      if (!terminalEventSent && !clientDisconnected) {
+      if (!(error instanceof RunStopped) && supervisor.running) {
         sendFailure(errorMessage(error), 'agent_error');
       }
     } finally {
-      if (runTurn.finishedAt === undefined) {
-        finishRun(
-          clientDisconnected ? 'cancelled' : 'failed',
-          providerError ? errorMessage(providerError) : '',
-        );
-      }
-      clearTimeout(timeout);
+      firstBuildReminder?.finish();
       request.off('aborted', abortForDisconnect);
       response.off('close', abortForDisconnect);
       unsubscribe?.();
-      session?.dispose();
+      await supervisor.finalize(
+        {
+          code: 'agent_error',
+          message: providerError ? errorMessage(providerError) : '',
+          status: 'failed',
+        },
+        ({ deliver, outcome }) => {
+          const turn = finishRunOutcome(outcome, finishRun);
+          if (!deliver) return;
+          if (outcome.status === 'completed') {
+            writeEvent(response, {
+              content: outcome.value.replyText,
+              finishedAt: turn.finishedAt!,
+              sessionId,
+              sourceStepId: outcome.value.sourceStepId,
+              type: 'complete',
+            });
+          } else if (
+            outcome.status === 'failed' ||
+            outcome.status === 'timed_out'
+          ) {
+            writeEvent(response, {
+              code: outcome.code,
+              finishedAt: turn.finishedAt!,
+              message: outcome.message,
+              type: 'error',
+            });
+          }
+        },
+      );
       releaseSession();
       if (!response.writableEnded && !response.destroyed) response.end();
     }

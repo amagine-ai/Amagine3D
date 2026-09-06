@@ -12,7 +12,26 @@ import {
   type Skill,
 } from '@earendil-works/pi-coding-agent';
 
+import {
+  CAD_COMPILE_ISSUES_TOOL_NAME,
+  CAD_COMPILE_TOOL_NAME,
+  cadIntentStatePath,
+  createCadCompileContextExtension,
+  createCadCompileIssuesTool,
+  createCadCompileTool,
+  createCadCompileResultExtension,
+} from './cad-compile-tool.ts';
+import {
+  CAD_CAPABILITIES_TOOL_NAME,
+  createCadCapabilitiesTool,
+} from './cad-capabilities-tool.ts';
 import { createRestrictedToolDefinitions } from './restricted-tools.ts';
+import { createInvalidEncryptedContentRetryExtension } from './provider-retry.ts';
+import { sanitizeInternalPromptHistory } from './internal-prompts.ts';
+import {
+  createReferenceAnalyzeTool,
+  REFERENCE_ANALYZE_TOOL_NAME,
+} from './reference-analyze-tool.ts';
 import {
   createRequiredWebSearchExtension,
   createTavilySearchTool,
@@ -34,6 +53,7 @@ export interface SkillSummary {
 }
 
 export interface PiSessionOptions {
+  intentScopeId: string;
   webSearchEnabled?: boolean;
 }
 
@@ -47,15 +67,16 @@ export class PiRuntime {
   readonly runtimeReady = true;
   readonly skillDiagnostics: readonly string[];
   readonly skills: readonly SkillSummary[];
+  readonly skillsRoot: string;
   readonly stateRoot: string;
   readonly workspaceRoot: string;
 
   private readonly agentDir: string;
   private readonly model: PiModel;
   private readonly modelRuntime: ModelRuntime;
+  private readonly projectRoot: string;
   private readonly sessionRoot: string;
   private readonly skillDefinitions: readonly Skill[];
-  private readonly skillsRoot: string;
   private readonly thinkingLevel: ThinkingLevel;
 
   private constructor(options: {
@@ -63,6 +84,7 @@ export class PiRuntime {
     model: PiModel;
     modelName: string;
     modelRuntime: ModelRuntime;
+    projectRoot: string;
     sessionRoot: string;
     skillDefinitions: readonly Skill[];
     skillDiagnostics: readonly string[];
@@ -75,6 +97,7 @@ export class PiRuntime {
     this.model = options.model;
     this.modelName = options.modelName;
     this.modelRuntime = options.modelRuntime;
+    this.projectRoot = options.projectRoot;
     this.sessionRoot = options.sessionRoot;
     this.skillDefinitions = options.skillDefinitions;
     this.skillDiagnostics = options.skillDiagnostics;
@@ -172,6 +195,7 @@ export class PiRuntime {
       model,
       modelName,
       modelRuntime,
+      projectRoot,
       sessionRoot,
       skillDefinitions: loadedSkills.skills,
       skillDiagnostics: loadedSkills.diagnostics.map(
@@ -186,9 +210,10 @@ export class PiRuntime {
 
   async createSession(
     sessionId: string,
-    options: PiSessionOptions = {},
+    options: PiSessionOptions,
   ): Promise<AgentSession> {
     const scopedWorkspaceRoot = this.workspaceRootForSession(sessionId);
+    const uploadRoot = join(this.stateRoot, 'uploads', sessionId);
     const webSearchEnabled = options.webSearchEnabled ?? false;
     const tavilyApiKey = process.env.TAVILY_API_KEY?.trim();
     if (webSearchEnabled && !tavilyApiKey) {
@@ -203,16 +228,18 @@ export class PiRuntime {
         `The available project skills are located at ${this.skillsRoot}.`,
         `Your only writable directory is ${scopedWorkspaceRoot}. Repository code and skills are read-only. Keep every task output inside this directory.`,
         'Use a matching skill whenever the user request falls within its description.',
-        'CAD skill routing is mutually exclusive. Object-owned colors that distinguish a display, control, logo, material, inlay, functional region, or identity palette route to text-a3d-color. An explicit single-color request routes to text-a3d.',
-        'For create, generate, build, or regenerate requests, pre-existing output files are references only. Rewrite the source and execute the build in the current run.',
-        'For CAD tasks with an uploaded reference, recognizable subject, appearance requirement, or multi-color appearance, render the latest artifact and read the generated preview image before claiming success.',
-        'Python and all CAD dependencies are available through the python command in the repository-managed virtual environment. Do not use conda and do not install packages during a task.',
-        'Place generated CAD source, models, reports, and previews directly in the current working directory so the user interface can discover them.',
+        'For CAD work, text-a3d is the authoritative modeling and QA procedure. Keep one immutable intent target per user-turn scope and one mutable semantic scene; preserve the intent through repairs, and use a new intent filename only when a later user request changes the target.',
+        'Use the structured CAD tools described by text-a3d. cad_compile is the only compilation, QA, packaging, and rendering entry point. Its first compact result indexes stable issue IDs; later results emphasize repairDelta. Query only the required full diagnostics with cad_compile_issues. Context compaction removes superseded compile payloads, never QA execution or persisted evidence.',
+        'Do not trade correctness for speed: preserve millimetre unit scale and the requested geometry, resolve every error plus relevant warning or not_evaluated result, and read the fresh returned preview before claiming delivery. A passing compile without visual review is not delivery-ready.',
+        'Use the repository-managed Python environment without installing packages. Place generated CAD sources, models, reports, and previews in the current working directory.',
       ],
       cwd: scopedWorkspaceRoot,
-      extensionFactories: webSearchEnabled
-        ? [createRequiredWebSearchExtension()]
-        : [],
+      extensionFactories: [
+        createInvalidEncryptedContentRetryExtension(),
+        createCadCompileResultExtension(),
+        createCadCompileContextExtension(),
+        ...(webSearchEnabled ? [createRequiredWebSearchExtension()] : []),
+      ],
       noExtensions: true,
       noPromptTemplates: true,
       noThemes: true,
@@ -244,6 +271,19 @@ export class PiRuntime {
       : undefined;
     const customTools = [
       ...createRestrictedToolDefinitions(scopedWorkspaceRoot),
+      createCadCapabilitiesTool(this.projectRoot),
+      createReferenceAnalyzeTool(
+        this.projectRoot,
+        scopedWorkspaceRoot,
+        uploadRoot,
+      ),
+      createCadCompileTool({
+        intentScopeId: options.intentScopeId,
+        intentStatePath: cadIntentStatePath(this.sessionRoot, sessionId),
+        projectRoot: this.projectRoot,
+        workspaceRoot: scopedWorkspaceRoot,
+      }),
+      createCadCompileIssuesTool(scopedWorkspaceRoot),
       ...(tavilySearchTool ? [tavilySearchTool] : []),
     ];
     const { session } = await createAgentSession({
@@ -266,10 +306,17 @@ export class PiRuntime {
         'grep',
         'find',
         'ls',
+        CAD_CAPABILITIES_TOOL_NAME,
+        REFERENCE_ANALYZE_TOOL_NAME,
+        CAD_COMPILE_TOOL_NAME,
+        CAD_COMPILE_ISSUES_TOOL_NAME,
         ...(tavilySearchTool ? [TAVILY_SEARCH_TOOL_NAME] : []),
       ],
       customTools,
     });
+    session.state.messages = sanitizeInternalPromptHistory(
+      session.state.messages,
+    );
     return session;
   }
 

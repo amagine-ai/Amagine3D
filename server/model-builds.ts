@@ -1,26 +1,14 @@
-import { readFile } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { basename, relative, sep } from 'node:path';
 
 import type { ArtifactSummary } from '../src/types.ts';
+import {
+  type UnifiedBuildReport,
+  validateUnifiedBuildReport,
+} from './build-report.ts';
+import { resolveArtifactPath } from './artifacts.ts';
 
-const ASSEMBLY_BUILD_REPORT_SCHEMA = 'evidence-cad-assembly-build/v3';
-const BUILD_REPORT_SCHEMAS = new Set([
-  ASSEMBLY_BUILD_REPORT_SCHEMA,
-  'evidence-cad-build/v4',
-  'evidence-color-build/v5',
-]);
 const MAX_BUILD_REPORT_BYTES = 2 * 1024 * 1024;
-
-interface ReportFileReference {
-  path?: unknown;
-}
-
-interface RawBuildReport {
-  artifacts?: Record<string, ReportFileReference>;
-  part?: unknown;
-  schema?: unknown;
-  source?: ReportFileReference | null;
-}
 
 export interface ModelBuild {
   artifactPaths: string[];
@@ -28,11 +16,10 @@ export interface ModelBuild {
   modelId: string;
   primaryPreviewPath: string;
   reportPath: string;
-  sourcePath: string;
+  sourcePath?: string;
 }
 
-function safeRelativePath(root: string, value: string): string | undefined {
-  const candidate = isAbsolute(value) ? value : resolve(root, value);
+function safeRelativePath(root: string, candidate: string): string | undefined {
   const path = relative(root, candidate);
   if (path === '' || path === '..' || path.startsWith(`..${sep}`)) {
     return undefined;
@@ -40,45 +27,46 @@ function safeRelativePath(root: string, value: string): string | undefined {
   return path.split(sep).join('/');
 }
 
-function artifactPathForReference(
-  root: string,
-  artifacts: readonly ArtifactSummary[],
-  value: unknown,
-  kind?: ArtifactSummary['kind'],
-): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const available = kind
-    ? artifacts.filter((artifact) => artifact.kind === kind)
-    : [...artifacts];
-  const relativePath = safeRelativePath(root, value);
+function primaryArtifactKey(
+  report: UnifiedBuildReport,
+): '3mf' | 'stl' | undefined {
+  const parts = report.artifactMatrix?.parts;
+  if (!parts || Object.keys(parts).length === 0) return undefined;
+  const records = Object.values(parts);
   if (
-    relativePath &&
-    available.some((artifact) => artifact.path === relativePath)
-  ) {
-    return relativePath;
-  }
-  const fileName = basename(value);
-  const matches = available.filter(
-    (artifact) => basename(artifact.path) === fileName,
-  );
-  return matches.length === 1 ? matches[0]?.path : undefined;
-}
-
-function reportArtifactPaths(
-  root: string,
-  artifacts: readonly ArtifactSummary[],
-  report: RawBuildReport,
-): string[] {
-  const paths = Object.values(report.artifacts ?? {})
-    .map((reference) =>
-      artifactPathForReference(root, artifacts, reference?.path, 'model'),
+    records.some(
+      (record) =>
+        record?.stl !== 'required' ||
+        record?.glb !== 'required' ||
+        !['required', 'not-applicable'].includes(String(record?.step)) ||
+        !['required', 'not-applicable'].includes(String(record?.threeMf)),
     )
-    .filter((path): path is string => Boolean(path));
-  return [...new Set(paths)];
+  ) {
+    return undefined;
+  }
+  const backend = String(report.backend);
+  const requiresThreeMf = records.some(
+    (record) => record.threeMf === 'required',
+  );
+  if (
+    (backend === 'brep-part' && requiresThreeMf) ||
+    (['brep-color-regions', 'hybrid-mesh'].includes(backend) &&
+      !requiresThreeMf) ||
+    (backend.startsWith('brep-') &&
+      records.some((record) => record.step !== 'required'))
+  ) {
+    return undefined;
+  }
+  return requiresThreeMf ? '3mf' : 'stl';
 }
 
-function primaryArtifactKey(schema: string): string {
-  return schema === 'evidence-color-build/v5' ? '3mf' : 'stl';
+function primaryArtifactReferenceKey(
+  report: UnifiedBuildReport,
+  key: '3mf' | 'stl',
+): string | undefined {
+  if (report.artifacts?.[key] || key === '3mf') return key;
+  const partIds = Object.keys(report.artifactMatrix?.parts ?? {});
+  return partIds.length === 1 ? `stl:${partIds[0]}` : undefined;
 }
 
 export async function discoverModelBuilds(
@@ -86,6 +74,7 @@ export async function discoverModelBuilds(
   artifacts: readonly ArtifactSummary[],
 ): Promise<ModelBuild[]> {
   const builds: ModelBuild[] = [];
+  const canonicalRoot = await realpath(workspaceRoot);
   for (const artifact of artifacts) {
     if (
       artifact.kind !== 'report' ||
@@ -94,46 +83,48 @@ export async function discoverModelBuilds(
     ) {
       continue;
     }
-    let report: RawBuildReport;
-    try {
-      report = JSON.parse(
-        await readFile(resolve(workspaceRoot, artifact.path), 'utf8'),
-      ) as RawBuildReport;
-    } catch {
-      continue;
-    }
-    const schema = String(report.schema);
-    if (!BUILD_REPORT_SCHEMAS.has(schema)) continue;
-    const sourcePath = artifactPathForReference(
+    const reportPath = await resolveArtifactPath(workspaceRoot, artifact.path);
+    if (!reportPath) continue;
+    const validated = await validateUnifiedBuildReport(
       workspaceRoot,
-      artifacts,
-      report.source?.path,
-      'source',
+      reportPath,
+      { maxBytes: MAX_BUILD_REPORT_BYTES },
     );
-    const primaryKey = primaryArtifactKey(schema);
-    const primaryPreviewPath = artifactPathForReference(
-      workspaceRoot,
-      artifacts,
-      report.artifacts?.[primaryKey]?.path,
-      'model',
+    if (!validated) continue;
+    const report = validated.report;
+    const primaryKey = primaryArtifactKey(report);
+    if (!primaryKey) continue;
+    const primaryReference = primaryArtifactReferenceKey(report, primaryKey);
+    const primaryPreviewPath = primaryReference
+      ? safeRelativePath(
+          canonicalRoot,
+          validated.artifactPaths[primaryReference] ?? '',
+        )
+      : undefined;
+    const displayPreviewPath = safeRelativePath(
+      canonicalRoot,
+      validated.artifactPaths['glb:display'] ?? '',
     );
-    const displayPreviewPath = artifactPathForReference(
-      workspaceRoot,
-      artifacts,
-      report.artifacts?.['glb:display']?.path,
-      'model',
-    );
-    if (!sourcePath || !primaryPreviewPath || !displayPreviewPath) continue;
+    if (!primaryPreviewPath || !displayPreviewPath) continue;
+    const sourcePath = validated.inputPaths.source
+      ? safeRelativePath(canonicalRoot, validated.inputPaths.source)
+      : undefined;
     builds.push({
-      artifactPaths: reportArtifactPaths(workspaceRoot, artifacts, report),
+      artifactPaths: [
+        ...new Set(
+          Object.values(validated.artifactPaths)
+            .map((path) => safeRelativePath(canonicalRoot, path))
+            .filter((path): path is string => Boolean(path)),
+        ),
+      ],
       displayPreviewPath,
       modelId:
         typeof report.part === 'string' && report.part.trim()
           ? report.part
-          : basename(sourcePath, '.py'),
+          : basename(primaryPreviewPath, `.${primaryKey}`),
       primaryPreviewPath,
       reportPath: artifact.path,
-      sourcePath,
+      ...(sourcePath ? { sourcePath } : {}),
     });
   }
   return builds.sort((left, right) =>

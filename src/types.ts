@@ -1,4 +1,4 @@
-export const API_VERSION = 9;
+export const API_VERSION = 10;
 export const BUNDLED_POMODORO_SESSION_ID = 'builtin:amagine3d-pomodoro';
 export const ACCEPTED_IMAGE_TYPES = [
   'image/png',
@@ -12,6 +12,7 @@ export const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export type AcceptedImageType = (typeof ACCEPTED_IMAGE_TYPES)[number];
 export type ArtifactKind = 'image' | 'model' | 'report' | 'source' | 'other';
+export type ChatTaskType = 'cad' | 'chat';
 export type PreviewFormat = '3mf' | 'glb' | 'stl';
 
 export interface ImageAttachment {

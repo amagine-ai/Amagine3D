@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
@@ -7,6 +8,7 @@ export interface SavedImageAttachment {
   mimeType: string;
   originalName: string;
   path: string;
+  sha256: string;
 }
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -35,11 +37,13 @@ export async function saveImageAttachments(
         uploadDirectory,
         `${turnId}-${String(index + 1).padStart(2, '0')}.${extension}`,
       );
-      await writeFile(path, Buffer.from(image.data, 'base64'), { flag: 'wx' });
+      const bytes = Buffer.from(image.data, 'base64');
+      await writeFile(path, bytes, { flag: 'wx' });
       return {
         mimeType: image.mimeType,
         originalName: image.name,
         path,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
       };
     }),
   );
@@ -52,7 +56,7 @@ export function appendSavedImageContext(
   if (images.length === 0) return prompt;
   const lines = images.map(
     (image, index) =>
-      `- [${index + 1}] (${image.mimeType}): ${JSON.stringify(image.path)}`,
+      `- [${index + 1}] (${image.mimeType}, sha256=${image.sha256}): ${JSON.stringify(image.path)}`,
   );
   return [
     prompt,
