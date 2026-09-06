@@ -21,7 +21,17 @@ def _missing_snapshot() -> dict[str, object]:
     }
 
 
-def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
+def _same_file_state(
+    left: os.stat_result,
+    right: os.stat_result,
+    *,
+    compare_change_time: bool = True,
+) -> bool:
+    same_change_time = (
+        left.st_ctime_ns == right.st_ctime_ns
+        if compare_change_time
+        else True
+    )
     return (
         stat.S_ISREG(right.st_mode)
         and right.st_nlink == 1
@@ -29,7 +39,7 @@ def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
         and left.st_ino == right.st_ino
         and left.st_size == right.st_size
         and left.st_mtime_ns == right.st_mtime_ns
-        and left.st_ctime_ns == right.st_ctime_ns
+        and same_change_time
     )
 
 
@@ -59,9 +69,13 @@ def stable_file_snapshot(path: Path) -> dict[str, object]:
                 os.close(descriptor)
             except OSError:
                 pass
-    stable = (
-        _same_file_state(before, after)
-        and _same_file_state(before, current)
+    stable = _same_file_state(before, after) and _same_file_state(
+        before,
+        current,
+        # CPython 3.12 deprecated Windows st_ctime as a creation-time alias.
+        # Keep ctime protection between the two descriptor snapshots, but do
+        # not compare that value across Windows fstat/lstat implementations.
+        compare_change_time=os.name != "nt",
     )
     return {
         "exists": True,

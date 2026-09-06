@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,35 @@ import freshness_check  # noqa: E402
 
 
 class StableFreshnessSnapshotTests(unittest.TestCase):
+    def test_file_state_can_ignore_cross_api_change_time_difference(self) -> None:
+        baseline = mock.Mock(
+            st_mode=stat.S_IFREG,
+            st_nlink=1,
+            st_dev=1,
+            st_ino=2,
+            st_size=3,
+            st_mtime_ns=4,
+            st_ctime_ns=5,
+        )
+        path_state = mock.Mock(
+            st_mode=stat.S_IFREG,
+            st_nlink=1,
+            st_dev=1,
+            st_ino=2,
+            st_size=3,
+            st_mtime_ns=4,
+            st_ctime_ns=6,
+        )
+
+        self.assertFalse(freshness_check._same_file_state(baseline, path_state))
+        self.assertTrue(
+            freshness_check._same_file_state(
+                baseline,
+                path_state,
+                compare_change_time=False,
+            )
+        )
+
     def test_regular_file_snapshot_binds_size_mtime_and_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "artifact.bin"
