@@ -94,7 +94,7 @@ Amagine3D 将 3D-native Agent 定义为一套以三维设计状态为核心的 A
 
 自主内环的每一轮都从当前设计状态开始。Agent 先读取零件之间的空间关系，再决定需要修改的结构。修改后的模型会在真实几何环境中执行，系统直接测量生成结果，并检查装配干涉、运动路径和导出文件。检查结果会返回给 Agent。如果某项要求没有满足，Agent 会根据具体的测量值定位问题，修改受影响的部分，然后开始下一轮。这个过程使用的是实际生成的几何，而不是模型对结果的文字判断。
 
-当候选设计满足当前任务的检查条件后，它才会进入提交环节。系统会把候选结果与用户约束和上一版设计进行比较。检查通过后，候选设计会被保存为新的基线，源码和制造文件也随之归档；如果修改引入了新的问题，系统会保留上一版结果，并让 Agent 继续修正。需要改变已确认结构或覆盖现有产物时，可以要求用户确认。
+当候选设计满足当前任务的检查条件后，它才会进入提交环节。系统会把候选结果与用户约束和上一版设计进行比较。检查通过后，候选设计会被保存为新的基线，源码和制造文件也随之归档；如果修改引入了新的问题，系统会保留上一版结果，并让 Agent 继续修正。所有候选改动都保留在隔离的会话工作区内。
 
 当前版本已经把语义场景作为这份设计状态。它记录物理零件、特征归属、接口、材料、表示主数据与产物绑定，同时保持原始 intent 不变。一个零件可以由 BRep 或 mesh 作为主数据，也可以参与混合装配；这些只是内部编译选择，不是 Agent 面前的多套工作流。所有后端输出同一种 build report，并明确记录 semantic 到 print 坐标系的刚性变换。
 
@@ -118,7 +118,7 @@ Amagine3D 会继续丰富这份共同 3D 上下文中的器件语义：让系统
 - Python 3.10 至 3.13
 - npm
 - 现代桌面浏览器
-- 兼容 Amagine3D Agent 运行时协议的模型网关
+- OpenAI Responses 兼容的 API 密钥或模型网关
 
 初始化脚本会在仓库内创建 `.venv`，并安装锁定版本的 build123d、
 OCP、Manifold、trimesh 和 lib3mf。宿主电脑不需要安装桌面 CAD 软件。
@@ -135,7 +135,8 @@ npm run dev
 
 配置 `.env` 后打开 `http://127.0.0.1:6160`。本地 API 默认监听
 `http://127.0.0.1:6161`。首次启动会准备 `.venv`；依赖指纹没有变化时，
-后续启动会直接复用。
+后续启动会直接复用。`npm install` 也会安装 SDK 使用的当前平台 Codex
+runtime，用户不需要另行全局安装 Codex。
 
 ### 服务端配置
 
@@ -145,7 +146,6 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
-TAVILY_API_KEY=... # 可选；启用“联网参考”开关
 
 PORT=6161
 WEB_PORT=6160
@@ -153,19 +153,19 @@ AGENT_RUN_IDLE_TIMEOUT_MS=1800000
 AGENT_RUN_HARD_TIMEOUT_MS=7200000
 ```
 
-这些值只由本地 Express 服务端读取。配置 `TAVILY_API_KEY` 后，输入区会显示
-“联网参考”开关。为某轮开启后，Amagine3D Agent 必须先搜索再执行 CAD 写入或
-构建；搜索会返回靠前的尺寸与规格来源，并尽力向多模态模型提供最多三张参考图。
-缺少合适图片不会阻断原有 CAD Skill 流程。请勿通过客户端环境变量暴露 API
-密钥，也不要提交 `.env`。连续无活动超时会由非空模型输出刷新；每个活动工具分别
-记录开始、输出与结束进度，因此一个持续输出的并行工具不能掩盖另一个已静默 30 分钟
-的工具。整轮硬超时是独立的绝对安全上限。
-CAD 任务若在十分钟后仍未启动首次正式编译，只会收到一次 steer 软提醒；它不会令
-任务失败，也不会推进任何服务端工作流阶段。
+这些值只由本地 Express 服务端读取。对应 `LLM_*` 未配置时，也会复用已有的
+`CODEX_API_KEY`/`OPENAI_API_KEY` 与 `OPENAI_BASE_URL`。“联网参考”开关只为
+当前轮次启用 Codex 原生联网搜索和工作区网络访问，不再需要独立的搜索服务密钥。请勿通过
+客户端环境变量暴露 API 密钥，也不要提交 `.env`。
+
+每轮使用 `workspace-write` 与 `approvalPolicy: never`：Codex 可以在当前会话的
+执行目录中直接工作，无需用户反复点击确认；目录外写入仍由沙箱拦截。命令进程只获得
+精简后的 shell 环境，类似密钥的变量会被移除。连续无活动超时由原生 Codex 事件刷新，
+整轮硬超时则是独立的绝对安全上限。
 
 ## 系统架构
 
-`React/Vite 界面 -> Express API -> 3D-native Agent 运行时 -> 会话隔离的 Python CAD 工作区`
+`React/Vite 界面 -> Express API -> Codex SDK/runtime -> 隔离工作区 -> a3d/Python CAD`
 
 ```text
 Amagine3D/
@@ -177,11 +177,13 @@ Amagine3D/
 ├── server/
 │   ├── routes/                    Agent 对话流与会话、产物 API
 │   ├── artifacts*.ts, sessions.ts 产物发现、打包、回收与会话持久化
-│   ├── uploads.ts, visual-audit.ts 图片输入与生成模型视觉检查
+│   ├── uploads.ts                  经校验的图片输入
 │   └── app.ts, index.ts             Express 启动、静态托管与运行时组装
-├── packages/a3d-runtime/src/          3D-native Agent 模型/会话适配、Skill 加载与写入限制
+├── packages/a3d-runtime/
+│   └── src/                       Codex 适配、稳定事件、沙箱与运行监督
+├── bin/a3d                         会话安全的 CAD 命令行
 ├── skills/
-│   └── text-a3d/                  统一语义场景 CAD 工作流与内部编译器
+│   └── text-a3d/                  精简 CAD 指引与语义场景编译器
 │       └── color/BACKEND.md       内部颜色分区、材料与 3MF 后端
 ├── bundled-projects/                  工作台内置的只读示例项目
 ├── workspace/sessions/<sessionId>/   生成的源码、模型、报告和预览图
@@ -190,16 +192,15 @@ Amagine3D/
 └── tests/                             服务端、运行时、产物与 UI 逻辑测试
 ```
 
-Agent 运行时只暴露 `text-a3d` 一个 Skill 和一套语义场景工作流。每个物理零件声明
-BRep 或 mesh 表示主数据；内部编译器负责混合几何、永久颜色分区、材料计划与 3MF
-打包。仅用于显示的内容不会进入制造几何。颜色后端工具位于
-`skills/text-a3d/color/`，不再拥有独立 intent 契约或 Skill 清单。
-`cad_capabilities`、`reference_analyze`、`cad_compile` 与按需读取诊断的
-`cad_compile_issues` 是同一开放式 Agent loop 中的同级工具。编译结果进入上下文时
-使用有大小上限的 Agent 投影，同时在磁盘保留完整、绑定 run 的证据，因此可以缩小
-修复上下文，而不降低 QA 强度，也不会把建模改成固定的服务端状态机。
+私有 `@amagine3d/a3d-runtime` package 为每个产品会话启动或恢复一个原生 Codex
+线程，并把 SDK 事件转换成稳定的应用契约。Express 服务端负责产品会话持久化，再将
+这些事件流式传给工作台，本身不再导入 Codex SDK 类型。产品层只增加精简的
+`AGENTS.md` 指引与 `text-a3d` Skill。`a3d` 命令包装已有的 Python 编译、校验、
+打包与渲染入口；由 Codex 自主决定何时调用，不再运行服务端自定义修复状态机。
 
-每个 Agent 会话使用独立工作区。CAD 脚本由服务端管理的 Python 环境执行，浏览器通过 Three.js 渲染生成模型，模型凭据仅保留在服务端。更完整的设计见[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
+每个会话拥有独立工作区和 Codex 状态目录。可编辑源码、制造文件、报告与预览都保留
+在该目录，浏览器通过 Three.js 渲染生成模型。更完整的设计见
+[威胁模型](./threat-model.zh-CN.md) 和 [安全上报](./SECURITY.zh-CN.md)。
 
 ## 项目状态
 
@@ -229,7 +230,7 @@ Amagine3D 建立在以下开源项目之上：
 | [trimesh](https://github.com/mikedh/trimesh)                                                               | mesh 处理与检查           |
 | [Manifold](https://github.com/elalish/manifold)                                                           | 水密等值面网格与布尔运算   |
 | [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF 写入与回读            |
-| [PI coding agent](https://github.com/earendil-works/pi)                                                    | Agent session、流式响应与工具调用 |
+| [OpenAI Codex](https://github.com/openai/codex)                                                            | Agent 线程、工作区执行与流式事件 |
 
 应用运行后可通过 `/licenses` 查看许可证页面。仓库内的许可证文本和生产 npm
 依赖清单位于 [`public/licenses/`](../public/licenses/)。源码仓库的分发边界与

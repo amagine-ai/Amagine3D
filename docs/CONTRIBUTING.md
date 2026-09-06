@@ -22,9 +22,12 @@ the five-view output is 640 pixels, and 2x supersampling is opt-in. Its
 on Ubuntu and Windows in CI and uses the same headless code on macOS.
 
 Keep browser code behind the local API boundary. React must not access model
-credentials, Agent session JSONL files, uploads, or session workspaces
-directly. Server artifact routes must keep every path inside the selected Agent
-session's `workspace/sessions/<sessionId>/` directory.
+credentials, Codex state, product session records, uploads, or session
+workspaces directly. Server artifact routes must keep every path inside the
+selected session's `workspace/sessions/<sessionId>/` directory.
+Only `packages/a3d-runtime` may import `@openai/codex` or
+`@openai/codex-sdk`; application server code must use the package's public
+runtime contracts. The runtime package must not import from `server/` or `src/`.
 
 Submit one focused change with tests and documentation for new public behavior.
 Automated tests must not call real model providers. Provider-backed CAD runs are

@@ -1,20 +1,19 @@
 # @amagine3d/a3d-runtime
 
-Local adapter package for the PI coding-agent SDK used by Amagine3D.
+Private runtime adapter between Amagine3D and the OpenAI Codex SDK.
 
-The package owns vendor-facing concerns:
+This package owns:
 
-- model/provider registration and environment parsing;
-- PI session and resource-loader creation;
-- project skill discovery;
-- writable-workspace tool restrictions;
-- the small set of PI session APIs used by the server persistence layer.
+- Codex client, model, provider, environment, and sandbox configuration;
+- native Codex thread start/resume and streamed-turn execution;
+- A3D runtime prompts and isolated workspace setup;
+- conversion from vendor SDK events to the stable Amagine3D runtime contract;
+- cancellation, idle timeout, and hard timeout supervision.
 
-Application HTTP routes should import from `@amagine3d/a3d-runtime` rather than
-from `@earendil-works/pi-coding-agent`. Request validation, artifact discovery,
-uploads, and CAD visual-audit policy remain in `server/` because they are
-Amagine3D application behavior rather than runtime-adapter behavior.
+The package does not own HTTP transport, product-session JSON, uploads, or
+artifact discovery. Thread persistence crosses the boundary through the
+`threadId` input and `onThreadStarted` callback, so this package never imports
+from the application `server/` or `src/` trees.
 
-The package is private and linked into the root application with a local `file:`
-dependency, so normal root commands (`npm install`, `npm test`, `npm run build`)
-cover it without a separate publish step.
+The root application links this private package with a local `file:` dependency.
+Root build and test commands cover its TypeScript source and tests.

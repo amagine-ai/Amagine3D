@@ -94,7 +94,7 @@ In this architecture, a design task has two levels. The autonomous inner loop pr
 
 Each iteration of the autonomous inner loop starts from the current design state. The Agent reads the spatial relationships between parts, then decides which structures need to change. The modified model runs in a real geometry environment, where the system measures the generated result directly and checks assembly interference, motion paths, and exported files. These results return to the Agent. If a requirement is not satisfied, the Agent uses the specific measurements to locate the problem, modifies the affected area, and starts another iteration. This process works from the geometry that was actually generated, rather than the model's textual judgment of the result.
 
-Once a candidate design meets the checks for the current task, it enters the commit stage. The system compares the candidate with the user constraints and the previous design version. If the checks pass, the candidate is saved as the new baseline, together with its source code and manufacturing files. If the change introduces a new problem, the system preserves the previous result and lets the Agent continue correcting the candidate. Changes to confirmed structures or overwrites of existing artifacts can require user approval.
+Once a candidate design meets the checks for the current task, it enters the commit stage. The system compares the candidate with the user constraints and the previous design version. If the checks pass, the candidate is saved as the new baseline, together with its source code and manufacturing files. If the change introduces a new problem, the system preserves the previous result and lets the Agent continue correcting the candidate. All candidate changes stay inside the isolated session workspace.
 
 The current release uses a semantic scene as that design state. It records physical parts, feature ownership, interfaces, materials, representation masters, and artifact bindings while keeping the original intent immutable. A part can be BRep-master, mesh-master, or participate in a mixed assembly; these are internal compiler choices rather than separate Agent workflows. Every backend publishes the same build-report schema and explicit semantic-to-print coordinate transforms.
 
@@ -118,7 +118,7 @@ Our goal is to let a hardware concept begin with reference images, physical comp
 - Python 3.10 through 3.13
 - npm
 - A modern desktop browser
-- A model gateway compatible with an Amagine3D Agent runtime protocol
+- An OpenAI Responses-compatible API key or model gateway
 
 The setup script creates a repository-local `.venv` and installs the pinned
 build123d, OCP, Manifold, trimesh, and lib3mf dependencies. A desktop CAD application is
@@ -136,7 +136,9 @@ npm run dev
 
 Configure `.env`, then open `http://127.0.0.1:6160`. The local API listens on
 `http://127.0.0.1:6161` by default. The first start prepares `.venv`; later
-starts reuse it when the dependency fingerprint is unchanged.
+starts reuse it when the dependency fingerprint is unchanged. `npm install`
+also installs the platform-specific Codex runtime used by the SDK; users do not
+need a separate global Codex installation.
 
 ### Server Configuration
 
@@ -146,7 +148,6 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
-TAVILY_API_KEY=... # optional; enables the Web refs control
 
 PORT=6161
 WEB_PORT=6160
@@ -154,22 +155,22 @@ AGENT_RUN_IDLE_TIMEOUT_MS=1800000
 AGENT_RUN_HARD_TIMEOUT_MS=7200000
 ```
 
-These values are read only by the local Express server. When
-`TAVILY_API_KEY` is configured, the composer exposes a **Web refs** control.
-Enabling it for a turn requires Amagine3D Agent to search before CAD mutations,
-returns ranked dimension/specification sources, and passes up to three
-available reference images to the multimodal model. Missing images do not block
-the CAD Skill workflow. Do not expose API keys through client-side environment
-variables or commit `.env`. The idle timeout is refreshed by non-empty model
-output. Each active tool keeps its own start/output/end activity deadline, so a
-noisy parallel tool cannot hide another tool that has been silent for 30 minutes.
-The hard timeout is an absolute per-run safety cap. A CAD run that has not
-started its first compiler invocation after ten minutes receives one steering
-reminder; it does not fail the run or advance a server-owned workflow stage.
+These values are read only by the local Express server. Existing
+`CODEX_API_KEY`/`OPENAI_API_KEY` and `OPENAI_BASE_URL` values are accepted when
+the corresponding `LLM_*` value is absent. The **Web refs** control enables
+native Codex web search and workspace network access only for that turn; it does
+not require a separate search-service key. Do not expose API keys through client-side environment
+variables or commit `.env`.
+
+Each turn runs with `workspace-write` and `approvalPolicy: never`: Codex can
+work freely inside that session's execution directory without UI approval, but
+writes outside it remain sandboxed. Spawned commands receive a minimal shell
+environment with secret-like variables removed. The idle timeout is refreshed
+by native Codex events, and the hard timeout is an absolute per-turn safety cap.
 
 ## System Architecture
 
-`React/Vite UI -> Express API -> 3D-native Agent runtime -> session-scoped Python CAD workspace`
+`React/Vite UI -> Express API -> Codex SDK/runtime -> isolated workspace -> a3d/Python CAD`
 
 ```text
 Amagine3D/
@@ -181,11 +182,13 @@ Amagine3D/
 ├── server/
 │   ├── routes/                    Agent chat streaming and session/artifact APIs
 │   ├── artifacts*.ts, sessions.ts Artifact discovery, archive, trash, and persistence
-│   ├── uploads.ts, visual-audit.ts Image input and generated-model visual checks
+│   ├── uploads.ts                  Validated image input
 │   └── app.ts, index.ts             Express startup, static hosting, and runtime wiring
-├── packages/a3d-runtime/src/          3D-native Agent model/session adapter, skill loading, and write guards
+├── packages/a3d-runtime/
+│   └── src/                       Codex adapter, stable events, sandbox, and run supervision
+├── bin/a3d                         Session-safe CAD command line
 ├── skills/
-│   └── text-a3d/                  Unified semantic-scene CAD workflow and compilers
+│   └── text-a3d/                  Compact CAD guidance and semantic-scene compilers
 │       └── color/BACKEND.md       Internal color-region, material, and 3MF backend
 ├── bundled-projects/                  Read-only example projects shown in the workbench
 ├── workspace/sessions/<sessionId>/   Generated source, models, reports, and previews
@@ -194,19 +197,19 @@ Amagine3D/
 └── tests/                             Server, runtime, artifact, and UI-logic tests
 ```
 
-The Agent runtime exposes only the `text-a3d` skill and one semantic-scene
-workflow. Each physical part declares a BRep or mesh representation master;
-internal compilers handle mixed geometry, permanent color regions, material
-planning, and 3MF packaging. Display-only content never enters manufacturing
-geometry. Color backend utilities live under `skills/text-a3d/color/` and have
-no independent intent contract or skill manifest.
-`cad_capabilities`, `reference_analyze`, `cad_compile`, and the on-demand
-`cad_compile_issues` diagnostic reader are peer tools in the same open Agent
-loop. Compile results use a bounded Agent projection while retaining complete
-run-bound evidence on disk, so repair context stays small without weakening QA
-or turning modeling into a fixed server-side state machine.
+The private `@amagine3d/a3d-runtime` package starts or resumes one native Codex
+thread per product session and translates SDK events into a stable application
+contract. The Express server persists product sessions and streams those events
+to the workbench without importing Codex SDK types. The product layer adds only
+compact `AGENTS.md` guidance and the `text-a3d` skill. The `a3d` command wraps
+the existing managed Python compiler, validation, packaging, and rendering
+entry points; Codex decides when to use them instead of following a server-owned
+repair state machine.
 
-Each Agent session uses its own workspace. CAD scripts run with the server-managed Python environment, while the browser renders generated models with Three.js. Model credentials remain on the server. For more detail, see the [threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
+Every session has its own workspace and Codex state directory. Editable source,
+manufacturing files, reports, and previews stay together there, while the
+browser renders generated models with Three.js. For more detail, see the
+[threat model](./docs/threat-model.md) and [security reporting policy](./docs/SECURITY.md).
 
 ## Project Status
 
@@ -236,7 +239,7 @@ Amagine3D is built on the following open-source projects:
 | [trimesh](https://github.com/mikedh/trimesh)                                                               | Mesh processing and checks             |
 | [Manifold](https://github.com/elalish/manifold)                                                           | Watertight level-set meshes and booleans |
 | [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF writing and readback               |
-| [PI coding agent](https://github.com/earendil-works/pi)                                                    | Agent sessions, streaming, and tool calls |
+| [OpenAI Codex](https://github.com/openai/codex)                                                            | Agent threads, workspace execution, and streaming |
 
 The running application exposes its license page at `/licenses`. Checked-in
 license texts and the production npm inventory are available under
