@@ -80,7 +80,7 @@ class StableFreshnessSnapshotTests(unittest.TestCase):
             )
             self.assertIsNone(cad_compile._current_file_binding(hardlink))
 
-    def test_in_place_change_with_restored_mtime_is_detected_by_ctime(self) -> None:
+    def test_in_place_change_with_restored_mtime_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "artifact.bin"
             original = b"original payload"
@@ -107,6 +107,43 @@ class StableFreshnessSnapshotTests(unittest.TestCase):
                 freshness_check.os,
                 "read",
                 side_effect=mutate_after_read,
+            ):
+                snapshot = freshness_check.stable_file_snapshot(path)
+
+            self.assertTrue(mutated)
+            self.assertTrue(snapshot["exists"])
+            self.assertFalse(snapshot["stable"])
+            self.assertIsNone(snapshot["sha256"])
+
+    def test_windows_rechecks_digest_when_change_time_does_not_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "artifact.bin"
+            original = b"original payload"
+            replacement = b"changed! payload"
+            path.write_bytes(original)
+            original_stat = path.stat()
+            original_read = freshness_check.os.read
+            mutated = False
+
+            def mutate_after_read(descriptor: int, size: int) -> bytes:
+                nonlocal mutated
+                chunk = original_read(descriptor, size)
+                if chunk and not mutated:
+                    mutated = True
+                    path.write_bytes(replacement)
+                    os.utime(
+                        path,
+                        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                    )
+                return chunk
+
+            with (
+                mock.patch.object(freshness_check.os, "name", "nt"),
+                mock.patch.object(
+                    freshness_check.os,
+                    "read",
+                    side_effect=mutate_after_read,
+                ),
             ):
                 snapshot = freshness_check.stable_file_snapshot(path)
 

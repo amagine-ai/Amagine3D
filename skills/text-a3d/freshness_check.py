@@ -43,6 +43,17 @@ def _same_file_state(
     )
 
 
+def _hash_descriptor(descriptor: int) -> str:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = sha256()
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def stable_file_snapshot(path: Path) -> dict[str, object]:
     """Hash one regular file through one descriptor and bind it to its path."""
 
@@ -53,13 +64,21 @@ def stable_file_snapshot(path: Path) -> dict[str, object]:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             return _missing_snapshot()
-        digest = sha256()
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-        after = os.fstat(descriptor)
+        digest = _hash_descriptor(descriptor)
+        first_after = os.fstat(descriptor)
+        descriptor_stable = _same_file_state(before, first_after)
+        if os.name == "nt":
+            # Windows st_ctime is creation time, so it cannot reveal a
+            # same-size rewrite whose mtime was restored. A second read does.
+            verification_digest = _hash_descriptor(descriptor)
+            after = os.fstat(descriptor)
+            descriptor_stable = (
+                descriptor_stable
+                and digest == verification_digest
+                and _same_file_state(first_after, after)
+            )
+        else:
+            after = first_after
         current = path.lstat()
     except OSError:
         return _missing_snapshot()
@@ -69,7 +88,7 @@ def stable_file_snapshot(path: Path) -> dict[str, object]:
                 os.close(descriptor)
             except OSError:
                 pass
-    stable = _same_file_state(before, after) and _same_file_state(
+    stable = descriptor_stable and _same_file_state(
         before,
         current,
         # CPython 3.12 deprecated Windows st_ctime as a creation-time alias.
@@ -80,7 +99,7 @@ def stable_file_snapshot(path: Path) -> dict[str, object]:
     return {
         "exists": True,
         "mtime_ns": after.st_mtime_ns,
-        "sha256": digest.hexdigest() if stable else None,
+        "sha256": digest if stable else None,
         "size": after.st_size,
         "stable": stable,
     }
