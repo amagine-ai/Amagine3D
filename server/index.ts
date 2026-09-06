@@ -1,6 +1,6 @@
 import 'dotenv/config';
 
-import { PiRuntime } from '@amagine3d/a3d-runtime';
+import { CodexRuntime } from '@amagine3d/a3d-runtime';
 
 import { createApp } from './app.ts';
 import { errorMessage } from './http-utils.ts';
@@ -10,10 +10,10 @@ import { activateProjectPython } from './python-runtime.ts';
 async function main(): Promise<void> {
   const paths = serverPaths();
   const python = activateProjectPython(paths.projectRoot);
-  let runtime: PiRuntime | undefined;
+  let runtime: CodexRuntime | undefined;
   let runtimeError: string | undefined;
   try {
-    runtime = await PiRuntime.create(paths.projectRoot);
+    runtime = await CodexRuntime.create(paths.projectRoot);
   } catch (error) {
     runtimeError = errorMessage(error);
     console.error(

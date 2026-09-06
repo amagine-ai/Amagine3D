@@ -3,7 +3,8 @@ import 'dotenv/config';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { PiRuntime } from '@amagine3d/a3d-runtime';
+import { CodexRuntime } from '@amagine3d/a3d-runtime';
+
 import { activateProjectPython } from './python-runtime.ts';
 
 const serverDirectory = dirname(fileURLToPath(import.meta.url));
@@ -27,14 +28,23 @@ const checks: Array<{ detail: string; name: string; ready: boolean }> = [
     ready: python.ready,
   },
   {
-    detail: process.env.LLM_API_KEY?.trim() ? 'configured' : 'not configured',
-    name: 'LLM_API_KEY',
-    ready: Boolean(process.env.LLM_API_KEY?.trim()),
+    detail:
+      process.env.LLM_API_KEY?.trim() ||
+      process.env.CODEX_API_KEY?.trim() ||
+      process.env.OPENAI_API_KEY?.trim()
+        ? 'configured'
+        : 'not configured',
+    name: 'Codex API key',
+    ready: Boolean(
+      process.env.LLM_API_KEY?.trim() ||
+        process.env.CODEX_API_KEY?.trim() ||
+        process.env.OPENAI_API_KEY?.trim(),
+    ),
   },
 ];
 
 try {
-  const runtime = await PiRuntime.create(projectRoot);
+  const runtime = await CodexRuntime.create(projectRoot);
   checks.push({
     detail: `${runtime.modelName}; ${runtime.skills.length} skills`,
     name: 'Amagine3D Agent runtime',

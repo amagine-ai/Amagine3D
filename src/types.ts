@@ -1,4 +1,4 @@
-export const API_VERSION = 10;
+export const API_VERSION = 11;
 export const BUNDLED_POMODORO_SESSION_ID = 'builtin:amagine3d-pomodoro';
 export const ACCEPTED_IMAGE_TYPES = [
   'image/png',
@@ -34,9 +34,15 @@ export type ChatStepStatus =
 
 export type ChatTurnTerminalStatus = Exclude<ChatStepStatus, 'running'>;
 
+export interface LocalizedText {
+  en: string;
+  zh: string;
+}
+
 export interface ChatStep {
   id: string;
   label: string;
+  localizedLabel?: LocalizedText;
   occurredAt: number;
   progressText?: string;
   stage: string;
@@ -46,6 +52,8 @@ export interface ChatStep {
 export interface ChatTurn {
   finishedAt?: number;
   replyText: string;
+  /** Absent only on persisted turns created before task-level timing was added. */
+  startedAt?: number;
   steps: ChatStep[];
 }
 

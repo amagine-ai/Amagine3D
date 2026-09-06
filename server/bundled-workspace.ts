@@ -27,7 +27,7 @@ function asBundledArtifact(artifact: ArtifactSummary): ArtifactSummary {
   };
 }
 
-/** Expose immutable showcase files without creating a PI session JSONL. */
+/** Expose immutable showcase files without creating a user session record. */
 export async function bundledPomodoroArtifacts(
   bundledPomodoroRoot: string,
 ): Promise<ArtifactCollection> {

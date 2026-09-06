@@ -21,15 +21,15 @@ export const curatedLicenses: CuratedLicense[] = [
     version: '0.182.0',
   },
   {
-    files: [{ href: '/licenses/pi.txt', label: 'MIT' }],
-    license: 'MIT',
-    name: 'PI coding agent',
-    source: 'https://github.com/earendil-works/pi',
+    files: [{ href: '/licenses/apache-2.0.txt', label: 'Apache-2.0' }],
+    license: 'Apache-2.0',
+    name: 'OpenAI Codex SDK and runtime',
+    source: 'https://github.com/openai/codex',
     use: {
-      en: 'Agent sessions, streaming, and tool calls',
-      zh: 'Agent session、流式响应与工具调用',
+      en: 'Agent threads, workspace execution, and streamed events',
+      zh: 'Agent 线程、工作区执行与流式事件',
     },
-    version: '0.84.2',
+    version: '0.153.4',
   },
   {
     files: [{ href: '/licenses/ibm-plex-sans.txt', label: 'OFL-1.1' }],

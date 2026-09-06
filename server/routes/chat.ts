@@ -1,16 +1,21 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 
 import {
-  type AgentSession,
-  type AgentSessionEvent,
-  PiRuntime,
-  TAVILY_SEARCH_TOOL_NAME,
+  agentRunTimeoutsFromEnv,
+  isRuntimeProgressEvent,
+  type AgentRunTimeouts,
+  type CodexRuntimeLike,
+  type RunOutcome,
+  RunStopped,
+  RunSupervisor,
+  type RuntimeEvent,
+  type RuntimeItem,
 } from '@amagine3d/a3d-runtime';
 import type { Express, Response } from 'express';
 
 import {
   appendChatStepText,
-  CHAT_TURN_CUSTOM_TYPE,
   completeChatTurn,
   emptyChatTurn,
   startChatStep,
@@ -19,45 +24,20 @@ import type {
   AgentEvent,
   ChatStep,
   ChatTurn,
+  LocalizedText,
   PythonHealth,
 } from '../../src/types.ts';
-import { assistantMessageOutcome } from '../agent-events.ts';
-import {
-  FIRST_BUILD_REMINDER,
-  FirstBuildReminder,
-} from '../first-build-reminder.ts';
 import { errorMessage } from '../http-utils.ts';
 import { isChatRequest } from '../protocol.ts';
-import {
-  agentRunTimeoutsFromEnv,
-  DEFAULT_FIRST_BUILD_REMINDER_MS,
-  type AgentRunTimeouts,
-} from '../run-config.ts';
-import {
-  type RunOutcome,
-  RunStopped,
-  RunSupervisor,
-} from '../run-supervisor.ts';
 import { acquireSessionActivity } from '../session-activity.ts';
 import {
-  sessionWorkspaceRoot,
+  appendSessionAssistantTurn,
+  appendSessionUserMessage,
+  readSessionThreadId,
+  setSessionThreadId,
   userSessionArtifacts,
 } from '../sessions.ts';
-import { appendSavedImageContext, saveImageAttachments } from '../uploads.ts';
-import {
-  auditCadVisualValidation,
-  CadVisualAuditTrail,
-  visualValidationInstruction,
-  visualValidationRepairInstruction,
-} from '../visual-audit.ts';
-import {
-  requiredWebSearchInstruction,
-  webSearchRepairInstruction,
-} from '../web-search.ts';
-
-const MAX_VISUAL_REPAIR_ATTEMPTS = 3;
-const MAX_WEB_SEARCH_REPAIR_ATTEMPTS = 2;
-const DEFAULT_ABORT_GRACE_MS = 5_000;
+import { saveImageAttachments } from '../uploads.ts';
 
 interface CompletedRun {
   replyText: string;
@@ -65,10 +45,8 @@ interface CompletedRun {
 }
 
 export interface ChatRouteDependencies {
-  abortGraceMs?: number;
-  firstBuildReminderMs?: number;
   python: PythonHealth;
-  runtime: PiRuntime | undefined;
+  runtime: CodexRuntimeLike | undefined;
   runtimeError: string | undefined;
   timeouts?: AgentRunTimeouts;
 }
@@ -79,46 +57,116 @@ function writeEvent(response: Response, event: AgentEvent): void {
   }
 }
 
-function toolActivity(toolName: string): string {
-  const labels: Record<string, string> = {
-    bash: '正在执行 CAD 命令',
-    cad_capabilities: '正在检查 CAD 能力',
-    cad_compile: '正在编译并审计 CAD',
-    edit: '正在修改参数化源码',
-    find: '正在查找文件',
-    grep: '正在检索工作区',
-    ls: '正在检查输出目录',
-    read: '正在读取文件或预览图',
-    reference_analyze: '正在分析参考图',
-    web_search: '正在搜索网络资料',
-    write: '正在写入生成文件',
-  };
-  return labels[toolName] ?? `正在运行 ${toolName}`;
+interface StepActivity {
+  localizedLabel: LocalizedText;
+  stage: string;
 }
 
-function assistantText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter(
-      (block): block is { text: string; type: 'text' } =>
-        Boolean(
-          block &&
-            typeof block === 'object' &&
-            (block as { type?: unknown }).type === 'text' &&
-            typeof (block as { text?: unknown }).text === 'string',
-        ),
-    )
-    .map((block) => block.text)
-    .join('');
+function localizedLabel(en: string, zh: string): LocalizedText {
+  return { en, zh };
 }
 
-function finalAssistantText(session: AgentSession): string {
-  for (const rawMessage of [...session.messages].reverse()) {
-    const message = rawMessage as { content?: unknown; role?: unknown };
-    if (message.role === 'assistant') return assistantText(message.content);
+function commandActivity(command: string): LocalizedText {
+  if (/\ba3d\s+compile\b/u.test(command)) {
+    return localizedLabel('Compiling and validating CAD', '正在编译并检查 CAD');
   }
-  return '';
+  if (/\ba3d\s+reference\b/u.test(command)) {
+    return localizedLabel('Analyzing the reference image', '正在分析参考图');
+  }
+  if (/\ba3d\s+(intent|scene)\b/u.test(command)) {
+    return localizedLabel('Checking the CAD structure', '正在检查 CAD 结构');
+  }
+  if (/\ba3d\s+(capabilities|guide|help)\b/u.test(command)) {
+    return localizedLabel('Reading CAD capabilities', '正在读取 CAD 能力');
+  }
+  if (/\b(?:cat|find|grep|head|ls|rg|sed|tail)\b/u.test(command)) {
+    return localizedLabel('Checking workspace files', '正在检查工作区资料');
+  }
+  return localizedLabel('Running modeling tools', '正在运行建模工具');
+}
+
+function itemActivity(item: RuntimeItem): StepActivity | undefined {
+  if (item.type === 'command_execution') {
+    return { localizedLabel: commandActivity(item.command), stage: 'command' };
+  }
+  if (item.type === 'file_change') {
+    return {
+      localizedLabel: localizedLabel(
+        `Modifying ${String(item.changeCount)} files`,
+        `正在修改 ${String(item.changeCount)} 个文件`,
+      ),
+      stage: 'files',
+    };
+  }
+  if (item.type === 'web_search') {
+    return {
+      localizedLabel: localizedLabel(
+        'Searching web references',
+        '正在搜索网络资料',
+      ),
+      stage: 'web-search',
+    };
+  }
+  if (item.type === 'reasoning') {
+    return {
+      localizedLabel: localizedLabel('A3D is analyzing', 'A3D 正在分析'),
+      stage: 'reasoning',
+    };
+  }
+  if (item.type === 'todo_list') {
+    return {
+      localizedLabel:
+        item.totalCount > 0
+          ? localizedLabel(
+              `A3D is executing the plan · ${String(item.completedCount)}/${String(item.totalCount)}`,
+              `A3D 正在执行计划 · ${String(item.completedCount)}/${String(item.totalCount)}`,
+            )
+          : localizedLabel('A3D is planning the task', 'A3D 正在规划任务'),
+      stage: 'plan',
+    };
+  }
+  return undefined;
+}
+
+function completedItemActivity(
+  item: RuntimeItem,
+): StepActivity | undefined {
+  if (item.type === 'command_execution') {
+    const succeeded =
+      item.status === 'completed' &&
+      (item.exitCode === undefined || item.exitCode === 0);
+    return {
+      localizedLabel: succeeded
+        ? localizedLabel(
+            'A3D is analyzing the tool result',
+            'A3D 正在分析执行结果',
+          )
+        : localizedLabel(
+            'The tool failed; A3D is trying to repair the issue',
+            '工具执行未成功，A3D 正在尝试修复',
+          ),
+      stage: 'reasoning',
+    };
+  }
+  if (item.type === 'file_change') {
+    return {
+      localizedLabel: localizedLabel(
+        'A3D is checking the changes',
+        'A3D 正在检查修改结果',
+      ),
+      stage: 'reasoning',
+    };
+  }
+  if (item.type === 'web_search') {
+    return {
+      localizedLabel: localizedLabel(
+        'A3D is analyzing the search results',
+        'A3D 正在分析搜索结果',
+      ),
+      stage: 'reasoning',
+    };
+  }
+  return undefined;
 }
 
 function finishRunOutcome(
@@ -145,9 +193,6 @@ export function registerChatRoute(
   dependencies: ChatRouteDependencies,
 ): void {
   const timeouts = dependencies.timeouts ?? agentRunTimeoutsFromEnv();
-  const abortGraceMs = dependencies.abortGraceMs ?? DEFAULT_ABORT_GRACE_MS;
-  const firstBuildReminderMs =
-    dependencies.firstBuildReminderMs ?? DEFAULT_FIRST_BUILD_REMINDER_MS;
 
   app.post('/api/chat', async (request, response) => {
     if (!isChatRequest(request.body)) {
@@ -160,19 +205,14 @@ export function registerChatRoute(
     const { python, runtime, runtimeError } = dependencies;
     if (!runtime) {
       response.status(503).json({
-        message: runtimeError || 'Amagine3D Agent is not ready.',
+        message: runtimeError || 'A3D runtime is not ready.',
       });
       return;
     }
-    if (!python.ready) {
+    if (!runtime.configured) {
       response.status(503).json({
-        message: 'Python CAD runtime is not ready. Run npm run python:setup.',
-      });
-      return;
-    }
-    if (!process.env.LLM_API_KEY?.trim()) {
-      response.status(503).json({
-        message: 'LLM_API_KEY is not configured in .env.',
+        message:
+          'Configure LLM_API_KEY, CODEX_API_KEY, or OPENAI_API_KEY in .env.',
       });
       return;
     }
@@ -184,10 +224,9 @@ export function registerChatRoute(
       taskType,
       webSearchEnabled = false,
     } = request.body;
-    if (webSearchEnabled && !process.env.TAVILY_API_KEY?.trim()) {
+    if (taskType === 'cad' && !python.ready) {
       response.status(503).json({
-        message:
-          'Web references are enabled, but TAVILY_API_KEY is not configured in .env.',
+        message: 'Python CAD runtime is not ready. Run npm run python:setup.',
       });
       return;
     }
@@ -206,28 +245,23 @@ export function registerChatRoute(
     response.flushHeaders();
 
     const supervisor = new RunSupervisor<CompletedRun>({
-      abortGraceMs,
       hardTimeoutMs: timeouts.hardTimeoutMs,
       idleTimeoutMs: timeouts.idleTimeoutMs,
-      sessionId,
       timeoutMessages: {
         hard: '本轮执行超过最大时间限制，已停止。',
-        idle: '本轮执行长时间没有模型或工具进展，已停止。',
+        idle: '本轮执行长时间没有 A3D 进展，已停止。',
       },
     });
-    let session: AgentSession | undefined;
-    let unsubscribe: (() => void) | undefined;
-    let firstBuildReminder: FirstBuildReminder | undefined;
-    let providerError: string | undefined;
     let runTurn = emptyChatTurn();
     let activeResponseStepId: string | undefined;
     let lastResponseStepId: string | undefined;
-    let streamedMessageText = '';
-    let webSearchSucceeded = false;
-    let collectVisualAuditMessages = false;
-    let visualAuditTrail: CadVisualAuditTrail | undefined;
+    const assistantItems = new Map<string, string>();
 
-    const startStep = (label: string, stage = 'agent'): ChatStep => {
+    const startStep = (
+      localizedStepLabel: LocalizedText,
+      stage = 'agent',
+    ): ChatStep => {
+      const label = localizedStepLabel.zh;
       const active = runTurn.steps.at(-1);
       if (
         active?.status === 'running' &&
@@ -239,6 +273,7 @@ export function registerChatRoute(
       const next: ChatStep = {
         id: randomUUID(),
         label,
+        localizedLabel: localizedStepLabel,
         occurredAt: Date.now(),
         stage,
         status: 'running',
@@ -247,6 +282,84 @@ export function registerChatRoute(
       writeEvent(response, { step: next, type: 'step' });
       return next;
     };
+
+    const appendAssistantText = (
+      item: Extract<RuntimeItem, { type: 'agent_message' }>,
+    ) => {
+      const previous = assistantItems.get(item.id) ?? '';
+      const delta = item.text.startsWith(previous)
+        ? item.text.slice(previous.length)
+        : previous
+          ? ''
+          : item.text;
+      assistantItems.set(item.id, item.text);
+      if (!delta) return;
+      if (!activeResponseStepId) {
+        activeResponseStepId = startStep(
+          localizedLabel('Organizing the response', '正在组织回复'),
+          'response',
+        ).id;
+      }
+      runTurn = appendChatStepText(runTurn, activeResponseStepId, delta);
+      writeEvent(response, {
+        content: delta,
+        stepId: activeResponseStepId,
+        type: 'step_delta',
+      });
+    };
+
+    const observeCodexEvent = (event: RuntimeEvent) => {
+      if (isRuntimeProgressEvent(event)) supervisor.observeProgress();
+      if (!supervisor.running) return;
+      if (event.type === 'thread.started') {
+        activeResponseStepId = undefined;
+        startStep(localizedLabel('A3D started', 'A3D 已启动'), 'start');
+        return;
+      }
+      if (event.type === 'turn.started') {
+        activeResponseStepId = undefined;
+        startStep(
+          localizedLabel('A3D is analyzing the request', 'A3D 正在分析请求'),
+          'reasoning',
+        );
+        return;
+      }
+      if (event.type === 'item.started' || event.type === 'item.updated') {
+        if (event.item.type === 'agent_message') {
+          appendAssistantText(event.item);
+          return;
+        }
+        const activity = itemActivity(event.item);
+        if (
+          activity &&
+          (event.type === 'item.started' ||
+            runTurn.steps.at(-1)?.stage !== activity.stage)
+        ) {
+          activeResponseStepId = undefined;
+          startStep(activity.localizedLabel, activity.stage);
+        }
+        return;
+      }
+      if (event.type === 'item.completed') {
+        if (event.item.type === 'agent_message') {
+          appendAssistantText(event.item);
+          lastResponseStepId = activeResponseStepId;
+          return;
+        }
+        const followUp = completedItemActivity(event.item);
+        if (followUp) {
+          activeResponseStepId = undefined;
+          startStep(followUp.localizedLabel, followUp.stage);
+          return;
+        }
+        const activity = itemActivity(event.item);
+        if (activity && runTurn.steps.at(-1)?.stage !== activity.stage) {
+          activeResponseStepId = undefined;
+          startStep(activity.localizedLabel, activity.stage);
+        }
+      }
+    };
+
     const finishRun = (
       status: 'cancelled' | 'completed' | 'failed',
       replyText: string,
@@ -259,299 +372,71 @@ export function registerChatRoute(
         sourceStepId,
         status,
       });
-      if (session && runTurn.steps.length > 0) {
-        try {
-          session.sessionManager.appendCustomEntry(
-            CHAT_TURN_CUSTOM_TYPE,
-            runTurn,
-          );
-        } catch (error) {
-          console.error(`Could not persist chat turn: ${errorMessage(error)}`);
-        }
-      }
       return runTurn;
-    };
-    const sendFailure = (message: string, code: string) => {
-      supervisor.fail(code, message);
     };
 
     const abortForDisconnect = () => {
-      if (response.writableEnded) return;
-      supervisor.disconnect();
+      if (!response.writableEnded) supervisor.disconnect();
     };
     request.once('aborted', abortForDisconnect);
     response.once('close', abortForDisconnect);
 
     try {
-      startStep('正在启动 Amagine3D Agent', 'start');
-      session = await supervisor.createSession(() =>
-        runtime.createSession(sessionId, {
-          intentScopeId: randomUUID(),
+      startStep(
+        localizedLabel(
+          `Starting A3D · ${runtime.modelName}`,
+          `正在启动 A3D · ${runtime.modelName}`,
+        ),
+        'start',
+      );
+      if (images.length > 0) {
+        startStep(
+          localizedLabel('Saving reference images', '正在保存参考图片'),
+          'image',
+        );
+      }
+      const savedImages = await supervisor.run(() =>
+        saveImageAttachments(runtime.stateRoot, sessionId, images),
+      );
+      await supervisor.run(() =>
+        appendSessionUserMessage(
+          join(runtime.stateRoot, 'sessions'),
+          sessionId,
+          message,
+        ),
+      );
+      const sessionRoot = join(runtime.stateRoot, 'sessions');
+      const threadId = await supervisor.run(() =>
+        readSessionThreadId(sessionRoot, sessionId),
+      );
+      const result = await supervisor.run((signal) =>
+        runtime.runTurn({
+          imagePaths: savedImages.map(({ path }) => path),
+          message,
+          onEvent: observeCodexEvent,
+          onThreadStarted: (startedThreadId) =>
+            setSessionThreadId(sessionRoot, sessionId, startedThreadId),
+          sessionId,
+          signal,
+          taskType,
+          threadId,
           webSearchEnabled,
         }),
       );
 
-      unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-        firstBuildReminder?.observe(event);
-        supervisor.observe(event);
-        if (!supervisor.running) return;
-        if (collectVisualAuditMessages && event.type === 'message_end') {
-          visualAuditTrail?.record(event.message);
-        }
-        if (event.type === 'agent_start') {
-          providerError = undefined;
-          return;
-        }
-        const assistantOutcome = assistantMessageOutcome(event);
-        if (assistantOutcome) {
-          providerError =
-            assistantOutcome.status === 'error'
-              ? assistantOutcome.message
-              : undefined;
-        }
-        if (
-          event.type === 'message_start' &&
-          event.message.role === 'assistant'
-        ) {
-          activeResponseStepId = undefined;
-          streamedMessageText = '';
-          return;
-        }
-        if (event.type === 'message_update') {
-          const update = event.assistantMessageEvent;
-          if (update.type === 'text_delta') {
-            if (!activeResponseStepId) {
-              activeResponseStepId = startStep(
-                '正在组织回复',
-                'response',
-              ).id;
-            }
-            streamedMessageText += update.delta;
-            runTurn = appendChatStepText(
-              runTurn,
-              activeResponseStepId,
-              update.delta,
-            );
-            writeEvent(response, {
-              content: update.delta,
-              stepId: activeResponseStepId,
-              type: 'step_delta',
-            });
-          }
-          return;
-        }
-        if (
-          event.type === 'message_end' &&
-          event.message.role === 'assistant'
-        ) {
-          const content =
-            assistantText(event.message.content) || streamedMessageText;
-          if (
-            assistantOutcome?.status === 'success' &&
-            content.trim() &&
-            !activeResponseStepId
-          ) {
-            activeResponseStepId = startStep(
-              '正在组织回复',
-              'response',
-            ).id;
-            runTurn = appendChatStepText(
-              runTurn,
-              activeResponseStepId,
-              content,
-            );
-            writeEvent(response, {
-              content,
-              stepId: activeResponseStepId,
-              type: 'step_delta',
-            });
-          }
-          if (assistantOutcome?.status === 'success' && content.trim()) {
-            lastResponseStepId = activeResponseStepId;
-          }
-          activeResponseStepId = undefined;
-          streamedMessageText = '';
-          return;
-        }
-        if (event.type === 'tool_execution_start') {
-          startStep(toolActivity(event.toolName), event.toolName);
-          return;
-        }
-        if (
-          event.type === 'tool_execution_end' &&
-          event.toolName === TAVILY_SEARCH_TOOL_NAME &&
-          !event.isError
-        ) {
-          webSearchSucceeded = true;
-          return;
-        }
-        if (event.type === 'compaction_start') {
-          startStep('正在压缩会话上下文', 'compaction');
-          return;
-        }
-        if (event.type === 'auto_retry_start') {
-          startStep(
-            `模型请求重试 ${event.attempt}/${event.maxAttempts}`,
-            'retry',
-          );
-        }
-      });
-
-      startStep(`Amagine3D Agent 已启动 ${runtime.modelName}`, 'agent');
-      if (images.length > 0) startStep('正在保存参考图片', 'image');
-      const savedImages = await supervisor.run(() =>
-        saveImageAttachments(runtime.stateRoot, sessionId, images),
+      startStep(
+        localizedLabel('Collecting generated files', '正在整理生成文件'),
+        'files',
       );
-      const visualValidationRequired = taskType === 'cad';
-      const referenceAnalysisRequired =
-        visualValidationRequired && images.length > 0;
-      const basePrompt = message.trim() || '请查看并分析我上传的图片。';
-      const promptText = [
-        appendSavedImageContext(basePrompt, savedImages),
-        requiredWebSearchInstruction(webSearchEnabled),
-        visualValidationInstruction(
-          visualValidationRequired,
-          referenceAnalysisRequired,
-        ),
-      ]
-        .filter(Boolean)
-        .join('\n\n');
-      const imageContents = images.map(({ data, mimeType }) => ({
-        data,
-        mimeType,
-        type: 'image' as const,
-      }));
-      const visualWorkspaceRoot = sessionWorkspaceRoot(
-        runtime.workspaceRoot,
-        sessionId,
-      );
-      if (!visualWorkspaceRoot) {
-        throw new Error('Invalid session workspace for visual validation.');
-      }
-      const turnStartedAtMs = Date.now();
-      visualAuditTrail = visualValidationRequired
-        ? new CadVisualAuditTrail(visualWorkspaceRoot)
-        : undefined;
-      collectVisualAuditMessages = visualValidationRequired;
-      if (visualValidationRequired) {
-        firstBuildReminder = new FirstBuildReminder(
-          firstBuildReminderMs,
-          async () => {
-            if (!supervisor.running || !session) return;
-            startStep('尚未开始正式编译，已提醒 Agent 尽快构建', 'build-reminder');
-            await session.steer(FIRST_BUILD_REMINDER);
-          },
-        );
-      }
-      supervisor.touch();
-      await supervisor.run(() =>
-        session!.prompt(promptText, {
-          images: imageContents,
-          source: 'rpc',
-        }),
-      );
-
-      let webSearchRepairAttempts = 0;
-      while (webSearchEnabled && !webSearchSucceeded) {
-        if (!supervisor.running) return;
-        if (providerError) {
-          sendFailure(errorMessage(providerError), 'provider_error');
-          return;
-        }
-        if (
-          webSearchRepairAttempts >= MAX_WEB_SEARCH_REPAIR_ATTEMPTS
-        ) {
-          sendFailure(
-            '已开启联网参考，但 Amagine3D Agent 未能完成必需的 Tavily 搜索。本轮结果已拦截，请检查密钥、额度或网络连接。',
-            'web_search_required',
-          );
-          return;
-        }
-        webSearchRepairAttempts += 1;
-        startStep(
-          `未完成联网参考，正在强制搜索 ${webSearchRepairAttempts}/${MAX_WEB_SEARCH_REPAIR_ATTEMPTS}`,
-          'web-search-audit',
-        );
-        supervisor.touch();
-        await supervisor.run(() =>
-          session!.prompt(
-            webSearchRepairInstruction(
-              webSearchRepairAttempts,
-              MAX_WEB_SEARCH_REPAIR_ATTEMPTS,
-            ),
-            { source: 'rpc' },
-          ),
-        );
-      }
-
-      let visualRepairAttempts = 0;
-      while (true) {
-        if (!supervisor.running) return;
-        if (providerError) {
-          sendFailure(errorMessage(providerError), 'provider_error');
-          return;
-        }
-        if (!visualValidationRequired) break;
-
-        if (!visualAuditTrail) {
-          throw new Error('Visual validation trail is unavailable.');
-        }
-        const audit = await supervisor.run(() =>
-          auditCadVisualValidation(visualAuditTrail!.entries, {
-            referenceImages: savedImages.map(({ path, sha256 }) => ({
-              path,
-              sha256,
-            })),
-            requireReferenceAnalysis: referenceAnalysisRequired,
-            turnStartedAtMs,
-            workspaceRoot: visualWorkspaceRoot,
-          }),
-        );
-        if (audit.pass) break;
-        if (visualRepairAttempts >= MAX_VISUAL_REPAIR_ATTEMPTS) {
-          const missingEvidence = referenceAnalysisRequired
-            ? '参考图分析、最新预览渲染与读图闭环'
-            : '最新预览渲染与读图闭环';
-          sendFailure(
-            `本轮 CAD 任务未完成必需的${missingEvidence}。结果已拦截，不能仅凭尺寸或网格检查声称外观匹配。`,
-            'visual_validation_required',
-          );
-          return;
-        }
-
-        visualRepairAttempts += 1;
-        startStep(
-          `视觉审计未通过，正在自动补救 ${visualRepairAttempts}/${MAX_VISUAL_REPAIR_ATTEMPTS}`,
-          'visual-audit',
-        );
-        supervisor.touch();
-        await supervisor.run(() =>
-          session!.prompt(
-            visualValidationRepairInstruction(audit, {
-              attempt: visualRepairAttempts,
-              maxAttempts: MAX_VISUAL_REPAIR_ATTEMPTS,
-              requireReferenceAnalysis: referenceAnalysisRequired,
-            }),
-            { source: 'rpc' },
-          ),
-        );
-      }
-
-      const answer = finalAssistantText(session);
-      if (!answer.trim()) {
-        sendFailure(
-          'Amagine3D Agent 未返回最终回复，本轮不能标记为完成。',
-          'empty_agent_response',
-        );
-        return;
-      }
-      startStep('正在整理生成文件', 'files');
       const artifactCollection = await supervisor.run(() =>
         userSessionArtifacts(runtime.workspaceRoot, sessionId),
       );
       if (artifactCollection) {
         startStep(
-          `已发现 ${String(artifactCollection.artifacts.length)} 个工作区文件`,
+          localizedLabel(
+            `${String(artifactCollection.artifacts.length)} workspace files discovered`,
+            `已发现 ${String(artifactCollection.artifacts.length)} 个工作区文件`,
+          ),
           'files',
         );
         writeEvent(response, {
@@ -561,26 +446,33 @@ export function registerChatRoute(
         });
       }
       supervisor.complete({
-        replyText: answer,
+        replyText: result.finalResponse,
         sourceStepId: lastResponseStepId,
       });
     } catch (error) {
       if (!(error instanceof RunStopped) && supervisor.running) {
-        sendFailure(errorMessage(error), 'agent_error');
+        supervisor.fail('codex_error', errorMessage(error));
       }
     } finally {
-      firstBuildReminder?.finish();
       request.off('aborted', abortForDisconnect);
       response.off('close', abortForDisconnect);
-      unsubscribe?.();
       await supervisor.finalize(
         {
-          code: 'agent_error',
-          message: providerError ? errorMessage(providerError) : '',
+          code: 'codex_error',
+          message: 'A3D run stopped unexpectedly.',
           status: 'failed',
         },
-        ({ deliver, outcome }) => {
+        async ({ deliver, outcome }) => {
           const turn = finishRunOutcome(outcome, finishRun);
+          try {
+            await appendSessionAssistantTurn(
+              join(runtime.stateRoot, 'sessions'),
+              sessionId,
+              turn,
+            );
+          } catch (error) {
+            console.error(`Could not persist chat turn: ${errorMessage(error)}`);
+          }
           if (!deliver) return;
           if (outcome.status === 'completed') {
             writeEvent(response, {

@@ -8,7 +8,7 @@ import { curatedLicenses } from '../src/lib/licenses.ts';
 const root = resolve(import.meta.dirname, '..');
 
 test('README badges and acknowledgments match current runtime dependencies', async () => {
-  const [packageJson, runtimePackageJson, readme, chineseReadme] =
+  const [packageJson, readme, chineseReadme] =
     await Promise.all([
       readFile(resolve(root, 'package.json'), 'utf8').then(
         JSON.parse,
@@ -17,14 +17,10 @@ test('README badges and acknowledgments match current runtime dependencies', asy
         engines: { node: string };
         license: string;
       }>,
-      readFile(resolve(root, 'packages/a3d-runtime/package.json'), 'utf8').then(
-        JSON.parse,
-      ) as Promise<{ engines: { node: string } }>,
       readFile(resolve(root, 'README.md'), 'utf8'),
       readFile(resolve(root, 'docs/README.zh-CN.md'), 'utf8'),
     ]);
   assert.equal(packageJson.engines.node, '>=22.19.0');
-  assert.equal(runtimePackageJson.engines.node, '>=22.19.0');
   assert.equal(packageJson.devDependencies.vite, '7.3.6');
   assert.equal(packageJson.license, 'Apache-2.0');
   for (const document of [readme, chineseReadme]) {
@@ -57,7 +53,9 @@ test('license page inventory covers direct production dependencies', async () =>
       .map(({ name }) => name),
     [],
   );
-  assert.ok(curatedLicenses.some(({ name }) => name === 'PI coding agent'));
+  assert.ok(
+    curatedLicenses.some(({ name }) => name === 'OpenAI Codex SDK and runtime'),
+  );
 });
 
 test('curated runtime components expose their checked-in license files', async () => {

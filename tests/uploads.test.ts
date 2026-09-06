@@ -11,7 +11,7 @@ import {
 } from '../server/uploads.ts';
 
 test('persists images under a session-scoped generated filename', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-agent-upload-'));
+  const root = await mkdtemp(join(tmpdir(), 'amagine-upload-'));
   try {
     const bytes = Buffer.from('validated-image-bytes');
     const [saved] = await saveImageAttachments(

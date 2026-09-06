@@ -13,9 +13,10 @@
     "dev": "npm run python:setup && concurrently -k -n api,web -c blue,white \"tsx watch server/index.ts\" \"vite\"",
     "doctor": "tsx server/doctor.ts",
     "licenses:check": "node scripts/check-licenses.mjs",
+    "licenses:update": "node scripts/update-npm-license-inventory.mjs",
     "python:setup": "node scripts/setup-python.mjs",
     "start": "npm run python:setup && tsx server/index.ts",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts packages/a3d-runtime/tests/*.test.ts",
     "test:python": "node scripts/test-python.mjs",
     "typecheck": "tsc --noEmit --pretty false"
   },

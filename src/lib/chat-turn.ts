@@ -13,8 +13,8 @@ export interface ChatTurnCompletion {
   status: ChatTurnTerminalStatus;
 }
 
-export function emptyChatTurn(): ChatTurn {
-  return { replyText: '', steps: [] };
+export function emptyChatTurn(startedAt = Date.now()): ChatTurn {
+  return { replyText: '', startedAt, steps: [] };
 }
 
 export function startChatStep(
@@ -60,6 +60,8 @@ export function completeChatTurn(
   return {
     finishedAt: completion.finishedAt,
     replyText: completion.replyText,
+    startedAt:
+      current.startedAt ?? current.steps[0]?.occurredAt ?? completion.finishedAt,
     steps: current.steps.map((step) => {
       const finalized =
         step.status === 'running'
@@ -90,6 +92,11 @@ export function restoreChatTurn(value: unknown): ChatTurn | undefined {
     if (
       typeof candidate.id !== 'string' ||
       typeof candidate.label !== 'string' ||
+      (candidate.localizedLabel !== undefined &&
+        (!candidate.localizedLabel ||
+          typeof candidate.localizedLabel !== 'object' ||
+          typeof candidate.localizedLabel.en !== 'string' ||
+          typeof candidate.localizedLabel.zh !== 'string')) ||
       typeof candidate.occurredAt !== 'number' ||
       !Number.isFinite(candidate.occurredAt) ||
       (candidate.progressText !== undefined &&
@@ -106,7 +113,15 @@ export function restoreChatTurn(value: unknown): ChatTurn | undefined {
   if (
     steps.length === 0 ||
     steps.length !== item.steps.length ||
-    steps.some(({ status }) => status === 'running') ||
+    steps.some(({ status }) => status === 'running')
+  ) {
+    return undefined;
+  }
+  const startedAt = item.startedAt ?? steps[0]!.occurredAt;
+  if (
+    typeof startedAt !== 'number' ||
+    !Number.isFinite(startedAt) ||
+    startedAt > steps[0]!.occurredAt ||
     item.finishedAt < steps[0]!.occurredAt
   ) {
     return undefined;
@@ -115,6 +130,7 @@ export function restoreChatTurn(value: unknown): ChatTurn | undefined {
   return {
     finishedAt: item.finishedAt,
     replyText: item.replyText,
+    startedAt,
     steps,
   };
 }

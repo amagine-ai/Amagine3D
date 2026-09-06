@@ -1,8 +1,7 @@
 import { strict as assert } from 'node:assert';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
-
-import { loadSkillsFromDir } from '@amagine3d/a3d-runtime';
 
 import { isChatRequest, parseModelSpec } from '../server/protocol.ts';
 
@@ -111,16 +110,10 @@ test('parses provider/model while preserving slashes in model id', () => {
   assert.throws(() => parseModelSpec('gpt-5.5'), /provider\/model/);
 });
 
-test('PI discovers one unified semantic-scene CAD skill', () => {
-  const result = loadSkillsFromDir({
-    dir: resolve(import.meta.dirname, '..', 'skills'),
-    source: 'test',
-  });
-  assert.deepEqual(result.skills.map((skill) => skill.name), ['text-a3d']);
-  assert.match(result.skills[0]?.description ?? '', /semantic-scene/u);
-  assert.match(
-    result.skills[0]?.filePath ?? '',
-    /skills[/\\]text-a3d[/\\]SKILL\.md$/u,
-  );
-  assert.deepEqual(result.diagnostics, []);
+test('ships one compact CAD skill for the Codex harness', async () => {
+  const path = resolve(import.meta.dirname, '..', 'skills', 'text-a3d', 'SKILL.md');
+  const skill = await readFile(path, 'utf8');
+  assert.match(skill, /name: text-a3d/u);
+  assert.match(skill, /a3d compile/u);
+  assert.ok(skill.split(/\r?\n/u).length < 120);
 });

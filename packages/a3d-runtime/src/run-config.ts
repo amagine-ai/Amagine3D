@@ -1,7 +1,6 @@
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export const DEFAULT_AGENT_RUN_IDLE_TIMEOUT_MS = 1_800_000;
 export const DEFAULT_AGENT_RUN_HARD_TIMEOUT_MS = 7_200_000;
-export const DEFAULT_FIRST_BUILD_REMINDER_MS = 600_000;
 
 export interface AgentRunTimeouts {
   hardTimeoutMs: number;

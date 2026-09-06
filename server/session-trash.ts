@@ -1,15 +1,10 @@
 import { access } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import trash from 'trash';
 
-import {
-  cadIntentStatePath,
-  SessionManager,
-} from '@amagine3d/a3d-runtime';
-
 import { USER_SESSION_ID } from '../src/session-id.ts';
-import { sessionWorkspaceRoot } from './sessions.ts';
+import { findUserSession, sessionWorkspaceRoot } from './sessions.ts';
 
 type MoveToTrash = (paths: string[]) => Promise<void>;
 
@@ -52,25 +47,20 @@ export async function moveSessionsToTrash(
     return undefined;
   }
 
-  const sessions = new Map(
-    (await SessionManager.listAll(sessionRoot))
-      .filter(({ id, path }) => USER_SESSION_ID.test(id) && isInside(sessionRoot, path))
-      .map((session) => [session.id, session]),
-  );
   const trashPaths: string[] = [];
   for (const sessionId of uniqueSessionIds) {
-    const session = sessions.get(sessionId);
-    if (!session) return undefined;
+    const session = await findUserSession(sessionRoot, sessionId);
+    if (!session || !isInside(sessionRoot, session.path)) return undefined;
     trashPaths.push(session.path);
     const workspace = sessionWorkspaceRoot(workspaceRoot, sessionId);
     if (workspace) {
       const path = await existingPath(workspace);
       if (path) trashPaths.push(path);
     }
-    const intentState = await existingPath(
-      cadIntentStatePath(sessionRoot, sessionId),
+    const codexState = await existingPath(
+      join(dirname(sessionRoot), 'codex', sessionId),
     );
-    if (intentState) trashPaths.push(intentState);
+    if (codexState) trashPaths.push(codexState);
   }
 
   await moveToTrash(trashPaths);

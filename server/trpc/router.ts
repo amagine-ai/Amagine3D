@@ -38,13 +38,13 @@ function healthResponse(context: TrpcContext): HealthResponse {
   const { python, runtime, runtimeError } = context;
   return {
     apiVersion: API_VERSION,
-    configured: Boolean(process.env.LLM_API_KEY?.trim()),
+    configured: runtime?.configured ?? false,
     model: process.env.LLM_MODEL?.trim() || 'openai/gpt-5.5',
     python,
     ...(runtimeError ? { runtimeError } : {}),
     runtimeReady: Boolean(runtime),
     skills: runtime ? [...runtime.skills] : [],
-    webSearchConfigured: Boolean(process.env.TAVILY_API_KEY?.trim()),
+    webSearchConfigured: Boolean(runtime),
     workspace: 'workspace/',
   };
 }

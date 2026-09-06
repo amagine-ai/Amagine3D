@@ -8,6 +8,7 @@ import {
   restoreChatTurn,
   startChatStep,
 } from '../src/lib/chat-turn.ts';
+import { chatStepLabel } from '../src/lib/chat-step-label.ts';
 import type { ChatStep } from '../src/types.ts';
 
 function step(id: string, label: string): ChatStep {
@@ -15,7 +16,7 @@ function step(id: string, label: string): ChatStep {
 }
 
 test('chat turns retain ordered steps and append text to the owning step', () => {
-  const first = startChatStep(emptyChatTurn(), step('one', '读取需求'));
+  const first = startChatStep(emptyChatTurn(0), step('one', '读取需求'));
   const second = startChatStep(first, step('two', '生成模型'));
   const withProgress = appendChatStepText(second, 'two', '主体已经生成。');
   assert.deepEqual(
@@ -55,6 +56,7 @@ test('chat turns retain ordered steps and append text to the owning step', () =>
     ],
   );
   assert.equal(completed.replyText, '模型已经生成。');
+  assert.equal(completed.startedAt, 0);
   assert.equal(completed.finishedAt, 10);
 });
 
@@ -62,6 +64,7 @@ test('restored chat turns reject malformed or unfinished persisted data', () => 
   const turn = {
     finishedAt: 10,
     replyText: '完成',
+    startedAt: 0,
     steps: [{ ...step('one', '完成'), status: 'completed' as const }],
   };
   assert.deepEqual(restoreChatTurn(turn), turn);
@@ -72,6 +75,38 @@ test('restored chat turns reject malformed or unfinished persisted data', () => 
   );
   assert.equal(
     restoreChatTurn({ ...turn, steps: [{ label: 'missing fields' }] }),
+    undefined,
+  );
+  const { startedAt: _startedAt, ...legacyTurn } = turn;
+  assert.deepEqual(restoreChatTurn(legacyTurn), { ...turn, startedAt: 1 });
+});
+
+test('localized step labels switch immediately and preserve legacy fallbacks', () => {
+  const localized = {
+    ...step('one', '正在分析'),
+    localizedLabel: { en: 'Analyzing', zh: '正在分析' },
+  };
+  assert.equal(chatStepLabel(localized, 'en'), 'Analyzing');
+  assert.equal(chatStepLabel(localized, 'zh'), '正在分析');
+  assert.equal(chatStepLabel(step('legacy', '旧会话原文'), 'en'), '旧会话原文');
+
+  const persisted = {
+    finishedAt: 10,
+    replyText: '完成',
+    startedAt: 0,
+    steps: [{ ...localized, status: 'completed' as const }],
+  };
+  assert.deepEqual(restoreChatTurn(persisted), persisted);
+  assert.equal(
+    restoreChatTurn({
+      ...persisted,
+      steps: [
+        {
+          ...persisted.steps[0],
+          localizedLabel: { en: 'Analyzing', zh: 1 },
+        },
+      ],
+    }),
     undefined,
   );
 });

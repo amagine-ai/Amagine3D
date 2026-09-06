@@ -27,7 +27,6 @@ const requiredFiles = [
   'npm-production-licenses.json',
   'opencascade-exception.txt',
   'opencascade-lgpl-2.1.txt',
-  'pi.txt',
   'react.txt',
   'rtree.txt',
   'three.txt',

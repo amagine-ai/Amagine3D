@@ -9,11 +9,22 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@amagine3d/a3d-runtime": ["packages/a3d-runtime/src/index.ts"]
+    },
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2023",
     "types": ["node", "vite/client"]
   },
-  "include": ["server", "src", "tests", "vite.config.ts"]
+  "include": [
+    "packages/a3d-runtime/src",
+    "packages/a3d-runtime/tests",
+    "server",
+    "src",
+    "tests",
+    "vite.config.ts"
+  ]
 }
