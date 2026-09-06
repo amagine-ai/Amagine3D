@@ -1252,7 +1252,11 @@ function validStructure(report: UnifiedBuildReport): boolean {
       const record = objectRecord(reference);
       if (
         !record ||
-        record.schema !== 'mesh-source/v1' ||
+        ![
+          'brep-tessellation/v1',
+          'display-mesh-source/v1',
+          'mesh-source/v1',
+        ].includes(String(record.schema)) ||
         !nonEmptyString(record.path) ||
         !['.glb', '.gltf', '.obj', '.ply', '.stl'].includes(
           extname(record.path).toLowerCase(),

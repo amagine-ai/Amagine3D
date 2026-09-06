@@ -1001,8 +1001,15 @@ def validate_manifest(data: Any) -> list[str]:
                     if not isinstance(record, dict):
                         errors.append(f"{path} must be an object")
                         continue
-                    if record.get("schema") != "mesh-source/v1":
-                        errors.append(f"{path}.schema must be mesh-source/v1")
+                    if record.get("schema") not in {
+                        "brep-tessellation/v1",
+                        "display-mesh-source/v1",
+                        "mesh-source/v1",
+                    }:
+                        errors.append(
+                            f"{path}.schema must identify a bound Mesh, BRep "
+                            "tessellation, or display mesh source"
+                        )
                     if not isinstance(record.get("path"), str) or not record["path"].strip():
                         errors.append(f"{path}.path must be a non-empty string")
                     digest = record.get("sha256")

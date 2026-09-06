@@ -23,6 +23,30 @@ import shape_consistency  # noqa: E402
 from tests.python.intent_fixture import bind_scene_intent  # noqa: E402
 
 
+def _geometry_recipe(
+    root: Path,
+    filename: str,
+    *,
+    representation: str = "mesh",
+) -> dict:
+    path = root / filename
+    if not path.exists():
+        trimesh.creation.box(extents=[2.0, 2.0, 2.0]).export(path)
+    parameters = {
+        "geometry": {
+            "path": filename,
+            "scale": 1.0,
+            "sha256": sha256(path.read_bytes()).hexdigest(),
+        }
+    }
+    if representation == "brep":
+        parameters["tessellation"] = {
+            "angularToleranceRad": 0.1,
+            "linearToleranceMm": 0.02,
+        }
+    return {"kind": f"{representation}Geometry", "parameters": parameters}
+
+
 def _scene(root: Path) -> dict:
     scene = {
         "schema": "evidence-semantic-scene/v1",
@@ -40,10 +64,9 @@ def _scene(root: Path) -> dict:
                 "featureId": "base-shell",
                 "role": "solid",
                 "operation": "union",
-                "recipe": {
-                    "kind": "roundedBox",
-                    "parameters": {"sizeMm": [10, 8, 6], "radiusMm": 1.0},
-                },
+                "recipe": _geometry_recipe(
+                    root, "base-shell.stl", representation="brep"
+                ),
             },
             {
                 "id": "button-stem",
@@ -51,10 +74,7 @@ def _scene(root: Path) -> dict:
                 "featureId": "button-stem",
                 "role": "separate",
                 "operation": "none",
-                "recipe": {
-                    "kind": "revolvedProfile",
-                    "parameters": {"diameterMm": 3.0},
-                },
+                "recipe": _geometry_recipe(root, "button-stem.stl"),
             },
             {
                 "id": "button-guide",
@@ -62,10 +82,9 @@ def _scene(root: Path) -> dict:
                 "featureId": "button-guide",
                 "role": "cutter",
                 "operation": "subtract",
-                "recipe": {
-                    "kind": "cylinder",
-                    "parameters": {"diameterMm": 3.35, "lengthMm": 8.0},
-                },
+                "recipe": _geometry_recipe(
+                    root, "button-guide.stl", representation="brep"
+                ),
             },
             {
                 "id": "guide-appearance",
@@ -140,7 +159,7 @@ def _self_tapping_scene(root: Path) -> dict:
             "featureId": "housing-shell",
             "role": "solid",
             "operation": "union",
-            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "housing.stl"}},
+            "recipe": _geometry_recipe(root, "housing.stl"),
         },
         {
             "id": "base-shell",
@@ -148,7 +167,9 @@ def _self_tapping_scene(root: Path) -> dict:
             "featureId": "base-shell",
             "role": "solid",
             "operation": "union",
-            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "base.stl"}},
+            "recipe": _geometry_recipe(
+                root, "base.stl", representation="brep"
+            ),
         },
         {
             "id": "base-collar",
@@ -156,7 +177,9 @@ def _self_tapping_scene(root: Path) -> dict:
             "featureId": "base-collar",
             "role": "solid",
             "operation": "union",
-            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "collar.stl"}},
+            "recipe": _geometry_recipe(
+                root, "collar.stl", representation="brep"
+            ),
         },
         {
             "id": "housing-socket",
@@ -164,7 +187,7 @@ def _self_tapping_scene(root: Path) -> dict:
             "featureId": "housing-socket",
             "role": "cutter",
             "operation": "subtract",
-            "recipe": {"kind": "sourceMesh", "parameters": {"sourceMesh": "socket.stl"}},
+            "recipe": _geometry_recipe(root, "socket.stl"),
         },
     ]
     fasteners = []
@@ -348,6 +371,24 @@ class SemanticSceneContractTests(unittest.TestCase):
             data = _scene(root)
             self.assertEqual(scene_contract.validate(data, root), [])
 
+    def test_hybrid_physical_nodes_reject_the_removed_source_mesh_recipe(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            data["nodes"][1]["recipe"] = {
+                "kind": "sourceMesh",
+                "parameters": {"sourceMesh": "button-stem.stl"},
+            }
+
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(
+                any(
+                    "sourceMesh is unsupported for physical nodes" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
     def test_referenced_intent_must_pass_the_complete_v5_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -418,7 +459,7 @@ class SemanticSceneContractTests(unittest.TestCase):
                     "featureId": "device-shell",
                     "role": "solid",
                     "operation": "union",
-                    "recipe": {"kind": "roundedBox", "parameters": {"sizeMm": [1, 1, 1]}},
+                    "recipe": _geometry_recipe(root, "device-shell.stl"),
                 }],
                 "interfaces": [],
             }
@@ -584,10 +625,9 @@ class SemanticSceneContractTests(unittest.TestCase):
                     "featureId": "base-pin-right",
                     "role": "solid",
                     "operation": "union",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {"sourceMesh": "pin-right.stl"},
-                    },
+                    "recipe": _geometry_recipe(
+                        root, "pin-right.stl", representation="brep"
+                    ),
                 },
                 {
                     "id": "housing-pin-socket-right",
@@ -595,10 +635,7 @@ class SemanticSceneContractTests(unittest.TestCase):
                     "featureId": "housing-pin-socket-right",
                     "role": "cutter",
                     "operation": "subtract",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {"sourceMesh": "pin-socket-right.stl"},
-                    },
+                    "recipe": _geometry_recipe(root, "pin-socket-right.stl"),
                 },
             ])
             data["interfaces"].append({

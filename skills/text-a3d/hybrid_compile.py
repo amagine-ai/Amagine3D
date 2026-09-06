@@ -1,13 +1,12 @@
-"""Compile source meshes in a semantic scene into physical mesh artifacts.
+"""Compile bound Mesh and BRep features into physical mesh artifacts.
 
 This is intentionally a small mesh compiler, not a universal CAD kernel.  It
-loads ``recipe.parameters.sourceMesh`` for ordinary physical nodes and can
-materialize tightly scoped shared build123d recipe outputs such as one aligned
+loads canonical geometry artifacts emitted from the build source's actual Mesh
+or BRep objects and can materialize shared build123d recipes such as one aligned
 self-tapping screw group. It evaluates semantic union/subtract operations with
 Manifold and emits STL, part-colored 3MF, and a PBR physical GLB. It never
-rescales geometry and never manufactures STEP; a part whose representation
-master is B-rep keeps its STEP in the build123d pipeline and uses this compiler
-only for mesh derivatives.
+rescales geometry and never manufactures STEP; only a final BRep-master part
+keeps STEP authority.
 """
 
 from __future__ import annotations
@@ -28,8 +27,6 @@ import numpy as np
 import trimesh
 import lib3mf
 from build123d import import_step
-from trimesh.visual import TextureVisuals
-from trimesh.visual.material import PBRMaterial
 
 try:
     import manifold3d  # noqa: F401
@@ -40,6 +37,17 @@ else:
     MANIFOLD_IMPORT_ERROR = None
 
 from interface_recipes import self_tapping_screw_pair
+from display_glb import (
+    DisplayGlbError,
+    export_display_glb,
+    load_display_component,
+)
+from geometry_binding import (
+    BREP_GEOMETRY_RECIPE_KIND,
+    MESH_GEOMETRY_RECIPE_KIND,
+    GeometryBindingError,
+    shape_to_mesh,
+)
 from build_manifest import (
     BUILD_SCHEMA,
     artifact_record as manifest_artifact_record,
@@ -449,32 +457,31 @@ def _validate_source_transform(spec: dict[str, Any], context: str) -> None:
         )
 
 
-def _source_spec(node: dict[str, Any], base_dir: Path) -> tuple[dict[str, Any], Path]:
+def _geometry_spec(
+    node: dict[str, Any], base_dir: Path
+) -> tuple[dict[str, Any], Path]:
     context = f"node {node['id']}"
-    source = node["recipe"]["parameters"].get("sourceMesh")
-    if isinstance(source, str) and source.strip():
-        spec: dict[str, Any] = {"path": source}
-    elif isinstance(source, dict):
-        spec = deepcopy(source)
-    else:
+    spec = deepcopy(node["recipe"]["parameters"].get("geometry"))
+    if not isinstance(spec, dict):
+        raise CompileError(f"{context}.recipe.parameters.geometry must be an object")
+    if set(spec) != {"path", "scale", "sha256"}:
         raise CompileError(
-            f"{context}.recipe.parameters.sourceMesh must be a path or object"
+            f"{context}.recipe.parameters.geometry must contain exactly "
+            "path, scale, and sha256"
         )
     raw_path = spec.get("path")
     if not isinstance(raw_path, str) or not raw_path.strip():
-        raise CompileError(f"{context}.sourceMesh.path is required")
-    _validate_source_transform(spec, context)
-    resolved = Path(raw_path)
-    if not resolved.is_absolute():
-        resolved = (base_dir / resolved).resolve()
+        raise CompileError(f"{context}.geometry.path is required")
+    if spec.get("scale") != 1.0:
+        raise CompileError(f"{context}.geometry.scale must be 1")
+    resolved = _resolve_path(raw_path, base_dir)
     try:
         digest = digest_file(resolved)
     except OSError as error:
-        raise CompileError(f"{context}.sourceMesh cannot be read: {error}") from error
-    declared_digest = spec.get("sha256")
-    if declared_digest is not None and declared_digest != digest:
-        raise CompileError(f"{context}.sourceMesh.sha256 does not match its file")
-    spec["sha256"] = digest
+        raise CompileError(f"{context}.geometry cannot be read: {error}") from error
+    if spec.get("sha256") != digest:
+        raise CompileError(f"{context}.geometry.sha256 does not match its file")
+    spec["path"] = str(resolved)
     return spec, resolved
 
 
@@ -482,7 +489,13 @@ def _load_node_mesh(
     node: dict[str, Any],
     base_dir: Path,
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
-    spec, resolved = _source_spec(node, base_dir)
+    kind = node["recipe"]["kind"]
+    if kind not in {BREP_GEOMETRY_RECIPE_KIND, MESH_GEOMETRY_RECIPE_KIND}:
+        raise CompileError(
+            f"node {node['id']} physical geometry must use "
+            f"{BREP_GEOMETRY_RECIPE_KIND} or {MESH_GEOMETRY_RECIPE_KIND}"
+        )
+    spec, _ = _geometry_spec(node, base_dir)
     try:
         mesh = load_artifact(spec, base_dir)
     except (OSError, ValueError, TypeError) as error:
@@ -494,27 +507,7 @@ def _load_node_mesh(
     mesh.merge_vertices()
     mesh.remove_unreferenced_vertices()
     mesh = _require_volume(mesh, f"node {node['id']}")
-    bound_spec = deepcopy(spec)
-    bound_spec["path"] = str(resolved)
-    bound_spec["scale"] = 1.0
-    return mesh, bound_spec
-
-
-def _shape_to_mesh(shape: Any, context: str) -> trimesh.Trimesh:
-    """Tessellate one build123d recipe output without changing its scale."""
-
-    try:
-        vertices, faces = shape.tessellate(0.02, 0.1)
-        mesh = trimesh.Trimesh(
-            vertices=[[vertex.X, vertex.Y, vertex.Z] for vertex in vertices],
-            faces=faces,
-            process=False,
-        )
-    except Exception as error:
-        raise CompileError(f"{context} could not be tessellated: {error}") from error
-    mesh.merge_vertices()
-    mesh.remove_unreferenced_vertices()
-    return _require_volume(mesh, context)
+    return mesh, spec
 
 
 def _self_tapping_group(
@@ -567,20 +560,23 @@ def _self_tapping_group(
         minimum_cover_land_mm=cover.get("minimumResidualWallMm"),
         cutter_overshoot_mm=fastener["cutterOvershootMm"],
     )
-    outputs = {
-        "clearance-cutter": _shape_to_mesh(
-            pair.clearance_cutter,
-            f"interface {interface_id} fastener {fastener_id} clearance cutter",
-        ),
-        "pilot-cutter": _shape_to_mesh(
-            pair.pilot_cutter,
-            f"interface {interface_id} fastener {fastener_id} pilot cutter",
-        ),
-        "receiver-boss": _shape_to_mesh(
-            pair.receiver_boss,
-            f"interface {interface_id} fastener {fastener_id} receiver boss",
-        ),
-    }
+    try:
+        outputs = {
+            "clearance-cutter": shape_to_mesh(
+                pair.clearance_cutter,
+                f"interface {interface_id} fastener {fastener_id} clearance cutter",
+            ),
+            "pilot-cutter": shape_to_mesh(
+                pair.pilot_cutter,
+                f"interface {interface_id} fastener {fastener_id} pilot cutter",
+            ),
+            "receiver-boss": shape_to_mesh(
+                pair.receiver_boss,
+                f"interface {interface_id} fastener {fastener_id} receiver boss",
+            ),
+        }
+    except GeometryBindingError as error:
+        raise CompileError(str(error)) from error
     axis = fastener["axis"]
     origin = np.asarray(axis["originMm"], dtype=float)
     direction = np.asarray(axis["direction"], dtype=float)
@@ -700,39 +696,6 @@ def _verify_self_tapping_geometry(
         )
     except SelfTappingGeometryError as error:
         raise CompileError(str(error)) from error
-
-
-def _load_display_mesh(
-    node: dict[str, Any],
-    base_dir: Path,
-) -> tuple[trimesh.Trimesh, dict[str, Any]]:
-    """Load a display decoration without imposing manufacturing topology.
-
-    A display component may be a non-volume screen plane, a thin glass sheet,
-    or another visual-only mesh.  It shares the same canonical transform rules
-    as physical geometry, but is deliberately never accepted by a boolean or a
-    manufacturing exporter.
-    """
-
-    spec, resolved = _source_spec(node, base_dir)
-    try:
-        mesh = load_artifact(spec, base_dir)
-    except (OSError, ValueError, TypeError) as error:
-        raise CompileError(
-            f"node {node['id']} display source mesh cannot be loaded: {error}"
-        ) from error
-    mesh.merge_vertices()
-    mesh.remove_unreferenced_vertices()
-    if mesh.is_empty or len(mesh.faces) == 0:
-        raise CompileError(f"node {node['id']} display source mesh has no faces")
-    if not np.isfinite(mesh.vertices).all():
-        raise CompileError(
-            f"node {node['id']} display source mesh contains non-finite vertices"
-        )
-    bound_spec = deepcopy(spec)
-    bound_spec["path"] = str(resolved)
-    bound_spec["scale"] = 1.0
-    return mesh, bound_spec
 
 
 def _components(meshes: list[trimesh.Trimesh]) -> list[trimesh.Trimesh]:
@@ -1221,7 +1184,10 @@ def _verify_master_steps(
                 f"part {part['id']} master STEP must contain exactly one solid; "
                 f"got {solid_count}"
             )
-        mesh = _shape_to_mesh(shape, f"part {part['id']} master STEP")
+        try:
+            mesh = shape_to_mesh(shape, f"part {part['id']} master STEP")
+        except GeometryBindingError as error:
+            raise CompileError(str(error)) from error
         records[part["id"]] = {
             **_artifact_record(path),
             "coordinateFrame": "semantic",
@@ -1302,41 +1268,6 @@ def _compare_master_steps(
     }
 
 
-def _display_appearance(node: dict[str, Any]) -> dict[str, Any]:
-    """Resolve an explicitly visual material without mutating physical color."""
-
-    appearance = node["recipe"]["parameters"]["appearance"]
-    color = _normalize_color(appearance["baseColor"], node["id"])
-    metallic = appearance.get("metallic", 0.0)
-    roughness = appearance.get("roughness", 0.58)
-    for name, value in (("metallic", metallic), ("roughness", roughness)):
-        if (
-            not isinstance(value, (int, float))
-            or isinstance(value, bool)
-            or not math.isfinite(float(value))
-            or not 0 <= float(value) <= 1
-        ):
-            raise CompileError(
-                f"display node {node['id']} appearance.{name} must be 0..1"
-            )
-    return {
-        "baseColor": color,
-        "metallic": float(metallic),
-        "roughness": float(roughness),
-    }
-
-
-def _pbr_material(part_id: str, appearance: dict[str, Any]) -> PBRMaterial:
-    color = appearance["baseColor"]
-    rgba = [int(color[index : index + 2], 16) for index in (1, 3, 5)] + [255]
-    return PBRMaterial(
-        name=f"{part_id}-material",
-        baseColorFactor=rgba,
-        metallicFactor=appearance["metallic"],
-        roughnessFactor=appearance["roughness"],
-    )
-
-
 def _mesh_record(mesh: trimesh.Trimesh, path: Path) -> dict[str, Any]:
     bounds = np.asarray(mesh.bounds, dtype=float)
     return {
@@ -1412,32 +1343,14 @@ def _write_physical_glb(
     output: Path,
     revision: str,
 ) -> dict[str, Any]:
-    scene = trimesh.Scene()
-    scene.metadata.update(
-        {
-            "revision": revision,
-            "scale": 1.0,
-            "schema": "evidence-physical-display/v1",
-            "units": "mm",
-        }
-    )
     physical_nodes_by_part: dict[str, list[str]] = {}
-    expected_colors: dict[str, str] = {}
+    physical_items: list[tuple[str, trimesh.Trimesh, dict[str, Any]]] = []
     for part_id, mesh, appearance in parts:
         regions = color_regions.get(part_id, [])
         if not regions:
             node_name = part_id
-            display = mesh.copy()
-            display.visual = TextureVisuals(
-                material=_pbr_material(node_name, appearance)
-            )
-            scene.add_geometry(
-                display,
-                node_name=node_name,
-                geom_name=f"{part_id}-geometry",
-            )
+            physical_items.append((node_name, mesh, appearance))
             physical_nodes_by_part[part_id] = [node_name]
-            expected_colors[node_name] = appearance["baseColor"].upper()
             continue
 
         physical_nodes_by_part[part_id] = []
@@ -1447,82 +1360,38 @@ def _write_physical_glb(
             region_appearance = _material_appearance(
                 materials[region["materialId"]]
             )
-            display = region_surfaces[region["id"]].copy()
-            display.visual = TextureVisuals(
-                material=_pbr_material(node_name, region_appearance)
-            )
-            scene.add_geometry(
-                display,
-                node_name=node_name,
-                geom_name=f"{node_name}-geometry",
+            physical_items.append(
+                (node_name, region_surfaces[region["id"]], region_appearance)
             )
             physical_nodes_by_part[part_id].append(node_name)
-            expected_colors[node_name] = region_appearance["baseColor"].upper()
-    for node_id, mesh, appearance in display_nodes:
-        display = mesh.copy()
-        display.visual = TextureVisuals(material=_pbr_material(node_id, appearance))
-        scene.add_geometry(
-            display,
-            node_name=node_id,
-            geom_name=f"{node_id}-display-geometry",
+    try:
+        record = export_display_glb(
+            physical_items,
+            output,
+            display_items=display_nodes,
+            metadata={
+                "revision": revision,
+                "scale": 1.0,
+                "schema": "evidence-physical-display/v1",
+                "units": "mm",
+            },
         )
-    payload = scene.export(file_type="glb")
-    if not isinstance(payload, bytes) or payload[:4] != b"glTF":
-        raise CompileError("physical GLB exporter returned an invalid payload")
-    output.write_bytes(payload)
-    loaded = trimesh.load(output, force="scene", process=False)
-    if not isinstance(loaded, trimesh.Scene):
-        raise CompileError("physical GLB readback did not produce a scene")
-    node_names = sorted(loaded.graph.nodes_geometry)
-    expected_physical = sorted(
-        node_name
-        for part_nodes in physical_nodes_by_part.values()
-        for node_name in part_nodes
-    )
-    expected_display = sorted(node_id for node_id, _, _ in display_nodes)
-    expected = sorted([*expected_physical, *expected_display])
-    if node_names != expected:
-        raise CompileError(
-            f"physical GLB node readback mismatch: expected {expected}, got {node_names}"
-        )
-    readback_colors: dict[str, str] = {}
-    for node_name, expected_color in expected_colors.items():
-        _, geometry_name = loaded.graph[node_name]
-        geometry = loaded.geometry[geometry_name]
-        material = getattr(geometry.visual, "material", None)
-        raw_color = getattr(material, "baseColorFactor", None)
-        if raw_color is None or len(raw_color) < 3:
-            raise CompileError(
-                f"physical GLB node {node_name} has no PBR base color after readback"
-            )
-        values = np.asarray(raw_color[:3], dtype=float)
-        if float(np.max(values)) <= 1.0 + 1e-9:
-            values = values * 255.0
-        color = "#" + "".join(f"{int(round(value)):02X}" for value in values)
-        readback_colors[node_name] = color
-        if color != expected_color:
-            raise CompileError(
-                f"physical GLB node {node_name} color readback mismatch: "
-                f"expected {expected_color}, got {color}"
-            )
+    except DisplayGlbError as error:
+        raise CompileError(str(error)) from error
     return {
         **_artifact_record(output),
-        "nodeNames": node_names,
-        "physicalNodeNames": expected_physical,
+        **record,
         "physicalPartNodeNames": {
             part_id: list(node_names)
             for part_id, node_names in physical_nodes_by_part.items()
         },
-        "readbackBaseColors": readback_colors,
         "regionNodeNames": {
             part_id: list(node_names)
             for part_id, node_names in physical_nodes_by_part.items()
             if len(node_names) > 1 or node_names[0] != part_id
         },
-        "displayOnlyNodeNames": expected_display,
         "revision": revision,
         "scale": 1.0,
-        "verified": True,
     }
 
 
@@ -1927,7 +1796,12 @@ def _bind_scene(
     for node in bound["nodes"]:
         if node["id"] not in bound_sources:
             continue
-        node["recipe"]["parameters"]["sourceMesh"] = deepcopy(
+        parameter = (
+            "sourceMesh"
+            if node["role"] == "display-only"
+            else "geometry"
+        )
+        node["recipe"]["parameters"][parameter] = deepcopy(
             bound_sources[node["id"]]
         )
 
@@ -2067,8 +1941,10 @@ def compile_scene(
             # the positive/cutter collections used by boolean/STL/3MF paths.
             if node["recipe"]["kind"] == "displayComponent":
                 try:
-                    mesh, bound_spec = _load_display_mesh(node, base_dir)
-                except CompileError as error:
+                    node_id, mesh, appearance, bound_spec = load_display_component(
+                        node, base_dir
+                    )
+                except DisplayGlbError as error:
                     diagnostic_issues.append(
                         _compile_issue(
                             code="BACKEND.DISPLAY_NODE_INVALID",
@@ -2082,9 +1958,8 @@ def compile_scene(
                         )
                     )
                     continue
-                bound_sources[node["id"]] = bound_spec
-                appearance = _display_appearance(node)
-                display_compiled.append((node["id"], mesh, appearance))
+                bound_sources[node_id] = bound_spec
+                display_compiled.append((node_id, mesh, appearance))
                 display_record = {
                     "nodeId": node["id"],
                     "physicalFeatureRef": node.get("physicalFeatureRef"),
@@ -2563,7 +2438,16 @@ def compile_scene(
         **{
             f"node:{node_id}": {
                 "path": spec["path"],
-                "schema": "mesh-source/v1",
+                "schema": (
+                    "display-mesh-source/v1"
+                    if nodes_by_id[node_id]["role"] == "display-only"
+                    else (
+                        "brep-tessellation/v1"
+                        if nodes_by_id[node_id]["recipe"]["kind"]
+                        == BREP_GEOMETRY_RECIPE_KIND
+                        else "mesh-source/v1"
+                    )
+                ),
                 "sha256": spec["sha256"],
             }
             for node_id, spec in bound_sources.items()

@@ -88,18 +88,6 @@ def _write_brep_scene(root: Path, intent_path: Path, part_name: str) -> Path:
     return scene_path
 
 
-def _glb_vertex_colors(path: Path) -> set[tuple[int, int, int]]:
-    if path.read_bytes()[:4] != b"glTF":
-        raise AssertionError(f"{path} is not a binary glTF file")
-    scene = trimesh.load(path, force="scene", process=False)
-    colors: set[tuple[int, int, int]] = set()
-    for mesh in scene.geometry.values():
-        face_colors = getattr(mesh.visual, "face_colors", None)
-        if face_colors is not None and len(face_colors):
-            colors.add(tuple(int(value) for value in face_colors[0][:3]))
-    return colors
-
-
 class SharedColorProfileTests(unittest.TestCase):
     def test_color_backend_uses_the_root_profile_catalog(self):
         self.assertEqual(color_profile.CATALOG_PATH.parent.parent, SINGLE)
@@ -425,6 +413,7 @@ class ColorPipelineTests(unittest.TestCase):
         self,
         root: Path,
         *,
+        include_display_component: bool = False,
         print_package_mode: str | None = None,
         red_continuity: str | None = None,
     ) -> tuple[dict, Path, Path]:
@@ -533,6 +522,48 @@ class ColorPipelineTests(unittest.TestCase):
         intent_path = root / "tile_intent.json"
         intent_path.write_text(json.dumps(intent), encoding="utf-8")
         scene_path = _write_brep_scene(root, intent_path, "tile")
+        if include_display_component:
+            display_mesh = trimesh.Trimesh(
+                vertices=np.asarray(
+                    [[8.0, 4.0, 2.05], [12.0, 4.0, 2.05], [12.0, 6.0, 2.05], [8.0, 6.0, 2.05]]
+                ),
+                faces=np.asarray([[0, 1, 2], [0, 2, 3]]),
+                process=False,
+            )
+            display_path = root / "status-surface.ply"
+            display_mesh.export(display_path)
+            scene = json.loads(scene_path.read_text(encoding="utf-8"))
+            scene["nodes"].extend(
+                [
+                    {
+                        "id": "center-slot-node",
+                        "partId": "tile",
+                        "featureId": "center-slot",
+                        "role": "cutter",
+                        "operation": "subtract",
+                        "recipe": {"kind": "box", "parameters": {}},
+                    },
+                    {
+                        "id": "status-surface",
+                        "partId": "tile",
+                        "featureId": "display/status-surface",
+                        "role": "display-only",
+                        "operation": "none",
+                        "physicalFeatureRef": "center-slot",
+                        "recipe": {
+                            "kind": "displayComponent",
+                            "parameters": {
+                                "sourceMesh": display_path.name,
+                                "appearance": {
+                                    "baseColor": "#101418",
+                                    "roughness": 0.2,
+                                },
+                            },
+                        },
+                    },
+                ]
+            )
+            scene_path.write_text(json.dumps(scene), encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()):
             report = self.cad_helpers.export_regions(
                 {"red": (left, "#CC2233"), "blue": (right, "#2255CC")},
@@ -550,7 +581,9 @@ class ColorPipelineTests(unittest.TestCase):
     def test_unified_report_print_package_display_glb_step_master_and_material_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            report, _, intent_path = self._build_fixture(root)
+            report, _, intent_path = self._build_fixture(
+                root, include_display_component=True
+            )
             self.assertEqual(report["schema"], "evidence-a3d-build/v1")
             self.assertEqual(report["backend"], "brep-color-regions")
             self.assertTrue(report["backendData"]["exportAudit"]["pass"])
@@ -615,10 +648,15 @@ class ColorPipelineTests(unittest.TestCase):
             self.assertIn("region:red:print", report["artifacts"])
             self.assertTrue((root / "tile.step").is_file())
             self.assertTrue((root / "tile-display.glb").is_file())
+            display_artifact = report["artifacts"]["glb:display"]
             self.assertEqual(
-                _glb_vertex_colors(root / "tile-display.glb"),
-                {(204, 34, 51), (34, 85, 204)},
+                set(display_artifact["readbackBaseColors"].values()),
+                {"#CC2233", "#2255CC", "#101418"},
             )
+            self.assertEqual(
+                display_artifact["displayOnlyNodeNames"], ["status-surface"]
+            )
+            self.assertNotIn("status-surface", report["parts"])
             plan = json.loads((root / "tile_material-plan.json").read_text())
             self.assertTrue(plan["requiresManualSlicerAssignment"])
             self.assertEqual(

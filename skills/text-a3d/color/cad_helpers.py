@@ -24,6 +24,13 @@ from cad_diagnostics import (
     CadDiagnosticError,
     source_diagnostics_payload,
 )
+from display_glb import (
+    DisplayGlbError,
+    appearance as display_appearance,
+    export_display_glb,
+    load_display_components,
+)
+from geometry_binding import GeometryBindingError, shape_to_mesh
 
 from build123d import (
     Color,
@@ -742,39 +749,6 @@ def _rgb(value: str) -> tuple[float, float, float]:
     return channels  # type: ignore[return-value]
 
 
-def _rgb8(value: str) -> tuple[int, int, int]:
-    if not _HEX.fullmatch(value):
-        raise RegionInvariantError(f"invalid region color: {value}")
-    return tuple(
-        int(value[index:index + 2], 16) for index in (1, 3, 5)
-    )  # type: ignore[return-value]
-
-
-def _export_display_glb(
-    items: list[tuple[str, object, str]],
-    path: Path,
-) -> None:
-    import trimesh
-
-    scene = trimesh.Scene()
-    with tempfile.TemporaryDirectory() as directory:
-        for index, (label, shape, color) in enumerate(items):
-            mesh_path = Path(directory) / f"{index}-{label}.stl"
-            export_stl(
-                shape, str(mesh_path), tolerance=0.01, angular_tolerance=0.1
-            )
-            mesh = trimesh.load(mesh_path, force="mesh", process=False)
-            if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
-                raise RegionInvariantError(
-                    f"display GLB mesh for {label!r} is empty"
-                )
-            mesh.visual.face_colors = [*_rgb8(color), 255]
-            mesh.metadata["name"] = label
-            scene.add_geometry(mesh, geom_name=label, node_name=label)
-    data = scene.export(file_type="glb")
-    path.write_bytes(data if isinstance(data, bytes) else bytes(data))
-
-
 def export_regions(
     regions: dict,
     name: str,
@@ -1094,13 +1068,27 @@ def export_regions(
     assemble_step_path = output / f"{name}.step"
     display_glb_path = output / f"{name}-display.glb"
     export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)
-    _export_display_glb(
-        [
-            (region_name, shape, color)
-            for region_name, (shape, color) in normalized.items()
-        ],
-        display_glb_path,
-    )
+    try:
+        display_components = load_display_components(scene_data, scene_path)
+        display_nodes = export_display_glb(
+            (
+                (
+                    region_name,
+                    shape_to_mesh(
+                        shape,
+                        f"display geometry {region_name}",
+                        linear_tolerance_mm=0.01,
+                        angular_tolerance_rad=0.1,
+                    ),
+                    display_appearance(color),
+                )
+                for region_name, (shape, color) in normalized.items()
+            ),
+            display_glb_path,
+            display_items=display_components,
+        )
+    except (DisplayGlbError, GeometryBindingError) as error:
+        raise RegionInvariantError(str(error)) from error
     artifacts[f"step:{name}"] = {
         "path": str(assemble_step_path.resolve()),
         "sha256": _digest(assemble_step_path),
@@ -1108,6 +1096,7 @@ def export_regions(
     artifacts["glb:display"] = {
         "path": str(display_glb_path.resolve()),
         "sha256": _digest(display_glb_path),
+        **display_nodes,
     }
 
     material_plan_path = output / f"{name}_material-plan.json"
@@ -1158,7 +1147,10 @@ def export_regions(
                     export_geometry_record(assembly_shape),
                 )
             },
-            glb=(display_glb_path, list(normalized)),
+            glb=(
+                display_glb_path,
+                [*normalized, *[node_id for node_id, _, _ in display_components]],
+            ),
         )
     except ExportAuditError as error:
         raise RegionInvariantError(f"export read-back audit failed: {error}") from error

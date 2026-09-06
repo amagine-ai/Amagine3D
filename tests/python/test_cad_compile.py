@@ -50,6 +50,26 @@ def _localize_profile(intent_path: Path, root: Path) -> None:
 
 
 def _write_scene(root: Path, intent_path: Path, *, master: str = "brep") -> Path:
+    geometry = root / "part-source.stl"
+    if master == "mesh" and not geometry.exists():
+        geometry.write_bytes(b"solid part\nendsolid part\n")
+    recipe = (
+        {
+            "kind": "meshGeometry",
+            "parameters": {
+                "geometry": {
+                    "path": geometry.name,
+                    "scale": 1.0,
+                    "sha256": sha256(geometry.read_bytes()).hexdigest(),
+                }
+            },
+        }
+        if master == "mesh"
+        else {
+            "kind": "roundedBox",
+            "parameters": {"sizeMm": [40, 30, 20], "radiusMm": 1},
+        }
+    )
     scene_path = root / "part_scene.json"
     scene_path.write_text(
         json.dumps(
@@ -68,14 +88,7 @@ def _write_scene(root: Path, intent_path: Path, *, master: str = "brep") -> Path
                         "featureId": "part-body",
                         "role": "solid",
                         "operation": "union",
-                        "recipe": {
-                            "kind": "sourceMesh" if master == "mesh" else "roundedBox",
-                            "parameters": (
-                                {"sourceMesh": "part-source.stl"}
-                                if master == "mesh"
-                                else {"sizeMm": [40, 30, 20], "radiusMm": 1}
-                            ),
-                        },
+                        "recipe": recipe,
                     }
                 ],
                 "interfaces": [],

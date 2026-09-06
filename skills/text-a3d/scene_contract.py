@@ -30,6 +30,12 @@ INTENT_SCHEMAS = {"evidence-cad-intent/v5"}
 REPRESENTATION_MASTERS = {"brep", "mesh"}
 ROLES = {"solid", "cutter", "separate", "display-only"}
 DISPLAY_COMPONENT_KIND = "displayComponent"
+BREP_GEOMETRY_RECIPE_KIND = "brepGeometry"
+MESH_GEOMETRY_RECIPE_KIND = "meshGeometry"
+PHYSICAL_GEOMETRY_RECIPE_KINDS = {
+    BREP_GEOMETRY_RECIPE_KIND,
+    MESH_GEOMETRY_RECIPE_KIND,
+}
 SELF_TAPPING_RECIPE_KIND = "selfTappingScrewPair"
 SELF_TAPPING_OUTPUTS = {
     "clearance-cutter",
@@ -460,6 +466,61 @@ def _validate_source_mesh_spec(value: Any, path: str, errors: list[str]) -> None
     transform = value.get("toCanonicalTransform")
     if transform is not None:
         _validate_transform(transform, f"{path}.toCanonicalTransform", errors)
+
+
+def _validate_bound_geometry(
+    recipe: dict[str, Any],
+    path: str,
+    base_dir: Path | None,
+    errors: list[str],
+) -> None:
+    kind = recipe.get("kind")
+    parameters = recipe.get("parameters")
+    if kind not in PHYSICAL_GEOMETRY_RECIPE_KINDS or not isinstance(parameters, dict):
+        return
+    expected_parameters = (
+        {"geometry", "tessellation"}
+        if kind == BREP_GEOMETRY_RECIPE_KIND
+        else {"geometry"}
+    )
+    if set(parameters) != expected_parameters:
+        errors.append(
+            f"{path}.parameters must contain exactly {sorted(expected_parameters)}"
+        )
+    geometry = parameters.get("geometry")
+    geometry_path = f"{path}.parameters.geometry"
+    if not isinstance(geometry, dict):
+        errors.append(f"{geometry_path} must be an object")
+    else:
+        if set(geometry) != {"path", "scale", "sha256"}:
+            errors.append(
+                f"{geometry_path} must contain exactly path, scale, and sha256"
+            )
+        _validate_source_mesh_spec(geometry, geometry_path, errors)
+        raw_path = geometry.get("path")
+        if isinstance(raw_path, str) and Path(raw_path).suffix.lower() != ".stl":
+            errors.append(f"{geometry_path}.path must reference an STL")
+        digest = geometry.get("sha256")
+        if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+            errors.append(f"{geometry_path}.sha256 must be a lowercase SHA-256")
+        if base_dir is not None:
+            _validate_file_binding(geometry, geometry_path, base_dir, errors)
+    if kind == BREP_GEOMETRY_RECIPE_KIND:
+        tessellation = parameters.get("tessellation")
+        tessellation_path = f"{path}.parameters.tessellation"
+        if not isinstance(tessellation, dict) or set(tessellation) != {
+            "angularToleranceRad",
+            "linearToleranceMm",
+        }:
+            errors.append(
+                f"{tessellation_path} must contain exactly angularToleranceRad "
+                "and linearToleranceMm"
+            )
+        elif any(
+            not _positive_number(tessellation.get(field))
+            for field in ("angularToleranceRad", "linearToleranceMm")
+        ):
+            errors.append(f"{tessellation_path} values must be finite and positive")
 
 
 def _dimensions(value: Any, path: str, errors: list[str]) -> dict[str, float]:
@@ -1413,6 +1474,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         if isinstance(intent_data, dict)
         else {}
     )
+    hybrid_scene = any(
+        part.get("representationMaster") == "mesh"
+        for part in part_by_id.values()
+    )
 
     nodes = data.get("nodes")
     node_ids: list[str] = []
@@ -1482,6 +1547,38 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     _validate_json_value(
                         recipe["parameters"], f"{path}.recipe.parameters", errors
                     )
+                if role != "display-only" and kind == "sourceMesh":
+                    errors.append(
+                        f"{path}.recipe.kind sourceMesh is unsupported for physical "
+                        "nodes; bind the authored object as meshGeometry or brepGeometry"
+                    )
+                if (
+                    hybrid_scene
+                    and role != "display-only"
+                    and kind != SELF_TAPPING_RECIPE_KIND
+                ):
+                    if kind not in PHYSICAL_GEOMETRY_RECIPE_KINDS:
+                        errors.append(
+                            f"{path}.recipe.kind must be one of "
+                            f"{sorted(PHYSICAL_GEOMETRY_RECIPE_KINDS)} in a hybrid scene"
+                        )
+                    else:
+                        owner = part_by_id.get(part_id)
+                        if (
+                            isinstance(owner, dict)
+                            and owner.get("representationMaster") == "brep"
+                            and kind != BREP_GEOMETRY_RECIPE_KIND
+                        ):
+                            errors.append(
+                                f"{path}.recipe.kind must be "
+                                f"{BREP_GEOMETRY_RECIPE_KIND} for a BRep-master part"
+                            )
+                        _validate_bound_geometry(
+                            recipe,
+                            f"{path}.recipe",
+                            base_dir,
+                            errors,
+                        )
 
             physical_ref = node.get("physicalFeatureRef")
             if role == "display-only":

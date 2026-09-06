@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import trimesh
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "text-a3d"
@@ -16,6 +18,7 @@ if str(SKILL) not in sys.path:
     sys.path.insert(0, str(SKILL))
 
 import authoring  # noqa: E402
+import geometry_binding  # noqa: E402
 import intent_contract  # noqa: E402
 import scene_contract  # noqa: E402
 
@@ -336,6 +339,13 @@ class AuthoringTests(unittest.TestCase):
             self.assertEqual(intent_contract.validate(intent, root), [])
 
             scene_path = root / "device_scene.json"
+            body_node = geometry_binding.bind_mesh_feature(
+                node_id="body-node",
+                feature_id="body",
+                role="solid",
+                mesh=trimesh.creation.box(extents=[4.0, 3.0, 2.0]),
+                path=root / "body.stl",
+            )
             with patch.dict(
                 "os.environ", {"AMAGINE3D_SOURCE_PHASE": "compile"}, clear=False
             ):
@@ -345,17 +355,7 @@ class AuthoringTests(unittest.TestCase):
                     parts={
                         "device": {
                             "representationMaster": "mesh",
-                            "nodes": [
-                                {
-                                    "id": "body-node",
-                                    "featureId": "body",
-                                    "role": "solid",
-                                    "recipe": {
-                                        "kind": "sourceMesh",
-                                        "parameters": {"sourceMesh": "body.stl"},
-                                    },
-                                }
-                            ],
+                            "nodes": [body_node],
                         }
                     },
                 )
@@ -365,17 +365,7 @@ class AuthoringTests(unittest.TestCase):
                 parts={
                     "device": {
                         "representationMaster": "mesh",
-                        "nodes": [
-                            {
-                                "id": "body-node",
-                                "featureId": "body",
-                                "role": "solid",
-                                "recipe": {
-                                    "kind": "sourceMesh",
-                                    "parameters": {"sourceMesh": "body.stl"},
-                                },
-                            }
-                        ],
+                        "nodes": [body_node],
                     }
                 },
             )
@@ -498,8 +488,8 @@ class AuthoringTests(unittest.TestCase):
                                 "featureId": "base-body",
                                 "role": "solid",
                                 "recipe": {
-                                    "kind": "sourceMesh",
-                                    "parameters": {"sourceMesh": "base.step"},
+                                    "kind": "roundedBox",
+                                    "parameters": {"sizeMm": [20, 10, 4]},
                                 },
                             },
                         ],

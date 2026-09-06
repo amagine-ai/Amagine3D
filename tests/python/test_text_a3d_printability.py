@@ -246,16 +246,6 @@ def _qa_report_for_mesh(
     }
 
 
-def _glb_face_colors(path: Path) -> set[tuple[int, int, int]]:
-    scene = trimesh.load(path, force="scene", process=False)
-    return {
-        tuple(int(value) for value in mesh.visual.face_colors[0][:3])
-        for mesh in scene.geometry.values()
-        if getattr(mesh.visual, "face_colors", None) is not None
-        and len(mesh.visual.face_colors)
-    }
-
-
 class BambuProfileTests(unittest.TestCase):
     def test_resolves_single_and_dual_tool_limits(self):
         catalog = bambu_profile.load_catalog()
@@ -1641,8 +1631,12 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 {"base": "#E8E0D4", "lid": "#20242A"},
             )
             self.assertEqual(
-                _glb_face_colors(root / "case-display.glb"),
-                {(232, 224, 212), (32, 36, 42)},
+                set(
+                    report["artifacts"]["glb:display"][
+                        "readbackBaseColors"
+                    ].values()
+                ),
+                {"#E8E0D4", "#20242A"},
             )
 
             from color.export_3mf import load_color_archive_mesh

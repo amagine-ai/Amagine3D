@@ -40,6 +40,13 @@ class CapabilityManifestTests(unittest.TestCase):
                 if item["id"] == "checked-brep-features"
             )["available"]
         )
+        self.assertTrue(
+            next(
+                item
+                for item in manifest["authoring"]["modelingRecipes"]
+                if item["id"] == "bound-hybrid-features"
+            )["available"]
+        )
         self.assertNotIn(
             "scaled-round-volume",
             {
@@ -110,6 +117,14 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertIn("checked_cut", geometry_helpers)
         self.assertIn("checked_union", geometry_helpers)
         self.assertIn("min_added_mm3", geometry_helpers["checked_union"])
+
+        binding_helpers = {
+            item["name"]: item["parameters"]
+            for item in manifest["authoring"]["geometryBindingHelpers"]
+        }
+        self.assertIn("bind_brep_feature", binding_helpers)
+        self.assertIn("bind_mesh_feature", binding_helpers)
+        self.assertIn("shape", binding_helpers["bind_brep_feature"])
 
 
 if __name__ == "__main__":

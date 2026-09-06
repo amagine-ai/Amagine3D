@@ -132,8 +132,9 @@ MODE_CAPABILITIES = [
         "outputs": ["eligible part STEP", "part STL", "3MF", "display GLB"],
         "requirements": [
             "one representation master per part",
-            "fit-critical mechanical structure remains an independent BRep part",
-            "organic mesh shell and BRep parts meet through declared interfaces",
+            "BRep features bind their direct tessellation without an intermediate STEP",
+            "precise BRep features may modify a mesh-master body",
+            "independent BRep-master parts retain genuine STEP",
             "a fused mesh-master part never claims editable STEP authority",
         ],
     },
@@ -157,6 +158,12 @@ MODELING_RECIPES = [
         "provider": "cad_helpers",
         "requires": ["checked_cut", "checked_union"],
         "useWhen": "additive or subtractive BRep features must prove material effect and connected topology",
+    },
+    {
+        "id": "bound-hybrid-features",
+        "provider": "geometry_binding",
+        "requires": ["bind_brep_feature", "bind_mesh_feature"],
+        "useWhen": "one mesh-master part combines freeform Mesh surfaces with precise BRep additions or cutters",
     },
     {
         "id": "sdf-organic-shell",
@@ -224,8 +231,13 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             "observe",
         },
     )
+    binding_helpers = _function_signatures(
+        root / "geometry_binding.py",
+        {"bind_brep_feature", "bind_mesh_feature", "shape_to_mesh"},
+    )
     organic_shell_names = {item["name"] for item in organic_shell_helpers}
     geometry_helper_names = {item["name"] for item in geometry_helpers}
+    binding_helper_names = {item["name"] for item in binding_helpers}
     query = {
         name: {
             "available": name in available,
@@ -244,6 +256,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
                 {
                     "build123d": available,
                     "cad_helpers": geometry_helper_names,
+                    "geometry_binding": binding_helper_names,
                     "organic_shell": organic_shell_names,
                 }[recipe["provider"]]
             ),
@@ -271,6 +284,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             },
             "authoringHelpers": authoring_helpers,
             "geometryHelpers": geometry_helpers,
+            "geometryBindingHelpers": binding_helpers,
             "interfaceRecipes": interface_helpers,
             "interfaceProofs": proof_capabilities(),
             "modelingRecipes": recipes,
@@ -279,7 +293,8 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
                 "choose construction from controlling dimensions and evidence",
                 "use named parameters and source-authored coordinate frames",
                 "derive mating geometry from one clearance recipe",
-                "keep organic mesh shells and fit-critical BRep structure as independent assembled parts",
+                "bind Mesh and BRep feature artifacts from the same authored geometry objects",
+                "retain STEP only when the final physical part is BRep-master",
                 "build the complete physical part before manufactured-color partitioning",
                 "keep display-only decoration outside manufacturing geometry",
             ],

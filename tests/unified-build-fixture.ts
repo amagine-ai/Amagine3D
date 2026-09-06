@@ -258,6 +258,19 @@ export async function writeUnifiedBuildFixture(
         : {}),
     }),
   );
+  const nodeGeometry: Record<string, { path: string; sha256: string }> = hybrid
+    ? Object.fromEntries(
+        await Promise.all(
+          parts.map(async (part) => [
+            part,
+            await writeBound(
+              `${part}-source.stl`,
+              `solid ${part}-source\nendsolid ${part}-source\n`,
+            ),
+          ]),
+        ),
+      )
+    : {};
   const scene = await writeBound(
     `${name}_scene.json`,
     JSON.stringify({
@@ -277,10 +290,17 @@ export async function writeUnifiedBuildFixture(
         id: `${part}-body`,
         operation: parts.length === 1 ? 'union' : 'none',
         partId: part,
-        recipe: {
-          kind: 'sourceMesh',
-          parameters: { sourceMesh: `${part}.stl` },
-        },
+        recipe: hybrid
+          ? {
+              kind: 'meshGeometry',
+              parameters: {
+                geometry: { ...nodeGeometry[part], scale: 1 },
+              },
+            }
+          : {
+              kind: 'authoredBrep',
+              parameters: {},
+            },
         role: parts.length === 1 ? 'solid' : 'separate',
       })),
       parts: parts.map((part) => ({
@@ -506,10 +526,12 @@ export async function writeUnifiedBuildFixture(
     },
   };
   if (hybrid) {
-    const geometry = await writeBound(`${name}-source.glb`, 'glTF-source');
-    inputs.geometry = {
-      [`${name}-source`]: { ...geometry, schema: 'mesh-source/v1' },
-    };
+    inputs.geometry = Object.fromEntries(
+      parts.map((part) => [
+        `node:${part}-body`,
+        { ...nodeGeometry[part], schema: 'mesh-source/v1' },
+      ]),
+    );
   } else {
     const source = await writeBound(`${name}.py`, sourceContent);
     sourcePath = source.path;

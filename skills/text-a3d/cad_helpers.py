@@ -20,15 +20,19 @@ from typing import Callable, Iterable
 
 import numpy as np
 import trimesh
-from trimesh.visual import TextureVisuals
-from trimesh.visual.material import PBRMaterial
 
 from cad_diagnostics import (
     SOURCE_DIAGNOSTICS_SCHEMA,
     CadDiagnosticError,
     source_diagnostics_payload,
 )
-from shape_consistency import ConsistencyError, load_artifact
+from display_glb import (
+    DisplayGlbError,
+    appearance as display_appearance,
+    export_display_glb,
+    load_display_components,
+)
+from geometry_binding import GeometryBindingError, shape_to_mesh
 
 from build123d import (
     Compound,
@@ -172,105 +176,25 @@ def _raise_source_diagnostics(
     raise BuildInvariantError(message)
 
 
-def _export_display_glb(
-    items: Iterable[tuple[str, object, tuple[int, int, int]]],
-    path: Path,
-    *,
-    display_items: Iterable[tuple[str, trimesh.Trimesh, dict]] = (),
-) -> dict:
-    physical_items = list(items)
-    visual_items = list(display_items)
-    physical_names = [label for label, _, _ in physical_items]
-    display_names = [label for label, _, _ in visual_items]
-    if len(set([*physical_names, *display_names])) != len(
-        [*physical_names, *display_names]
-    ):
-        raise BuildInvariantError("display GLB node names must be unique")
-
-    scene = trimesh.Scene()
-    with tempfile.TemporaryDirectory() as directory:
-        for index, (label, shape, color) in enumerate(physical_items):
-            mesh_path = Path(directory) / f"{index}-{label}.stl"
-            export_stl(
-                shape, str(mesh_path), tolerance=0.01, angular_tolerance=0.1
-            )
-            mesh = trimesh.load(mesh_path, force="mesh", process=False)
-            if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
-                raise BuildInvariantError(
-                    f"display GLB mesh for {label!r} is empty"
-                )
-            mesh.visual.face_colors = [*color, 255]
-            mesh.metadata["name"] = label
-            scene.add_geometry(mesh, geom_name=label, node_name=label)
-    for label, mesh, appearance in visual_items:
-        display = mesh.copy()
-        color = appearance["baseColor"]
-        display.visual = TextureVisuals(
-            material=PBRMaterial(
-                name=f"{label}-material",
-                baseColorFactor=[
-                    *[int(color[index : index + 2], 16) for index in (1, 3, 5)],
-                    255,
-                ],
-                metallicFactor=appearance["metallic"],
-                roughnessFactor=appearance["roughness"],
-            )
+def _display_mesh(shape, label: str) -> trimesh.Trimesh:
+    try:
+        return shape_to_mesh(
+            shape,
+            f"display geometry {label}",
+            linear_tolerance_mm=0.01,
+            angular_tolerance_rad=0.1,
         )
-        display.metadata["name"] = label
-        scene.add_geometry(
-            display,
-            geom_name=f"{label}-display-geometry",
-            node_name=label,
+    except GeometryBindingError as error:
+        raise BuildInvariantError(str(error)) from error
+
+
+def _display_style(color: tuple[int, int, int]) -> dict:
+    try:
+        return display_appearance(
+            "#" + "".join(f"{channel:02X}" for channel in color)
         )
-    data = scene.export(file_type="glb")
-    path.write_bytes(data if isinstance(data, bytes) else bytes(data))
-    return {
-        "displayOnlyNodeNames": sorted(display_names),
-        "nodeNames": sorted([*physical_names, *display_names]),
-        "physicalNodeNames": sorted(physical_names),
-    }
-
-
-def _display_components(scene_data: dict, scene_path: str | Path) -> list[tuple]:
-    """Load scene-declared visual components without manufacturing them."""
-
-    base_dir = Path(scene_path).resolve().parent
-    components = []
-    for node in scene_data.get("nodes", []):
-        if not isinstance(node, dict) or node.get("role") != "display-only":
-            continue
-        parameters = node["recipe"]["parameters"]
-        raw_source = parameters["sourceMesh"]
-        source = {"path": raw_source} if isinstance(raw_source, str) else raw_source
-        source_path = Path(source["path"])
-        if not source_path.is_absolute():
-            source_path = (base_dir / source_path).resolve()
-        declared_digest = source.get("sha256")
-        observed_digest = _digest(source_path)
-        if declared_digest is not None and declared_digest != observed_digest:
-            raise BuildInvariantError(
-                f"display component {node['id']!r} sourceMesh.sha256 does not match"
-            )
-        try:
-            mesh = load_artifact(source, base_dir)
-        except (ConsistencyError, OSError, TypeError, ValueError) as error:
-            raise BuildInvariantError(
-                f"display component {node['id']!r} source mesh cannot be loaded: "
-                f"{error}"
-            ) from error
-        appearance = parameters["appearance"]
-        components.append(
-            (
-                node["id"],
-                mesh,
-                {
-                    "baseColor": appearance["baseColor"].upper(),
-                    "metallic": float(appearance.get("metallic", 0.0)),
-                    "roughness": float(appearance.get("roughness", 0.58)),
-                },
-            )
-        )
-    return components
+    except DisplayGlbError as error:
+        raise BuildInvariantError(str(error)) from error
 
 
 def _parameter_overrides() -> dict:
@@ -1316,12 +1240,15 @@ def export_part(
     except Exception:
         pass
     export_step(shape, str(assemble_step_path), unit=Unit.MM)
-    display_components = _display_components(scene_data, scene_path)
-    display_nodes = _export_display_glb(
-        ((name, shape, _DISPLAY_TINTS[0]),),
-        display_glb_path,
-        display_items=display_components,
-    )
+    try:
+        display_components = load_display_components(scene_data, scene_path)
+        display_nodes = export_display_glb(
+            ((name, _display_mesh(shape, name), _display_style(_DISPLAY_TINTS[0])),),
+            display_glb_path,
+            display_items=display_components,
+        )
+    except DisplayGlbError as error:
+        raise BuildInvariantError(str(error)) from error
     export_stl(print_shape, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
 
     try:
@@ -1594,23 +1521,26 @@ def export_assembly(
     assemble_step_path = output / f"{name}-assemble.step"
     display_glb_path = output / f"{name}-display.glb"
     export_step(assembly_shape, str(assemble_step_path), unit=Unit.MM)
-    display_components = _display_components(scene_data, scene_path)
-    display_nodes = _export_display_glb(
-        (
+    try:
+        display_components = load_display_components(scene_data, scene_path)
+        display_nodes = export_display_glb(
             (
-                part_name,
-                shape,
                 (
-                    _rgb_color(normalized_colors[part_name])
-                    if normalized_colors is not None
-                    else _DISPLAY_TINTS[index % len(_DISPLAY_TINTS)]
-                ),
-            )
-            for index, (part_name, (shape, _)) in enumerate(normalized.items())
-        ),
-        display_glb_path,
-        display_items=display_components,
-    )
+                    part_name,
+                    _display_mesh(shape, part_name),
+                    _display_style(
+                        _rgb_color(normalized_colors[part_name])
+                        if normalized_colors is not None
+                        else _DISPLAY_TINTS[index % len(_DISPLAY_TINTS)]
+                    ),
+                )
+                for index, (part_name, (shape, _)) in enumerate(normalized.items())
+            ),
+            display_glb_path,
+            display_items=display_components,
+        )
+    except DisplayGlbError as error:
+        raise BuildInvariantError(str(error)) from error
     artifacts["step:assembly"] = {
         "path": str(assemble_step_path.resolve()),
         "sha256": _digest(assemble_step_path),

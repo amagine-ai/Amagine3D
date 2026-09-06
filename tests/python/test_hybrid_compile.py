@@ -21,6 +21,7 @@ if str(SKILL) not in sys.path:
 
 import hybrid_compile  # noqa: E402
 import build_check  # noqa: E402
+import geometry_binding  # noqa: E402
 import intent_contract  # noqa: E402
 import scene_contract  # noqa: E402
 import self_tapping_geometry  # noqa: E402
@@ -39,6 +40,31 @@ def _canonical_part(report: dict, output: Path, part_id: str) -> trimesh.Trimesh
     )
     mesh.apply_transform(np.linalg.inv(transform))
     return mesh
+
+
+def _geometry_recipe(
+    root: Path,
+    relative_path: str,
+    *,
+    representation: str = "mesh",
+) -> dict:
+    path = root / relative_path
+    parameters = {
+        "geometry": {
+            "path": relative_path,
+            "scale": 1.0,
+            "sha256": sha256(path.read_bytes()).hexdigest(),
+        }
+    }
+    if representation == "brep":
+        parameters["tessellation"] = {
+            "angularToleranceRad": 0.1,
+            "linearToleranceMm": 0.02,
+        }
+    return {
+        "kind": f"{representation}Geometry",
+        "parameters": parameters,
+    }
 
 
 def _write_intent(
@@ -148,10 +174,7 @@ def _fixture(root: Path) -> tuple[dict, float]:
                 "featureId": "housing/outer",
                 "role": "solid",
                 "operation": "union",
-                "recipe": {
-                    "kind": "sourceMesh",
-                    "parameters": {"sourceMesh": "source/housing.stl"},
-                },
+                "recipe": _geometry_recipe(root, "source/housing.stl"),
             },
             {
                 "id": "housing-hole",
@@ -159,15 +182,7 @@ def _fixture(root: Path) -> tuple[dict, float]:
                 "featureId": "housing/through-hole",
                 "role": "cutter",
                 "operation": "subtract",
-                "recipe": {
-                    "kind": "sourceMesh",
-                    "parameters": {
-                        "sourceMesh": {
-                            "path": "source/cutter.stl",
-                            "scale": 1.0,
-                        }
-                    },
-                },
+                "recipe": _geometry_recipe(root, "source/cutter.stl"),
             },
             {
                 "id": "button-body",
@@ -175,10 +190,11 @@ def _fixture(root: Path) -> tuple[dict, float]:
                 "featureId": "controls/button",
                 "role": "separate",
                 "operation": "none",
-                "recipe": {
-                    "kind": "sourceMesh",
-                    "parameters": {"sourceMesh": "source/button.stl"},
-                },
+                "recipe": _geometry_recipe(
+                    root,
+                    "source/button.stl",
+                    representation="brep",
+                ),
             },
             {
                 "id": "hole-appearance",
@@ -307,10 +323,7 @@ def _color_region_fixture(root: Path) -> dict:
                 "featureId": "badge/body",
                 "role": "solid",
                 "operation": "union",
-                "recipe": {
-                    "kind": "sourceMesh",
-                    "parameters": {"sourceMesh": "source/body.stl"},
-                },
+                "recipe": _geometry_recipe(root, "source/body.stl"),
             }
         ],
         "interfaces": [],
@@ -472,10 +485,7 @@ def _multipart_color_fixture(root: Path) -> dict:
                 "featureId": "badge-body",
                 "role": "solid",
                 "operation": "union",
-                "recipe": {
-                    "kind": "sourceMesh",
-                    "parameters": {"sourceMesh": "source/badge.stl"},
-                },
+                "recipe": _geometry_recipe(root, "source/badge.stl"),
             },
             {
                 "id": "button-body",
@@ -483,10 +493,11 @@ def _multipart_color_fixture(root: Path) -> dict:
                 "featureId": "button-body",
                 "role": "separate",
                 "operation": "none",
-                "recipe": {
-                    "kind": "sourceMesh",
-                    "parameters": {"sourceMesh": "source/button.stl"},
-                },
+                "recipe": _geometry_recipe(
+                    root,
+                    "source/button.stl",
+                    representation="brep",
+                ),
             },
         ],
         "interfaces": [
@@ -526,6 +537,83 @@ def _write_scene(root: Path, scene: dict) -> Path:
 
 
 class HybridCompileTests(unittest.TestCase):
+    def test_mesh_master_combines_bound_mesh_body_and_brep_cutter_without_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            outer = trimesh.creation.box(extents=[20.0, 20.0, 10.0])
+            cutter = Cylinder(
+                3.0,
+                14.0,
+                align=(Align.CENTER, Align.CENTER, Align.CENTER),
+            )
+            nodes = [
+                geometry_binding.bind_mesh_feature(
+                    node_id="housing-outer",
+                    feature_id="housing/outer",
+                    role="solid",
+                    mesh=outer,
+                    path=source / "housing-outer.stl",
+                ),
+                geometry_binding.bind_brep_feature(
+                    node_id="housing-bore",
+                    feature_id="housing/bore",
+                    role="cutter",
+                    shape=cutter,
+                    path=source / "housing-bore.stl",
+                ),
+            ]
+            scene = {
+                "schema": "evidence-semantic-scene/v1",
+                "revision": "bound-hybrid-001",
+                "intentRef": _write_intent(
+                    root,
+                    part="housing",
+                    feature_owners={
+                        "housing/outer": "housing",
+                        "housing/bore": "housing",
+                    },
+                    manufacturing={"mode": "single-part"},
+                    dimensions_mm=(20.0, 20.0, 10.0),
+                ),
+                "units": "mm",
+                "coordinateSystem": {"handedness": "right", "up": "Z"},
+                "parts": [
+                    {"id": "housing", "representationMaster": "mesh"}
+                ],
+                "nodes": [
+                    {
+                        **node,
+                        "partId": "housing",
+                        "operation": (
+                            "union" if node["role"] == "solid" else "subtract"
+                        ),
+                    }
+                    for node in nodes
+                ],
+                "interfaces": [],
+            }
+            output = root / "artifacts"
+            report = hybrid_compile.compile_scene(
+                scene,
+                base_dir=root,
+                output_dir=output,
+                source_scene=_write_scene(root, scene),
+                consistency_samples=64,
+            )
+
+            self.assertGreater(report["parts"]["housing"]["volumeRemovedMm3"], 0)
+            self.assertEqual(
+                report["inputs"]["geometry"]["node:housing-outer"]["schema"],
+                "mesh-source/v1",
+            )
+            self.assertEqual(
+                report["inputs"]["geometry"]["node:housing-bore"]["schema"],
+                "brep-tessellation/v1",
+            )
+            self.assertEqual(list(output.glob("*.step")), [])
+
     def test_compile_collects_all_independent_missed_cutters(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -540,8 +628,8 @@ class HybridCompileTests(unittest.TestCase):
             existing_cutter = next(
                 node for node in scene["nodes"] if node["id"] == "housing-hole"
             )
-            existing_cutter["recipe"]["parameters"]["sourceMesh"]["path"] = (
-                "source/miss-a.stl"
+            existing_cutter["recipe"] = _geometry_recipe(
+                root, "source/miss-a.stl"
             )
             scene["nodes"].append(
                 {
@@ -550,15 +638,7 @@ class HybridCompileTests(unittest.TestCase):
                     "featureId": "housing/second-hole",
                     "role": "cutter",
                     "operation": "subtract",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {
-                            "sourceMesh": {
-                                "path": "source/miss-b.stl",
-                                "scale": 1.0,
-                            }
-                        },
-                    },
+                    "recipe": _geometry_recipe(root, "source/miss-b.stl"),
                 }
             )
             _, intent = _read_bound_intent(scene, root)
@@ -615,10 +695,14 @@ class HybridCompileTests(unittest.TestCase):
 
             next(
                 node for node in scene["nodes"] if node["id"] == "housing-outer"
-            )["recipe"]["parameters"]["sourceMesh"] = "source/open-housing.stl"
+            )["recipe"] = _geometry_recipe(root, "source/open-housing.stl")
             next(
                 node for node in scene["nodes"] if node["id"] == "button-body"
-            )["recipe"]["parameters"]["sourceMesh"] = "source/open-button.stl"
+            )["recipe"] = _geometry_recipe(
+                root,
+                "source/open-button.stl",
+                representation="brep",
+            )
 
             with self.assertRaises(hybrid_compile.CompileDiagnosticsError) as raised:
                 hybrid_compile.compile_scene(
@@ -1388,10 +1472,7 @@ class HybridCompileTests(unittest.TestCase):
                     "featureId": "base-shell",
                     "role": "solid",
                     "operation": "union",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {"sourceMesh": "source/base.stl"},
-                    },
+                    "recipe": _geometry_recipe(root, "source/base.stl"),
                 },
                 {
                     "id": "housing-shell",
@@ -1399,10 +1480,7 @@ class HybridCompileTests(unittest.TestCase):
                     "featureId": "housing-shell",
                     "role": "solid",
                     "operation": "union",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {"sourceMesh": "source/housing.stl"},
-                    },
+                    "recipe": _geometry_recipe(root, "source/housing.stl"),
                 },
                 {
                     "id": "base-locator",
@@ -1410,10 +1488,7 @@ class HybridCompileTests(unittest.TestCase):
                     "featureId": "base-locator",
                     "role": "solid",
                     "operation": "union",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {"sourceMesh": "source/locator.stl"},
-                    },
+                    "recipe": _geometry_recipe(root, "source/locator.stl"),
                 },
                 {
                     "id": "housing-socket",
@@ -1421,10 +1496,7 @@ class HybridCompileTests(unittest.TestCase):
                     "featureId": "housing-socket",
                     "role": "cutter",
                     "operation": "subtract",
-                    "recipe": {
-                        "kind": "sourceMesh",
-                        "parameters": {"sourceMesh": "source/socket.stl"},
-                    },
+                    "recipe": _geometry_recipe(root, "source/socket.stl"),
                 },
             ]
             fasteners = []
@@ -1957,17 +2029,14 @@ class HybridCompileTests(unittest.TestCase):
                     consistency_samples=64,
                 )
 
-    def test_rejects_source_mesh_scale_instead_of_fitting_it(self):
+    def test_rejects_bound_geometry_scale_instead_of_fitting_it(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scene, _ = _fixture(root)
-            scene["nodes"][0]["recipe"]["parameters"]["sourceMesh"] = {
-                "path": "source/housing.stl",
-                "scale": 0.5,
-            }
+            scene["nodes"][0]["recipe"]["parameters"]["geometry"]["scale"] = 0.5
             with self.assertRaisesRegex(
                 hybrid_compile.CompileError,
-                "sourceMesh.scale must be 1",
+                "geometry.scale must be 1",
             ):
                 hybrid_compile.compile_scene(
                     scene,
