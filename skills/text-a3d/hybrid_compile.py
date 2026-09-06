@@ -159,7 +159,7 @@ def _digest(path: Path) -> str:
 
 
 def _artifact_record(path: Path) -> dict[str, str]:
-    """Return the file-reference shape consumed by PI/server discovery."""
+    """Return the file-reference shape consumed by server discovery."""
 
     return manifest_artifact_record(path)
 

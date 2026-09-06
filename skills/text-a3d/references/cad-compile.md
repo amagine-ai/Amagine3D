@@ -6,15 +6,14 @@ or geometry.
 
 ## Invocation
 
-Call the Agent's `cad_compile` tool with session-relative `marker`, `intent`,
-`scene`, `source`, and `output_dir` paths. This is the only normal compilation
-entry point. The runtime resolves those paths inside the session workspace and
-invokes the managed Python driver without a shell.
+Call `a3d compile` with session-relative `marker`, `intent`, `scene`, `source`,
+and `output-dir` paths. This is the only normal compilation entry point. The
+CLI fixes the workspace to the current session directory and invokes the
+managed Python driver without shell interpolation.
 
 The source process receives the text-a3d skill directory at the front of
-`PYTHONPATH`, so generated source can import `cad_helpers` directly. The tool
-also recomputes every returned artifact SHA-256 before exposing the compact
-result.
+`PYTHONPATH`, so generated source can import `cad_helpers` directly. The driver
+also recomputes every returned artifact SHA-256.
 
 The immutable intent must already exist and is validated before any
 Agent-authored geometry executes. Create it in a separate contract-only
@@ -50,19 +49,19 @@ or server-side workflow state.
 
 ## Result semantics
 
-The Python command prints and persists `evidence-cad-compile-result/v1`. The
-PI tool retains that result as non-Agent audit detail while exposing a bounded
-`evidence-cad-compile-agent-result/v1` projection to model context. The first
-projection includes counts and a grouped stable-ID index; later attempts retain
-the result pointer and decision fields but expose only the repair delta instead
-of repeating diagnostic bodies. `cad_compile_issues` resolves selected IDs or a
-severity against the run-bound persisted result, up to a bounded page, without
-rerunning any audit. Errors use
-stable stage-level codes such as `CONTRACT.SCENE_INVALID`,
+The command prints `a3d-compile-summary/v1` and persists the complete
+`evidence-cad-compile-result/v1` at the returned `result.path`. The printed view
+keeps every actionable error, groups repeated warnings, projects evidence to
+useful paths, and directly lists manufacturing deliverables, physical parts,
+and compiled colors when available. Open the persisted JSON only when the
+summary is insufficient; prefer `a3d diagnose RESULT.json --id ID` (or a code
+or severity selector) so unrelated evidence does not enter context. Errors use
+stable stage-level codes such as
+`CONTRACT.SCENE_INVALID`,
 `BACKEND.COMPILE_FAILED`, `BUILD.REPORT_INVALID`, and `QA.MESH_FAILED`.
-Checker-specific names remain in `issue.check`; structured details such as
+Checker-specific names remain in `issue.check`; full structured details such as
 part/node/interface IDs, component counts, bounds, and observed/expected values
-are returned together when available. Complete subprocess output stays in
+remain in the persisted result. Complete subprocess output stays in
 `<name>_compile.log`, while each validator writes its full evidence report to a
 unique staged path. A complete validated report is atomically published, so a
 deterministic report may be byte-identical to the prior attempt without being
@@ -103,18 +102,13 @@ rather than pretending a Python process can perform image review.
 
 ## Integration constraints
 
-- Register the driver as one PI tool, not a server-side state machine.
-- Register `cad_capabilities`, `reference_analyze`, and `cad_compile_issues` as
-  peer tools in the same Agent loop, not mandatory preprocessing states.
-- Resolve every supplied path under the current session workspace before
-  spawning it, use the managed `.venv` Python, and propagate `AbortSignal` to
-  the complete child process group.
-- Surface stage activity without returning the full compiler log or full issue
-  bodies to model context. Superseded compile results may be replaced in the
-  assembled context by a tiny run/status marker; persisted evidence and the
-  latest result remain unchanged.
+- Invoke the driver through `a3d compile`; do not recreate it as a server-side
+  state machine or automatic repair loop.
+- Keep every supplied path in the current session workspace and use the managed
+  `.venv` Python selected by the CLI.
+- Read full logs or issue bodies from persisted evidence only when the concise
+  command result is not enough to diagnose a failure.
 - Do not add automatic repair, geometry simplification, scaling, relaxed QA
   thresholds, motion semantics, or motion QA to this boundary.
-- The Python path checks and argv-only spawn reduce accidental misuse but are
-  not an operating-system sandbox. Agent-authored Python still inherits the
-  server process permissions.
+- Codex `workspace-write` is the operating-system write boundary. The CLI path
+  checks are defense in depth, not a separate hostile-code sandbox.

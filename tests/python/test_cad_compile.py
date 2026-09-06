@@ -659,6 +659,97 @@ class _InvalidBuildAuditRunner(_PassingRunner):
 
 
 class CadCompileTests(unittest.TestCase):
+    def test_agent_summary_preserves_errors_and_groups_repeated_warnings(self) -> None:
+        result = {
+            "artifacts": {
+                "preview": {"path": "/tmp/preview.png", "sha256": "preview"},
+                "sourcePreflight": {
+                    "path": "/tmp/source.json",
+                    "sha256": "source",
+                },
+            },
+            "backend": "brep-source",
+            "deliveryReady": False,
+            "issues": [
+                {
+                    "code": "QA.THIN_WALL",
+                    "message": "wall is too thin",
+                    "observed": {"minimumMm": 0.5},
+                    "part": "housing",
+                    "repairHint": "Increase the source wall thickness.",
+                    "severity": "error",
+                    "stage": "mesh-qa:housing",
+                },
+                *[
+                    {
+                        "check": "printability_overhang",
+                        "code": "QA.WARNING",
+                        "message": "overhang warning",
+                        "part": part,
+                        "repairHint": "Review this region.",
+                        "severity": "warning",
+                        "stage": f"mesh-qa:{part}",
+                    }
+                    for part in ("key-1", "key-2")
+                ],
+            ],
+            "model": "keypad",
+            "omittedErrorCount": 0,
+            "omittedIssueCount": 0,
+            "pass": False,
+            "result": {"path": "/tmp/keypad_compile-result.json"},
+            "runId": "run-1",
+            "schema": cad_compile.RESULT_SCHEMA,
+            "status": "failed",
+            "visualReviewRequired": True,
+        }
+
+        summary = cad_compile._agent_summary(result)
+
+        self.assertEqual(summary["schema"], "a3d-compile-summary/v1")
+        self.assertEqual(summary["artifacts"], {"preview": "/tmp/preview.png"})
+        self.assertEqual(
+            summary["issueCounts"],
+            {"errors": 1, "omitted": 0, "warnings": 2},
+        )
+        self.assertEqual(summary["issues"][0]["observed"], {"minimumMm": 0.5})
+        grouped = summary["issues"][1]
+        self.assertEqual(grouped["count"], 2)
+        self.assertEqual(grouped["parts"], ["key-1", "key-2"])
+        self.assertEqual(
+            grouped["stages"],
+            ["mesh-qa:key-1", "mesh-qa:key-2"],
+        )
+
+    def test_report_agent_facts_exposes_only_public_delivery_paths(self) -> None:
+        facts = cad_compile._report_agent_facts(
+            {
+                "artifacts": {
+                    "3mf": {"path": "/tmp/model.3mf"},
+                    "glb:display": {
+                        "path": "/tmp/model.glb",
+                        "readbackBaseColors": {"body": "#102030"},
+                    },
+                    "plate-stl:body": {
+                        "path": "/tmp/.amagine3d-internal/plate/body.stl"
+                    },
+                    "step:body": {"path": "/tmp/body.step"},
+                },
+                "parts": {"body": {}},
+            }
+        )
+
+        self.assertEqual(facts["colors"], {"body": "#102030"})
+        self.assertEqual(facts["physicalParts"], ["body"])
+        self.assertEqual(
+            facts["deliverables"],
+            {
+                "3mf": "/tmp/model.3mf",
+                "glb:display": "/tmp/model.glb",
+                "step:body": "/tmp/body.step",
+            },
+        )
+
     def test_repair_state_tracks_unblocked_resolved_and_regressed_issues(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

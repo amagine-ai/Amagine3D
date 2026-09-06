@@ -38,6 +38,7 @@ from source_preflight import audit as audit_source
 
 
 RESULT_SCHEMA = "evidence-cad-compile-result/v1"
+AGENT_SUMMARY_SCHEMA = "a3d-compile-summary/v1"
 BUILD_SCHEMA = "evidence-a3d-build/v1"
 REPAIR_STATE_SCHEMA = "evidence-cad-repair-state/v1"
 SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
@@ -46,6 +47,14 @@ MAX_ISSUES = 40
 MAX_MESSAGE_CHARS = 700
 MAX_LOG_TAIL_BYTES = 32_000
 DEFAULT_COMPILE_TIMEOUT_SECONDS = 5_400.0
+AGENT_ARTIFACT_KEYS = {
+    "buildReport",
+    "log",
+    "preview",
+    "referencePreview",
+    "repairState",
+    "renderEvidence",
+}
 
 
 class ConfigurationError(ValueError):
@@ -115,6 +124,143 @@ def _write_json(path: Path, value: Any) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(payload, encoding="utf-8")
     temporary.replace(path)
+
+
+def _path_only_artifacts(artifacts: Any) -> dict[str, str]:
+    """Project useful evidence paths without replaying hashes and metadata."""
+
+    if not isinstance(artifacts, dict):
+        return {}
+    projected: dict[str, str] = {}
+    for key in sorted(AGENT_ARTIFACT_KEYS):
+        reference = artifacts.get(key)
+        if isinstance(reference, dict) and isinstance(reference.get("path"), str):
+            projected[key] = reference["path"]
+    return projected
+
+
+def _warning_groups(issues: Any) -> list[dict[str, Any]]:
+    """Group repeated advisory findings while keeping their affected identities."""
+
+    if not isinstance(issues, list):
+        return []
+    groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("severity") != "warning":
+            continue
+        key = tuple(
+            str(issue.get(field, ""))
+            for field in ("code", "check", "message", "repairHint")
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "code": issue.get("code"),
+                "count": 0,
+                "message": issue.get("message"),
+                "repairHint": issue.get("repairHint"),
+                "severity": "warning",
+            },
+        )
+        group["count"] += 1
+        if issue.get("check"):
+            group["check"] = issue["check"]
+        for source, target in (
+            ("id", "ids"),
+            ("interfaceId", "interfaceIds"),
+            ("part", "parts"),
+            ("stage", "stages"),
+        ):
+            value = issue.get(source)
+            if value is not None:
+                values = group.setdefault(target, [])
+                if value not in values:
+                    values.append(value)
+    for group in groups.values():
+        for field in ("ids", "interfaceIds", "parts", "stages"):
+            if field in group:
+                group[field].sort()
+    return list(groups.values())
+
+
+def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """Return the small semantic view printed for the modeling Agent."""
+
+    issues = result.get("issues")
+    errors = (
+        [
+            {
+                **issue,
+                "id": issue.get("id") or _issue_identity(issue),
+            }
+            for issue in issues
+            if isinstance(issue, dict) and issue.get("severity") != "warning"
+        ]
+        if isinstance(issues, list)
+        else []
+    )
+    warnings = _warning_groups(issues)
+    summary: dict[str, Any] = {
+        "artifacts": _path_only_artifacts(result.get("artifacts")),
+        "backend": result.get("backend"),
+        "deliveryReady": result.get("deliveryReady", False),
+        "issueCounts": {
+            "errors": len(errors) + int(result.get("omittedErrorCount", 0) or 0),
+            "omitted": int(result.get("omittedIssueCount", 0) or 0),
+            "warnings": sum(group["count"] for group in warnings),
+        },
+        "issues": [*errors, *warnings],
+        "model": result.get("model"),
+        "pass": result.get("pass", False),
+        "resultSchema": result.get("schema"),
+        "runId": result.get("runId"),
+        "schema": AGENT_SUMMARY_SCHEMA,
+        "status": result.get("status", "failed"),
+        "visualReviewRequired": result.get("visualReviewRequired", True),
+    }
+    for key in ("colors", "deliverables", "physicalParts", "repairDelta", "result"):
+        value = result.get(key)
+        if value:
+            summary[key] = value
+    return summary
+
+
+def _report_agent_facts(report: dict[str, Any]) -> dict[str, Any]:
+    """Extract compact delivery facts from a validated full build report."""
+
+    artifacts = report.get("artifacts")
+    deliverables: dict[str, str] = {}
+    colors: dict[str, str] = {}
+    if isinstance(artifacts, dict):
+        for key, reference in artifacts.items():
+            is_deliverable = (
+                key in {"3mf", "glb:display", "stl"}
+                or key.startswith("step:")
+                or key.startswith("stl:")
+            )
+            path = reference.get("path") if isinstance(reference, dict) else None
+            if (
+                is_deliverable
+                and isinstance(path, str)
+                and ".amagine3d-internal" not in path
+            ):
+                deliverables[key] = path
+        display = artifacts.get("glb:display")
+        readback = display.get("readbackBaseColors") if isinstance(display, dict) else None
+        if isinstance(readback, dict):
+            colors = {
+                str(key): str(value)
+                for key, value in sorted(readback.items())
+                if isinstance(value, str)
+            }
+    parts = report.get("parts")
+    return {
+        "colors": colors,
+        "deliverables": dict(sorted(deliverables.items())),
+        "physicalParts": (
+            sorted(str(key) for key in parts) if isinstance(parts, dict) else []
+        ),
+    }
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
@@ -1357,6 +1503,9 @@ def _finish(
     log_path: Path,
 ) -> dict[str, Any]:
     result["finishedAt"] = _utc_now()
+    for issue in result["issues"]:
+        if isinstance(issue, dict):
+            issue.setdefault("id", _issue_identity(issue))
     has_errors = any(
         issue.get("severity") == "error" for issue in result["issues"]
     ) or result.get("omittedErrorCount", 0) > 0
@@ -1414,6 +1563,9 @@ def _finish(
         "status": result["status"],
         "visualReviewRequired": True,
     }
+    for key in ("colors", "deliverables", "physicalParts"):
+        if result.get(key):
+            compact[key] = result[key]
     return compact
 
 
@@ -1785,6 +1937,7 @@ def compile_cad(
             message="validated build report did not expose artifacts and parts",
         )
         return _finish(result, result_path=result_path, log_path=log_path)
+    result.update(_report_agent_facts(report))
     profile_path = _resolve_reference(report_inputs["profile"], report_dir, "profile")
 
     # Interface and assembly evidence is the cheapest high-value multipart gate.
@@ -2216,7 +2369,14 @@ def main(argv: list[str] | None = None) -> int:
             "status": "failed",
             "visualReviewRequired": True,
         }
-    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    print(
+        json.dumps(
+            _agent_summary(result),
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    )
     return 0 if result.get("pass") is True else 1
 
 
