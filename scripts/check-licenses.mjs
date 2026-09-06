@@ -24,6 +24,7 @@ const requiredFiles = [
   'ibm-plex-sans.txt',
   'jetbrains-mono.txt',
   'lib3mf.txt',
+  'networkx.txt',
   'npm-production-licenses.json',
   'opencascade-exception.txt',
   'opencascade-lgpl-2.1.txt',

@@ -2,6 +2,7 @@
 build123d==0.11.1
 lib3mf==2.5.0
 manifold3d==3.5.2
+networkx==3.4.2
 numpy==2.2.6
 pillow==12.3.0
 rtree==1.4.1
