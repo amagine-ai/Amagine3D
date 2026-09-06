@@ -55,6 +55,7 @@ import {
   completeChatTurn,
   startChatStep,
 } from '../lib/chat-turn';
+import { chatStepLabel } from '../lib/chat-step-label';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import {
   ACCEPTED_IMAGE_TYPES,
@@ -66,6 +67,7 @@ import {
   type ArtifactSummary,
   type ArtifactWorkspace,
   type ChatMessage,
+  type LocalizedText,
   type ChatTurn,
   type HealthResponse,
   type ParameterModel,
@@ -153,9 +155,10 @@ export function CadWorkbench({
           message.role === 'assistant' && message.finishedAt === undefined,
       );
       if (!activeTurn || activeTurn.role !== 'assistant') return '';
+      const activeStep = activeTurn.steps.at(-1);
       return (
-        activeTurn.steps.at(-1)?.label ??
-        text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent')
+        (activeStep ? chatStepLabel(activeStep, language) : undefined) ??
+        text('Starting A3D', '正在启动 A3D')
       );
     }, [language, messages]);
     const sessionTitle = (session: SessionSummary | undefined) =>
@@ -215,12 +218,14 @@ export function CadWorkbench({
       message: string,
       stage: string,
       level: RuntimeEntry['level'] = 'info',
+      localizedMessage?: LocalizedText,
     ) {
       setRuntimeEntries((current) => [
         ...current.slice(-99),
         {
           id: crypto.randomUUID(),
           level,
+          localizedMessage,
           message,
           occurredAt: Date.now(),
           stage,
@@ -564,10 +569,7 @@ export function CadWorkbench({
       if (healthError) return text('Service unavailable', '服务未连接');
       if (!health) return text('Checking runtime…', '正在检查运行环境…');
       if (!health.runtimeReady) {
-        return text(
-          'Amagine3D Agent unavailable',
-          'Amagine3D Agent 未就绪',
-        );
+        return text('A3D unavailable', 'A3D 未就绪');
       }
       if (!health.python.ready) return text('Python unavailable', 'Python 未就绪');
       if (!health.configured) return text('API key required', '等待配置密钥');
@@ -581,7 +583,12 @@ export function CadWorkbench({
     ) {
       if (event.type === 'step') {
         updateDraftTurn(draftId, (turn) => startChatStep(turn, event.step));
-        addRuntimeEntry(event.step.label, event.step.stage);
+        addRuntimeEntry(
+          chatStepLabel(event.step, language),
+          event.step.stage,
+          'info',
+          event.step.localizedLabel,
+        );
         return;
       }
       if (event.type === 'step_delta') {
@@ -732,6 +739,7 @@ export function CadWorkbench({
         text: messageText,
       };
       const draftId = crypto.randomUUID();
+      const startedAt = Date.now();
       const controller = new AbortController();
       const requestSessionId =
         sessionId === BUNDLED_POMODORO_SESSION_ID
@@ -747,6 +755,7 @@ export function CadWorkbench({
           id: draftId,
           replyText: '',
           role: 'assistant',
+          startedAt,
           steps: [],
         },
       ]);
@@ -754,7 +763,7 @@ export function CadWorkbench({
       setPrompt('');
       setRunning(true);
       addRuntimeEntry(
-        text('Starting Amagine3D Agent', '正在启动 Amagine3D Agent'),
+        text('Starting A3D', '正在启动 A3D'),
         'start',
       );
 

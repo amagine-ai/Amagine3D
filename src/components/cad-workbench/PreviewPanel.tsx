@@ -169,7 +169,9 @@ export function PreviewPanel({
                   <li data-level={entry.level} key={entry.id}>
                     <time>{timeFormatter.format(entry.occurredAt)}</time>
                     <span>{entry.stage}</span>
-                    <p>{entry.message}</p>
+                    <p>
+                      {entry.localizedMessage?.[language] ?? entry.message}
+                    </p>
                   </li>
                 ))}
               </ol>
@@ -177,8 +179,8 @@ export function PreviewPanel({
             <div className={activityStyles.platformNotices}>
               <p>
                 {text(
-                  'Agent sessions and generated files are stored in repository folders.',
-                  'Agent 会话与生成文件均保存在仓库目录中。',
+                  'A3D sessions and generated files are stored in repository folders.',
+                  'A3D 会话与生成文件均保存在仓库目录中。',
                 )}
               </p>
             </div>

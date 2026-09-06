@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 import styles from './ChatPanel.module.css';
 import composerStyles from './Composer.module.css';
 import { EmptyState } from '../ui/EmptyState';
+import { chatStepLabel } from '../../lib/chat-step-label';
 import {
   ACCEPTED_IMAGE_TYPES,
   type AssistantChatMessage,
@@ -90,50 +91,54 @@ function AssistantTurn({
   const finishedAt = message.finishedAt;
   const finished = finishedAt !== undefined;
   const [traceOpen, setTraceOpen] = useState(!finished);
+  const [now, setNow] = useState(() => Date.now());
   const terminalStatus = getTerminalStatus(message);
   const statusLabel = getStatusLabel(terminalStatus, language);
-  const startedAt = message.steps[0]?.occurredAt;
-  const elapsedSeconds =
-    finishedAt !== undefined && startedAt !== undefined
-      ? Math.max(0, Math.round((finishedAt - startedAt) / 1_000))
-      : undefined;
+  const startedAt = message.startedAt ?? message.steps[0]?.occurredAt ?? now;
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor(((finishedAt ?? now) - startedAt) / 1_000),
+  );
 
   useEffect(() => {
-    if (finishedAt !== undefined) setTraceOpen(false);
+    if (finishedAt !== undefined) {
+      setTraceOpen(false);
+      return;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
   }, [finishedAt]);
 
   return (
     <>
-      {message.steps.length > 0 ? (
-        <details
-          aria-busy={!finished}
-          className={styles.chatTrace}
-          data-status={finished ? terminalStatus : 'running'}
-          onToggle={(event) => setTraceOpen(event.currentTarget.open)}
-          open={traceOpen}
-        >
-          <summary className={styles.chatTraceSummary}>
-            {finished ? (
-              <span aria-hidden="true" className={styles.chatTraceMarker}>
-                {getStatusMarker(terminalStatus)}
-              </span>
-            ) : (
-              <LoadingSpinner />
-            )}
-            <span>{finished ? statusLabel : text('In progress', '进行中')}</span>
-            {elapsedSeconds !== undefined ? (
-              <>
-                <span aria-hidden="true" className={styles.chatTraceSeparator}>
-                  ·
-                </span>
-                <time dateTime={`PT${elapsedSeconds}S`}>
-                  {text('Elapsed ', '用时 ')}
-                  {formatElapsed(elapsedSeconds, language)}
-                </time>
-              </>
-            ) : null}
-          </summary>
+      <details
+        aria-busy={!finished}
+        className={styles.chatTrace}
+        data-status={finished ? terminalStatus : 'running'}
+        onToggle={(event) => setTraceOpen(event.currentTarget.open)}
+        open={traceOpen}
+      >
+        <summary className={styles.chatTraceSummary}>
+          {finished ? (
+            <span aria-hidden="true" className={styles.chatTraceMarker}>
+              {getStatusMarker(terminalStatus)}
+            </span>
+          ) : (
+            <LoadingSpinner />
+          )}
+          <span>{finished ? statusLabel : text('In progress', '进行中')}</span>
+          <span aria-hidden="true" className={styles.chatTraceSeparator}>
+            ·
+          </span>
+          <time dateTime={`PT${elapsedSeconds}S`}>
+            {finished
+              ? text('Elapsed ', '用时 ')
+              : text('Elapsed ', '已用时 ')}
+            {formatElapsed(elapsedSeconds, language)}
+          </time>
+        </summary>
 
+        {message.steps.length > 0 ? (
           <ol className={styles.chatSteps}>
             {message.steps.map((step) => (
               <li data-status={step.status} key={step.id}>
@@ -144,7 +149,7 @@ function AssistantTurn({
                       {getStatusLabel(step.status, language)}
                       {text(': ', '：')}
                     </span>
-                    {step.label}
+                    {chatStepLabel(step, language)}
                   </span>
                 </div>
                 {step.progressText ? (
@@ -157,13 +162,8 @@ function AssistantTurn({
               </li>
             ))}
           </ol>
-        </details>
-      ) : !finished && !message.replyText ? (
-        <div className={styles.conversationActivity} role="status">
-          <LoadingSpinner />
-          <span>{text('Starting Amagine3D Agent…', '正在启动 Amagine3D Agent…')}</span>
-        </div>
-      ) : null}
+        ) : null}
+      </details>
 
       {message.replyText ? (
         <div className={styles.markdownText}>
@@ -236,7 +236,7 @@ export function ChatPanel({
             {messages.map((message) => (
               <li data-role={message.role} key={message.id}>
                 <span className={styles.messageRole}>
-                  {message.role === 'user' ? text('You', '你') : 'Amagine'}
+                  {message.role === 'user' ? text('You', '你') : 'A3D'}
                 </span>
                 <div className={styles.messageBubble}>
                   {message.role === 'user' ? (
@@ -340,12 +340,34 @@ export function ChatPanel({
                   <span aria-hidden="true">▧</span>
                 </label>
                 <button
+                  aria-disabled="true"
+                  aria-label={text(
+                    'Runtime: Codex. This is currently the only available option.',
+                    '运行时：Codex。当前仅支持此选项。',
+                  )}
+                  className={`${composerStyles.composerTool} ${composerStyles.runtimeSelector}`}
+                  data-tooltip={text(
+                    'Runtime · Codex (only option)',
+                    '运行时 · Codex（当前唯一选项）',
+                  )}
+                  type="button"
+                >
+                  <ToolbarIcon name="runtime" />
+                  <span>Codex</span>
+                  <span
+                    aria-hidden="true"
+                    className={composerStyles.runtimeSelectorChevron}
+                  >
+                    ⌄
+                  </span>
+                </button>
+                <button
                   aria-label={
                     webSearchConfigured
                       ? text('Toggle web references', '切换联网参考')
                       : text(
-                          'Configure TAVILY_API_KEY to use web references',
-                          '配置 TAVILY_API_KEY 后可使用联网参考',
+                          'A3D web search is unavailable',
+                          'A3D 联网搜索不可用',
                         )
                   }
                   aria-pressed={webSearchEnabled}
@@ -354,12 +376,12 @@ export function ChatPanel({
                   data-tooltip={
                     webSearchConfigured
                       ? text(
-                          'Require web references while enabled',
-                          '开启时每轮强制使用联网参考',
+                          'Allow A3D web search for this turn',
+                          '本轮允许 A3D 联网搜索',
                         )
                       : text(
-                          'Tavily API key is not configured',
-                          '尚未配置 Tavily API 密钥',
+                          'A3D web search is unavailable',
+                          'A3D 联网搜索不可用',
                         )
                   }
                   disabled={

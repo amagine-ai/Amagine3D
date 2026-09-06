@@ -115,6 +115,7 @@
   position: relative;
 }
 
+.runtimeSelector,
 .webSearchToggle {
   display: inline-flex;
   width: auto;
@@ -125,6 +126,19 @@
   font-weight: 600;
 }
 
+.runtimeSelector {
+  cursor: default;
+  box-shadow: inset 0 0 0 var(--rule-thin) var(--color-rule);
+}
+
+.runtimeSelectorChevron {
+  margin-inline-start: -0.0625rem;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.runtimeSelector span,
 .webSearchToggle span {
   white-space: nowrap;
 }
@@ -201,7 +215,7 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .composerTool:not(:disabled):hover {
+  .composerTool:not(:disabled):not([aria-disabled='true']):hover {
     background: var(--color-fill);
     color: var(--color-ink);
   }

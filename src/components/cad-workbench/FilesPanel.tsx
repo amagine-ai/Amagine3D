@@ -120,8 +120,8 @@ export function FilesPanel({
         {visibleArtifacts.length === 0 ? (
           <p className={styles.fileEmpty}>
             {text(
-              'Models and PNG previews appear after the Agent saves them.',
-              'Agent 保存模型或 PNG 预览后会显示在这里。',
+              'Models and PNG previews appear after A3D saves them.',
+              'A3D 保存模型或 PNG 预览后会显示在这里。',
             )}
           </p>
         ) : (

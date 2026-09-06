@@ -178,7 +178,7 @@ export async function streamAgent({
   const dispatch = (line: string) => {
     const event = JSON.parse(line) as AgentEvent;
     if (event.type === 'complete' && !event.content.trim()) {
-      throw new Error('Amagine3D Agent 未返回最终回复，本轮不能标记为完成。');
+      throw new Error('A3D 未返回最终回复，本轮不能标记为完成。');
     }
     if (event.type === 'complete') terminalReceived = true;
     if (event.type === 'error') terminalReceived = true;
@@ -200,6 +200,6 @@ export async function streamAgent({
 
   if (buffered.trim()) dispatch(buffered);
   if (!terminalReceived) {
-    throw new Error('Amagine3D Agent 响应意外中断，本轮未完成。');
+    throw new Error('A3D 响应意外中断，本轮未完成。');
   }
 }

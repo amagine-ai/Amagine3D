@@ -15,7 +15,7 @@ const copy = {
     licenses: 'Licenses',
     openStorage: 'Open storage panel',
     storage: 'Storage',
-    title: 'AI CAD workspace',
+    title: 'Smart Hardware Enclosure 3D Design Studio',
   },
   zh: {
     chooseLanguage: '选择语言',
