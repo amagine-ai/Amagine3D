@@ -33,7 +33,7 @@ from tests.python.intent_fixture import (  # noqa: E402
 
 
 def _canonical_part(report: dict, output: Path, part_id: str) -> trimesh.Trimesh:
-    mesh = trimesh.load(output / f"{part_id}.stl", force="mesh")
+    mesh = trimesh.load(report["artifacts"][f"stl:{part_id}"]["path"], force="mesh")
     transform = np.asarray(
         report["coordinateFrames"]["part-print"]["partTransforms"][part_id],
         dtype=float,
@@ -515,6 +515,75 @@ def _write_scene(root: Path, scene: dict) -> Path:
 
 
 class HybridCompileTests(unittest.TestCase):
+    def test_3mf_float32_collapsed_faces_are_removed_from_actual_archive(self):
+        from color.export_3mf import load_color_archive_mesh
+        from tests.python.test_mesh_normalization import _subdivided_box
+
+        mesh = _subdivided_box()
+        original_vertices = mesh.vertices.copy()
+        original_faces = mesh.faces.copy()
+        self.assertTrue(mesh.is_volume)
+        self.assertEqual(len(mesh.faces), 14)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            path = Path(directory) / "body.3mf"
+            artifact = hybrid_compile._write_material_3mf(
+                [("body", mesh, "shell")], {}, {"shell": {"color": "#65789B"}}, path,
+                package_mode="co_print_body",
+            )
+            placed, archive = load_color_archive_mesh(str(path))
+            self.assertTrue(artifact["verified"])
+            self.assertTrue(archive["lib3mf"]["verified"])
+            self.assertEqual(archive["lib3mf"]["mesh_objects"][0]["triangles"], 12)
+            self.assertEqual(len(placed.faces), 12)
+            self.assertTrue(np.any(trimesh.triangles.cross(placed.triangles) != 0, axis=1).all())
+            self.assertTrue(placed.is_watertight)
+            self.assertTrue(placed.is_volume)
+            np.testing.assert_allclose(placed.bounds, mesh.bounds, atol=0, rtol=0)
+            self.assertAlmostEqual(placed.volume, mesh.volume, places=9)
+            np.testing.assert_array_equal(mesh.vertices, original_vertices)
+            np.testing.assert_array_equal(mesh.faces, original_faces)
+
+    def test_3mf_quantization_cannot_erase_a_real_volume(self):
+        mesh = trimesh.creation.box(extents=[10.0, 10.0, 1e-7])
+        mesh.apply_translation([0, 0, 10.0])
+        self.assertTrue(mesh.is_volume)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            path = Path(directory) / "body.3mf"
+            path.write_bytes(b"previous valid archive")
+            with self.assertRaisesRegex(hybrid_compile.CompileError, "after 3MF float32 quantization"):
+                hybrid_compile._write_material_3mf(
+                    [("body", mesh, "shell")], {}, {"shell": {"color": "#65789B"}}, path,
+                    package_mode="co_print_body",
+                )
+            self.assertEqual(path.read_bytes(), b"previous valid archive")
+
+    def test_single_material_archive_preserves_its_declared_package_graph(self):
+        from color.export_3mf import load_color_archive_mesh
+
+        mesh = trimesh.creation.box(extents=[3.0, 4.0, 5.0])
+        materials = {"shell": {"color": "#65789B"}}
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            for mode, expected_kind, component_count in (
+                ("co_print_body", "components", 1),
+                ("separate_parts", "mesh", 0),
+            ):
+                with self.subTest(package_mode=mode):
+                    path = Path(directory) / f"{mode}.3mf"
+                    artifact = hybrid_compile._write_material_3mf(
+                        [("body", mesh, "shell")], {}, materials, path,
+                        package_mode=mode,
+                    )
+                    placed, archive = load_color_archive_mesh(str(path))
+                    self.assertTrue(artifact["verified"])
+                    self.assertTrue(archive["lib3mf"]["verified"])
+                    self.assertEqual(archive["package_mode"], mode)
+                    self.assertEqual(archive["build_item_count"], 1)
+                    self.assertEqual(archive["build_items"][0]["object_kind"], expected_kind)
+                    self.assertEqual(archive["component_object_count"], component_count)
+                    self.assertEqual(archive["object_count"], 1)
+                    self.assertEqual(archive["regions"][0]["color"], "#65789B")
+                    np.testing.assert_allclose(placed.triangles, mesh.triangles, atol=1e-6)
+
     def test_mesh_master_combines_bound_mesh_body_and_brep_cutter_without_step(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -591,6 +660,27 @@ class HybridCompileTests(unittest.TestCase):
                 "brep-tessellation/v1",
             )
             self.assertEqual(list(output.glob("*.step")), [])
+            # A single part has the model's name. Its local print pose must not
+            # be overwritten by the independently translated plate artifact.
+            part_stl = report["artifacts"]["stl:housing"]
+            plate_stl = report["artifacts"]["stl"]
+            self.assertNotEqual(part_stl["path"], plate_stl["path"])
+            for artifact in (part_stl, plate_stl):
+                path = Path(artifact["path"])
+                self.assertEqual(artifact["sha256"], sha256(path.read_bytes()).hexdigest())
+                mesh = trimesh.load(path, force="mesh")
+                self.assertTrue(mesh.is_watertight)
+                self.assertTrue(mesh.is_volume)
+            canonical = _canonical_part(report, output, "housing")
+            np.testing.assert_allclose(canonical.bounds, outer.bounds, atol=1e-5)
+            part_mesh = trimesh.load(part_stl["path"], force="mesh")
+            plate_mesh = trimesh.load(plate_stl["path"], force="mesh")
+            semantic_to_plate = np.asarray(report["coordinateFrames"]["plate-print"]["partTransforms"]["housing"])
+            expected_plate = canonical.copy()
+            expected_plate.apply_transform(semantic_to_plate)
+            np.testing.assert_allclose(plate_mesh.bounds, expected_plate.bounds, atol=1e-5)
+            manifest_audit = build_check.audit(output / "housing_report.json")
+            self.assertTrue(manifest_audit["pass"], manifest_audit)
 
     def test_compile_collects_all_independent_missed_cutters(self):
         with tempfile.TemporaryDirectory() as directory:

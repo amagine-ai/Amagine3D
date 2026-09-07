@@ -17,10 +17,13 @@ if str(SKILL) not in sys.path:
 
 from cpu_z_buffer import (  # noqa: E402
     BACKGROUND,
+    CAMERA_DIRECTIONS,
     CONTACT_VIEWS,
     SUPPORTED_VIEWS,
     MeshInput,
     RenderLimits,
+    _clip_to_viewport,
+    _rasterize_triangle,
     render_contact_sheet,
     render_view,
 )
@@ -47,6 +50,46 @@ def _foreground(image: np.ndarray) -> np.ndarray:
 
 
 class CpuZBufferRegressionTests(unittest.TestCase):
+    def test_isometric_shows_the_semantic_front(self) -> None:
+        self.assertLess(CAMERA_DIRECTIONS["isometric"][1], 0)
+        body = _box("body", (4.0, 2.0, 4.0), (0.0, 0.0, 0.0), (160, 160, 160))
+        screen = _box("screen", (2.0, 0.2, 2.0), (0.0, -1.1, 0.0), (230, 20, 20))
+        image = _array(render_view([body, screen], "isometric", 192))
+        red = (image[:, :, 0].astype(float) > image[:, :, 1] * 3.0)
+        self.assertGreater(int(red.sum()), 300)
+
+    def test_authored_normals_shade_within_one_triangle(self) -> None:
+        mesh = trimesh.Trimesh(
+            vertices=[[-1, 0, -1], [1, 0, -1], [0, 0, 1]],
+            faces=[[0, 1, 2]],
+            vertex_normals=[[0, -1, 0], [0.8, -0.6, 0], [0, -0.6, 0.8]],
+            process=False,
+        )
+        image = _array(render_view([MeshInput("smooth", mesh, (220, 220, 220))], "front", 128))
+        self.assertGreater(len(np.unique(image[_foreground(image)], axis=0)), 30)
+
+    def test_clipping_interpolates_normals_and_preserves_depth(self) -> None:
+        triangle = np.array([
+            [-40.0, 10.0, -1.0, 0.0, -1.0, 0.0],
+            [105.0, 20.0, 2.0, 0.8, -0.6, 0.0],
+            [30.0, 100.0, 0.4, 0.0, -0.6, 0.8],
+        ])
+        raw_depth = np.full((64, 64), -np.inf, dtype=np.float32)
+        raw_color = np.full((64, 64, 3), 255, dtype=np.uint8)
+        _rasterize_triangle(triangle, (220, 220, 220), raw_depth, raw_color, 1e-9)
+        polygon = _clip_to_viewport(triangle, 64, 64, 0.0, 1.0)
+        self.assertEqual(polygon.shape[1], 6)
+        depth = np.full_like(raw_depth, -np.inf)
+        color = np.full_like(raw_color, 255)
+        for index in range(1, len(polygon) - 1):
+            _rasterize_triangle(
+                polygon[[0, index, index + 1]], (220, 220, 220), depth, color, 1e-9
+            )
+        expected_mask = np.isfinite(raw_depth) & (raw_depth >= 0.0) & (raw_depth <= 1.0)
+        np.testing.assert_array_equal(np.isfinite(depth), expected_mask)
+        np.testing.assert_allclose(depth[expected_mask], raw_depth[expected_mask], atol=1e-6)
+        np.testing.assert_array_equal(color[expected_mask], raw_color[expected_mask])
+
     def test_all_supported_cameras_render_a_stable_region(self) -> None:
         cube = _box("cube", (4.0, 3.0, 2.0), (0.0, 0.0, 0.0), (120, 170, 210))
         coverages = {}

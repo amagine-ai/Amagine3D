@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -95,15 +95,19 @@ function fail(message) {
 function diagnose(args) {
   const [input, ...selectors] = args;
   if (!input) fail('a3d diagnose requires a compile-result JSON file.');
-  const root = realpathSync(process.cwd());
+  // cwd is already resolved by the OS. Resolving its absolute path again
+  // lstats ancestors that a session sandbox deliberately denies access to.
+  const root = process.cwd();
   let path;
   try {
-    path = realpathSync(resolve(root, input));
+    // Native realpath starts a relative lookup at cwd, without revisiting its
+    // parents, and still resolves symlinks before checking the file boundary.
+    path = realpathSync.native(relative(root, resolve(root, input)) || '.');
   } catch (error) {
     fail(`Cannot read compile result: ${error.message}`);
   }
   const fromRoot = relative(root, path);
-  if (fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
     fail('a3d diagnose only reads files inside the current session workspace.');
   }
   const filters = {};

@@ -71,6 +71,7 @@ from material_plan import (
     validate_material_sources,
 )
 from mesh_topology import MeshTopologyError, physical_body_count
+from mesh_normalization import MeshNormalizationError, float32_mesh, normalized_stl_bytes
 from scene_contract import SELF_TAPPING_RECIPE_KIND, validate as validate_scene
 from shape_consistency import compare_manifest, compare_meshes, load_artifact
 from self_tapping_geometry import (
@@ -1235,6 +1236,16 @@ def _mesh_record(mesh: trimesh.Trimesh, path: Path) -> dict[str, Any]:
     }
 
 
+def _write_print_stl(mesh: trimesh.Trimesh, path: Path) -> trimesh.Trimesh:
+    """Record the serialized print mesh, including STL coordinate quantization."""
+    try:
+        payload = normalized_stl_bytes(mesh, f"print artifact {path.name}")
+    except MeshNormalizationError as error:
+        raise CompileError(str(error)) from error
+    path.write_bytes(payload)
+    return trimesh.load(path, force="mesh")
+
+
 def _region_display_surfaces(
     body: trimesh.Trimesh,
     regions: list[dict[str, Any]],
@@ -1351,6 +1362,13 @@ def _append_3mf_mesh(
     mesh: trimesh.Trimesh,
     color_index: int,
 ) -> dict[str, Any]:
+    # lib3mf positions are float32. Clean only the faces that disappear at
+    # that precision before serializing, as for the corresponding STL. Nine
+    # significant digits below round-trip every quantized float32 coordinate.
+    try:
+        mesh = float32_mesh(mesh, f"3MF object {name!r}", format_name="3MF")
+    except MeshNormalizationError as error:
+        raise CompileError(str(error)) from error
     obj = ET.SubElement(
         resources,
         f"{{{CORE_NS}}}object",
@@ -1518,6 +1536,32 @@ def _write_material_3mf(
                     "scope": "whole-part",
                 }
             )
+            if package_mode == "co_print_body":
+                # The co-print contract always builds one components object,
+                # including a single material body with only one child mesh.
+                parent_id = next_object_id
+                next_object_id += 1
+                object_ids[-1] = str(parent_id)
+                parent = ET.SubElement(
+                    resources,
+                    f"{{{CORE_NS}}}object",
+                    {"id": str(parent_id), "name": part_id, "type": "model"},
+                )
+                components = ET.SubElement(parent, f"{{{CORE_NS}}}components")
+                ET.SubElement(
+                    components,
+                    f"{{{CORE_NS}}}component",
+                    {"objectid": str(object_id)},
+                )
+                object_records.append(
+                    {
+                        "componentObjectIds": [object_id],
+                        "id": parent_id,
+                        "name": part_id,
+                        "part": part_id,
+                        "scope": "part-components",
+                    }
+                )
             continue
 
         child_ids: list[int] = []
@@ -2222,9 +2266,8 @@ def compile_scene(
     # pass, so a rejected joint cannot leave apparently usable part files.
     for part_id, body, appearance in compiled:
         part = parts[part_id]
-        part_file = output_dir / f"{part_id}.stl"
-        print_mesh = part_print_meshes[part_id]
-        print_mesh.export(part_file, file_type="stl")
+        part_file = output_dir / f"{model_name}-{part_id}.stl"
+        print_mesh = _write_print_stl(part_print_meshes[part_id], part_file)
         print_record = _mesh_record(print_mesh, part_file)
         part_records[part_id] = {
             **print_record,
@@ -2286,7 +2329,7 @@ def compile_scene(
 
     combined = trimesh.util.concatenate(list(plate_print_meshes.values()))
     combined_file = output_dir / f"{model_name}.stl"
-    combined.export(combined_file, file_type="stl")
+    combined = _write_print_stl(combined, combined_file)
     physical_glb = output_dir / f"{model_name}-display.glb"
     glb_report = _write_physical_glb(
         compiled,

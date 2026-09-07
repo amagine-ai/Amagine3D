@@ -8,6 +8,7 @@ GPU, OpenGL, or multiprocessing dependency.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import cached_property
 import math
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import trimesh
 
+from display_normals import shading_normals
 
 HARD_MAX_RESOLUTION = 2048
 HARD_MAX_TRIANGLES = 2_000_000
@@ -55,7 +57,7 @@ def _camera_direction(elevation: float, azimuth: float) -> tuple[float, float, f
 
 
 CAMERA_DIRECTIONS = {
-    "isometric": _camera_direction(28.0, 42.0),
+    "isometric": _camera_direction(28.0, -42.0),
     "front": _camera_direction(0.0, -90.0),
     "side": _camera_direction(0.0, 0.0),
     "top": (0.0, 0.0, 1.0),
@@ -98,6 +100,20 @@ class MeshInput:
             raise ValueError(f"non-finite mesh vertices in {self.name}")
         if len(self.color) != 3 or any(value < 0 or value > 255 for value in self.color):
             raise ValueError(f"invalid RGB color for {self.name}: {self.color!r}")
+
+    @cached_property
+    def _normal_data(self) -> tuple[np.ndarray, np.ndarray]:
+        # Defer this bounded mesh allocation until after render request limits
+        # have been checked, and reuse it across the five sequential views.
+        return shading_normals(self.mesh, use_existing=True)
+
+    @property
+    def normal_vectors(self) -> np.ndarray:
+        return self._normal_data[0]
+
+    @property
+    def normal_faces(self) -> np.ndarray:
+        return self._normal_data[1]
 
 
 @dataclass
@@ -227,8 +243,7 @@ def _camera_basis(view: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return right, up, eye
 
 
-def _face_colors(mesh: trimesh.Trimesh, base_color: tuple[int, int, int]) -> np.ndarray:
-    normals = np.asarray(mesh.face_normals, dtype=np.float64)
+def _lit_colors(normals: np.ndarray, base_color: tuple[int, int, int]) -> np.ndarray:
     facing_light = np.einsum("ij,j->i", normals, LIGHT)
     intensity = 0.42 + 0.58 * np.clip(facing_light, 0.0, 1.0)
     base = np.asarray(base_color, dtype=np.float64)
@@ -277,7 +292,9 @@ def _clip_polygon_axis(
             output.append(current)
         previous = current
         previous_inside = current_inside
-    return np.asarray(output, dtype=np.float64).reshape((-1, 3))
+    # Interpolate every attribute (including shading normals) at each clip
+    # intersection, not just xyz. Normals are renormalized at the shaded pixel.
+    return np.asarray(output, dtype=np.float64).reshape((-1, polygon.shape[1]))
 
 
 def _clip_to_viewport(
@@ -304,7 +321,7 @@ def _clip_to_viewport(
 
 def _rasterize_triangle(
     triangle: np.ndarray,
-    face_color: np.ndarray,
+    base_color: tuple[int, int, int],
     depth_buffer: np.ndarray,
     color_buffer: np.ndarray,
     depth_epsilon: float,
@@ -334,6 +351,12 @@ def _rasterize_triangle(
     if min_x > max_x or min_y > max_y:
         return False
 
+    corner_normals = points[:, 3:6]
+    flat_color = (
+        _lit_colors(corner_normals[:1], base_color)[0]
+        if np.allclose(corner_normals, corner_normals[:1], atol=1e-12, rtol=0.0)
+        else None
+    )
     xs = np.arange(min_x, max_x + 1, dtype=np.float64)[None, :] + 0.5
     edge_tolerance = max(area * 1e-12, 1e-9)
     wrote_pixel = False
@@ -367,7 +390,19 @@ def _rasterize_triangle(
             continue
         current_depth[nearer] = candidate_depth[nearer]
         color_slice = color_buffer[row_start:row_stop, min_x : max_x + 1]
-        color_slice[nearer] = face_color
+        if flat_color is not None:
+            color_slice[nearer] = flat_color
+        else:
+            # Only shade visible pixels in the existing 32-row tile. No normal
+            # framebuffer or full-image temporary is needed.
+            normals = (
+                weight0[nearer, None] * corner_normals[0]
+                + weight1[nearer, None] * corner_normals[1]
+                + weight2[nearer, None] * corner_normals[2]
+            ) / area
+            lengths = np.linalg.norm(normals, axis=1)
+            normals /= np.maximum(lengths[:, None], 1e-12)
+            color_slice[nearer] = _lit_colors(normals, base_color)
         wrote_pixel = True
     return wrote_pixel
 
@@ -434,7 +469,7 @@ def _render_internal(
         if not front_mask.any():
             continue
         faces = faces[front_mask]
-        colors = _face_colors(item.mesh, item.color)[front_mask]
+        normal_faces = item.normal_faces[front_mask]
         camera_triangles = vertices[faces]
 
         left = screen_center[0] - half_x
@@ -453,9 +488,9 @@ def _render_internal(
         if outside.all():
             continue
         camera_triangles = camera_triangles[~outside]
-        colors = colors[~outside]
+        normal_faces = normal_faces[~outside]
 
-        screen_triangles = np.empty_like(camera_triangles)
+        screen_triangles = np.empty((*camera_triangles.shape[:2], 6), dtype=np.float64)
         screen_triangles[:, :, 0] = (
             (camera_triangles[:, :, 0] - screen_center[0]) * scale + width / 2.0
         )
@@ -463,6 +498,7 @@ def _render_internal(
             (screen_center[1] - camera_triangles[:, :, 1]) * scale + height / 2.0
         )
         screen_triangles[:, :, 2] = camera_triangles[:, :, 2]
+        screen_triangles[:, :, 3:6] = item.normal_vectors[normal_faces]
         offscreen = (
             np.all(screen_triangles[:, :, 0] < 0.0, axis=1)
             | np.all(screen_triangles[:, :, 0] > width, axis=1)
@@ -473,7 +509,6 @@ def _render_internal(
         if offscreen.all():
             continue
         screen_triangles = screen_triangles[~offscreen]
-        colors = colors[~offscreen]
 
         partially_clipped = (
             np.any(screen_triangles[:, :, 0] < 0.0, axis=1)
@@ -485,8 +520,8 @@ def _render_internal(
         )
         frustum_clipped += int(partially_clipped.sum())
 
-        for triangle, color, clipped in zip(
-            screen_triangles, colors, partially_clipped
+        for triangle, clipped in zip(
+            screen_triangles, partially_clipped
         ):
             polygon = (
                 _clip_to_viewport(
@@ -505,7 +540,7 @@ def _render_internal(
                 )
                 wrote_triangle |= _rasterize_triangle(
                     clipped_triangle,
-                    color,
+                    item.color,
                     depth_buffer,
                     color_buffer,
                     depth_epsilon,

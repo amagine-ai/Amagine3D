@@ -94,6 +94,9 @@ Choose one geometry master, then add applicable assembly, control, and
 manufactured-color concerns. Route by meaning, not keywords.
 
 - Unclear representation choice from the available evidence: `a3d guide strategy`.
+- Smoothly varying freeform shell sections with a mesh master:
+  `references/surface-shell.md` and its small public authoring example; use its
+  construction only when it fits the intended silhouette and function.
 - Pressable or sliding mechanism: `a3d guide pressable-control`.
 - Separately manufactured or assembled parts: `a3d guide multipart`; additionally
   read `references/multipart-connections.md` for direct fastening into printed

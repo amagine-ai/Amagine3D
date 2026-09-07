@@ -30,7 +30,11 @@ from display_glb import (
     export_display_glb,
     load_display_components,
 )
-from geometry_binding import GeometryBindingError, shape_to_mesh
+from geometry_binding import (
+    GeometryBindingError,
+    export_shape_stl,
+    shape_to_mesh,
+)
 
 from build123d import (
     Color,
@@ -40,7 +44,6 @@ from build123d import (
     Unit,
     chamfer,
     export_step,
-    export_stl,
     fillet,
 )
 
@@ -395,7 +398,9 @@ def _bed_face_for_rotation(name: str) -> str | None:
 def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
     with tempfile.TemporaryDirectory() as directory:
         mesh_path = Path(directory) / "orientation.stl"
-        export_stl(shape, str(mesh_path), tolerance=0.05, angular_tolerance=0.2)
+        export_shape_stl(
+            shape, mesh_path, linear_tolerance_mm=0.05, angular_tolerance_rad=0.2
+        )
         mesh = trimesh.load(mesh_path, force="mesh", process=False)
     if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
         return {
@@ -952,7 +957,7 @@ def export_regions(
     internal_region_meshes = {"print": {}, "semantic": {}}
     for region_name, (shape, color) in print_regions.items():
         path = internal_region_dir / f"{name}-region-{region_name}.stl"
-        export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        export_shape_stl(shape, path)
         internal_region_meshes["print"][region_name] = {
             "path": str(path.resolve()),
             "sha256": _digest(path),
@@ -969,7 +974,7 @@ def export_regions(
         entries.append((str(path), color, region_name))
     for region_name, (shape, _) in normalized.items():
         path = semantic_region_dir / f"{name}-region-{region_name}.stl"
-        export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        export_shape_stl(shape, path)
         internal_region_meshes["semantic"][region_name] = {
             "path": str(path.resolve()),
             "sha256": _digest(path),
@@ -985,11 +990,11 @@ def export_regions(
         )
 
     manufacturing_path = output / f"{name}.stl"
-    export_stl(
+    export_shape_stl(
         print_body,
         str(manufacturing_path),
-        tolerance=0.01,
-        angular_tolerance=0.1,
+        linear_tolerance_mm=0.01,
+        angular_tolerance_rad=0.1,
     )
     artifacts[f"stl:{name}"] = {
         "path": str(manufacturing_path.resolve()),

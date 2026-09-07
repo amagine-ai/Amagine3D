@@ -14,9 +14,13 @@ from pathlib import Path
 import tempfile
 from typing import Any
 
-import numpy as np
 import trimesh
 
+from mesh_normalization import (
+    MeshNormalizationError,
+    canonical_mesh,
+    normalized_stl_bytes,
+)
 from scene_contract import (
     BREP_GEOMETRY_RECIPE_KIND,
     MESH_GEOMETRY_RECIPE_KIND,
@@ -42,24 +46,10 @@ def _positive_finite(value: float, name: str) -> float:
 
 
 def _canonical_mesh(mesh: Any, context: str) -> trimesh.Trimesh:
-    if not isinstance(mesh, trimesh.Trimesh):
-        raise GeometryBindingError(f"{context} must be a trimesh.Trimesh")
-    result = mesh.copy()
-    if result.is_empty or len(result.faces) == 0:
-        raise GeometryBindingError(f"{context} contains no triangle faces")
-    if not np.isfinite(result.vertices).all():
-        raise GeometryBindingError(f"{context} contains non-finite vertices")
-    result.merge_vertices()
-    result.remove_unreferenced_vertices()
-    if result.volume < 0 and result.is_watertight:
-        result.invert()
-    if not result.is_watertight:
-        raise GeometryBindingError(f"{context} must be watertight")
-    if not result.is_winding_consistent:
-        raise GeometryBindingError(f"{context} winding is inconsistent")
-    if not result.is_volume or result.volume <= 0:
-        raise GeometryBindingError(f"{context} must be a positive volume")
-    return result
+    try:
+        return canonical_mesh(mesh, context)
+    except MeshNormalizationError as error:
+        raise GeometryBindingError(str(error)) from error
 
 
 def shape_to_mesh(
@@ -103,9 +93,10 @@ def _write_stl(mesh: trimesh.Trimesh, path: Path) -> str:
     if path.suffix.lower() != ".stl":
         raise GeometryBindingError("bound geometry path must end in .stl")
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = mesh.export(file_type="stl")
-    if not isinstance(payload, bytes):
-        raise GeometryBindingError("STL exporter did not return binary data")
+    try:
+        payload = normalized_stl_bytes(mesh, f"bound geometry {path.name}")
+    except MeshNormalizationError as error:
+        raise GeometryBindingError(str(error)) from error
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -127,6 +118,25 @@ def _write_stl(mesh: trimesh.Trimesh, path: Path) -> str:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return sha256(payload).hexdigest()
+
+
+def export_shape_stl(
+    shape: Any,
+    path: str | Path,
+    *,
+    linear_tolerance_mm: float = 0.01,
+    angular_tolerance_rad: float = 0.1,
+) -> str:
+    """Atomically export a BRep as a normalized, validated binary STL."""
+
+    destination = Path(path).expanduser().resolve()
+    mesh = shape_to_mesh(
+        shape,
+        f"STL geometry {destination.name}",
+        linear_tolerance_mm=linear_tolerance_mm,
+        angular_tolerance_rad=angular_tolerance_rad,
+    )
+    return _write_stl(mesh, destination)
 
 
 def _feature_node(

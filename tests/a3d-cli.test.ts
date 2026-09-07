@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -68,6 +68,84 @@ test('selects one persisted compile diagnostic without replaying the full result
     assert.equal(selected.schema, 'a3d-diagnostics/v1');
     assert.equal(selected.count, 1);
     assert.equal(selected.issues[0].code, 'QA.THIN_WALL');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('diagnose rejects sibling files and symlinks escaping the current workspace', async () => {
+  const root = await mkdtemp(join(process.cwd(), '.a3d-boundary-test-'));
+  const current = join(root, 'current');
+  const sibling = join(root, 'sibling');
+  const document = JSON.stringify({
+    issues: [{ code: 'QA.EXAMPLE', id: 'example', severity: 'error' }],
+    schema: 'evidence-cad-compile-result/v1',
+  });
+  try {
+    await Promise.all([mkdir(current), mkdir(sibling)]);
+    const outside = join(sibling, 'result.json');
+    await writeFile(outside, document);
+    await writeFile(join(current, '..result.json'), document);
+    await symlink(outside, join(current, 'outside.json'));
+    await symlink(sibling, join(current, 'outside-dir'), 'dir');
+
+    for (const input of [outside, '../sibling/result.json', 'outside.json', 'outside-dir/result.json']) {
+      await assert.rejects(
+        execFileAsync(process.execPath, [A3D.pathname, 'diagnose', input], { cwd: current }),
+        (error: Error & { code?: number; stderr?: string }) => {
+          assert.equal(error.code, 2);
+          assert.match(error.stderr ?? '', /only reads files inside the current session workspace/u);
+          return true;
+        },
+      );
+    }
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      A3D.pathname, 'diagnose', '..result.json',
+    ], { cwd: current });
+    assert.equal(JSON.parse(stdout).count, 1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('diagnose works when the sandbox denies metadata access to the sessions parent', {
+  skip: process.platform !== 'darwin',
+}, async () => {
+  const root = await mkdtemp(join(process.cwd(), '.a3d-sandbox-test-'));
+  const sessions = join(root, 'sessions');
+  const current = join(sessions, 'current');
+  const profile = join(root, 'sandbox.sb');
+  try {
+    await mkdir(current, { recursive: true });
+    const canonicalSessions = await realpath(sessions);
+    await writeFile(profile, [
+      '(version 1)',
+      '(allow default)',
+      `(deny file-read-metadata (literal ${JSON.stringify(canonicalSessions)}))`,
+    ].join('\n'));
+    const result = join(current, 'result.json');
+    await writeFile(result, JSON.stringify({
+      issues: [{ code: 'QA.EXAMPLE', id: 'example', severity: 'error' }],
+      schema: 'evidence-cad-compile-result/v1',
+    }));
+    await symlink('result.json', join(current, 'alias.json'));
+
+    // Verify this reproduces the original failure, rather than silently
+    // running a permissive sandbox on a different macOS configuration.
+    await assert.rejects(execFileAsync('/usr/bin/sandbox-exec', [
+      '-f', profile, process.execPath, '-e',
+      "require('node:fs').realpathSync(process.cwd())",
+    ], { cwd: current }), /EPERM/u);
+
+    for (const input of ['result.json', result, 'alias.json']) {
+      const { stdout } = await execFileAsync('/usr/bin/sandbox-exec', [
+        '-f', profile, process.execPath, A3D.pathname, 'diagnose', input,
+      ], { cwd: current });
+      const selected = JSON.parse(stdout);
+      assert.equal(selected.count, 1);
+      assert.equal(selected.fullResult, await realpath(result));
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }

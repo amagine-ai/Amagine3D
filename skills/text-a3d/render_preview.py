@@ -76,7 +76,10 @@ def _visual_color(
 def _render_inputs(source: Path, fallback: tuple[int, int, int]) -> list[MeshInput]:
     """Load every transformed scene node instead of flattening material regions."""
 
-    loaded = trimesh.load(source, force="scene", process=True)
+    # Processing can weld the coincident vertices that carry different normals
+    # at a GLB hard edge. Keep its authored display topology and NORMAL data.
+    authored_normals = source.suffix.lower() in {".glb", ".gltf"}
+    loaded = trimesh.load(source, force="scene", process=not authored_normals)
     if not isinstance(loaded, trimesh.Scene):
         raise ValueError(f"no renderable scene in {source}")
     preserve_material = source.suffix.lower() in {".3mf", ".glb", ".gltf"}
@@ -86,7 +89,7 @@ def _render_inputs(source: Path, fallback: tuple[int, int, int]) -> list[MeshInp
         geometry = loaded.geometry.get(geometry_name)
         if not isinstance(geometry, trimesh.Trimesh) or geometry.is_empty:
             continue
-        mesh = geometry.copy()
+        mesh = geometry.copy(include_cache=True)
         mesh.apply_transform(transform)
         if not np.isfinite(mesh.vertices).all():
             raise ValueError(f"non-finite mesh vertices in {source}:{node_name}")
@@ -104,6 +107,23 @@ def _render_inputs(source: Path, fallback: tuple[int, int, int]) -> list[MeshInp
         # one mesh without a populated scene graph.
         inputs.append(MeshInput(source.stem, load_mesh(source), fallback, source))
     return inputs
+
+
+def _surface_checks(meshes: list[MeshInput]) -> dict[str, bool]:
+    """Assess surface closure without treating shading seams as open geometry."""
+
+    watertight = True
+    winding_consistent = True
+    for item in meshes:
+        surface = item.mesh.copy(include_visual=False)
+        surface.merge_vertices(merge_norm=True, merge_tex=True)
+        watertight &= bool(surface.is_watertight)
+        winding_consistent &= bool(surface.is_winding_consistent)
+    return {
+        "finite_vertices": True,
+        "watertight": watertight,
+        "winding_consistent": winding_consistent,
+    }
 
 
 def main() -> int:
@@ -211,19 +231,14 @@ def main() -> int:
             _save_png(matched.image, matched_path)
             matched_stats = matched.stats
 
+        surface_checks = _surface_checks(inputs)
         _, traced_peak = tracemalloc.get_traced_memory()
         peak_buffer_bytes = max(
             contact.peak_buffer_bytes,
             matched_stats.buffer_bytes if matched_stats is not None else 0,
         )
         result = {
-            "checks": {
-                "finite_vertices": True,
-                "watertight": all(bool(item.mesh.is_watertight) for item in inputs),
-                "winding_consistent": all(
-                    bool(item.mesh.is_winding_consistent) for item in inputs
-                ),
-            },
+            "checks": surface_checks,
             "dimensions_mm": [round(float(value), 4) for value in dimensions],
             "meshes": [
                 {

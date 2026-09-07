@@ -13,6 +13,7 @@ import trimesh
 from trimesh.visual import TextureVisuals
 from trimesh.visual.material import PBRMaterial
 
+from display_normals import mesh_with_display_normals
 from shape_consistency import ConsistencyError, load_artifact
 
 
@@ -166,7 +167,7 @@ def export_display_glb(
             raise DisplayGlbError(
                 f"display GLB mesh for {node_name!r} has non-finite vertices"
             )
-        display = mesh.copy()
+        display = mesh_with_display_normals(mesh)
         normalized = appearance(
             visual_style["baseColor"],
             metallic=visual_style.get("metallic", 0.0),
@@ -181,7 +182,7 @@ def export_display_glb(
         )
         expected_colors[node_name] = normalized["baseColor"]
 
-    payload = scene.export(file_type="glb")
+    payload = scene.export(file_type="glb", include_normals=True)
     if not isinstance(payload, bytes) or payload[:4] != b"glTF":
         raise DisplayGlbError("display GLB exporter returned an invalid payload")
     destination.write_bytes(payload)
@@ -198,6 +199,16 @@ def export_display_glb(
     for node_name, expected_color in expected_colors.items():
         _, geometry_name = loaded.graph[node_name]
         geometry = loaded.geometry[geometry_name]
+        normals = geometry._cache.cache.get("vertex_normals")
+        if (
+            normals is None
+            or normals.shape != geometry.vertices.shape
+            or not np.isfinite(normals).all()
+            or not np.allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-5)
+        ):
+            raise DisplayGlbError(
+                f"display GLB node {node_name!r} has no valid unit normals after readback"
+            )
         material = getattr(geometry.visual, "material", None)
         raw_color = getattr(material, "baseColorFactor", None)
         if raw_color is None or len(raw_color) < 3:

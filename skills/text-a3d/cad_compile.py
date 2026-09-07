@@ -31,6 +31,7 @@ from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from capability_manifest import build_manifest as build_capability_manifest
+from build_manifest import file_binding_errors
 from freshness_check import stable_file_snapshot
 from intent_contract import validate as validate_intent
 from scene_contract import validate as validate_scene
@@ -49,6 +50,9 @@ MAX_LOG_TAIL_BYTES = 32_000
 DEFAULT_COMPILE_TIMEOUT_SECONDS = 5_400.0
 AGENT_ARTIFACT_KEYS = {
     "buildReport",
+    "diagnosticPreview",
+    "diagnosticReferencePreview",
+    "diagnosticRenderEvidence",
     "log",
     "preview",
     "referencePreview",
@@ -1539,6 +1543,9 @@ def _finish(
                 "buildAudit",
                 "buildReport",
                 "capabilities",
+                "diagnosticPreview",
+                "diagnosticReferencePreview",
+                "diagnosticRenderEvidence",
                 "freshnessAudit",
                 "log",
                 "preview",
@@ -1940,6 +1947,140 @@ def compile_cad(
     result.update(_report_agent_facts(report))
     profile_path = _resolve_reference(report_inputs["profile"], report_dir, "profile")
 
+    # Render only current, validated source/scene/report geometry, before QA.
+    # The diagnostic bundle never replaces the last successful render pointer.
+    display_reference = artifacts.get("glb:display")
+    try:
+        display_path = _resolve_reference(
+            display_reference, report_dir, "glb:display"
+        )
+    except ValueError as error:
+        _issue(
+            result,
+            code="VISUAL.DISPLAY_ARTIFACT_MISSING",
+            stage="render",
+            message=error,
+        )
+        return _finish(result, result_path=result_path, log_path=log_path)
+    preview_path = output_dir / f"{model}_{run_id}_views.png"
+    reference_view = intent["visual"]["reference_view"]
+    reference_preview_path = (
+        output_dir / f"{model}_{run_id}_{reference_view}-view.png"
+    )
+    render_audit_path = output_dir / f"{model}_{run_id}_diagnostic-render.json"
+    with tempfile.TemporaryDirectory(
+        dir=output_dir,
+        prefix=f".{model}-render-",
+    ) as render_directory:
+        render_stage = Path(render_directory)
+        staged_preview = render_stage / preview_path.name
+        staged_reference = render_stage / reference_preview_path.name
+        staged_evidence = render_stage / render_audit_path.name
+        render_command = _run_with_deadline(
+            runner,
+            deadline,
+            "render",
+            [
+                sys.executable,
+                str(Path(__file__).resolve().with_name("render_preview.py")),
+                str(display_path),
+                "--out",
+                str(staged_preview),
+                "--report",
+                str(staged_evidence),
+                "--reference-view",
+                reference_view,
+                "--reference-out",
+                str(staged_reference),
+            ],
+            cwd=workspace,
+            timeout_seconds=options.check_timeout_seconds,
+        )
+        _stage_record(result, "render", render_command)
+        if render_command.timed_out or render_command.returncode != 0:
+            _record_command_failure(
+                result,
+                render_command,
+                stage="render",
+                failure_code="VISUAL.RENDER_FAILED",
+                timeout_code="VISUAL.RENDER_TIMEOUT",
+                internal_code="INTERNAL.RENDER_ERROR",
+            )
+        elif not all(
+            _valid_staged_file(path)
+            for path in (staged_preview, staged_reference, staged_evidence)
+        ):
+            _issue(
+                result,
+                code="INTERNAL.RENDER_ERROR",
+                stage="render",
+                message="renderer did not produce its complete run-scoped evidence bundle",
+            )
+        else:
+            try:
+                render_evidence = _load_json(staged_evidence, "render evidence")
+                bound_meshes = render_evidence.get("meshes")
+                display_hash = _digest(display_path)
+                bound = isinstance(bound_meshes, list) and any(
+                    isinstance(item, dict)
+                    and Path(str(item.get("path", ""))).resolve() == display_path
+                    and item.get("sha256") == display_hash
+                    for item in bound_meshes
+                )
+                preview_reference = render_evidence.get("preview")
+                preview_bound = (
+                    isinstance(preview_reference, dict)
+                    and Path(str(preview_reference.get("path", ""))).resolve()
+                    == staged_preview
+                    and preview_reference.get("sha256") == _digest(staged_preview)
+                )
+                matched_reference = render_evidence.get("matched_view")
+                matched_bound = (
+                    isinstance(matched_reference, dict)
+                    and matched_reference.get("name") == reference_view
+                    and Path(str(matched_reference.get("path", ""))).resolve()
+                    == staged_reference
+                    and matched_reference.get("sha256") == _digest(staged_reference)
+                )
+                if (
+                    render_evidence.get("schema") != "evidence-render/v2"
+                    or display_reference.get("sha256") != display_hash
+                    or not bound
+                    or not preview_bound
+                    or not matched_bound
+                ):
+                    raise ValueError(
+                        "render evidence is not hash-bound to the current display GLB and previews"
+                    )
+                _publish_render_bundle(
+                    staged_preview=staged_preview,
+                    staged_reference=staged_reference,
+                    preview_path=preview_path,
+                    reference_preview_path=reference_preview_path,
+                    render_audit_path=render_audit_path,
+                    render_evidence={
+                        **render_evidence,
+                        "purpose": "diagnostic",
+                        "inputs": report["inputs"],
+                    },
+                    run_id=run_id,
+                )
+                result["artifacts"]["diagnosticPreview"] = _artifact(preview_path)
+                result["artifacts"]["diagnosticReferencePreview"] = _artifact(
+                    reference_preview_path
+                )
+                result["artifacts"]["diagnosticRenderEvidence"] = _artifact(render_audit_path)
+            except Exception as error:
+                _issue(
+                    result,
+                    code="VISUAL.RENDER_EVIDENCE_INVALID",
+                    stage="render",
+                    message=error,
+                )
+
+    if _compile_deadline_exceeded(result):
+        return _finish(result, result_path=result_path, log_path=log_path)
+
     # Interface and assembly evidence is the cheapest high-value multipart gate.
     # Run it before per-artifact QA so disconnected structures fail in one report.
     if len(parts) > 1 and "stl" in artifacts:
@@ -2096,133 +2237,6 @@ def compile_cad(
     if any(issue["severity"] == "error" for issue in result["issues"]):
         return _finish(result, result_path=result_path, log_path=log_path)
 
-    display_reference = artifacts.get("glb:display")
-    try:
-        display_path = _resolve_reference(
-            display_reference, report_dir, "glb:display"
-        )
-    except ValueError as error:
-        _issue(
-            result,
-            code="VISUAL.DISPLAY_ARTIFACT_MISSING",
-            stage="render",
-            message=error,
-        )
-        return _finish(result, result_path=result_path, log_path=log_path)
-    preview_path = output_dir / f"{model}_{run_id}_views.png"
-    reference_view = intent["visual"]["reference_view"]
-    reference_preview_path = (
-        output_dir / f"{model}_{run_id}_{reference_view}-view.png"
-    )
-    render_audit_path = output_dir / f"{model}_render.json"
-    with tempfile.TemporaryDirectory(
-        dir=output_dir,
-        prefix=f".{model}-render-",
-    ) as render_directory:
-        render_stage = Path(render_directory)
-        staged_preview = render_stage / preview_path.name
-        staged_reference = render_stage / reference_preview_path.name
-        staged_evidence = render_stage / render_audit_path.name
-        render_command = _run_with_deadline(
-            runner,
-            deadline,
-            "render",
-            [
-                sys.executable,
-                str(Path(__file__).resolve().with_name("render_preview.py")),
-                str(display_path),
-                "--out",
-                str(staged_preview),
-                "--report",
-                str(staged_evidence),
-                "--reference-view",
-                reference_view,
-                "--reference-out",
-                str(staged_reference),
-            ],
-            cwd=workspace,
-            timeout_seconds=options.check_timeout_seconds,
-        )
-        _stage_record(result, "render", render_command)
-        if render_command.timed_out or render_command.returncode != 0:
-            _record_command_failure(
-                result,
-                render_command,
-                stage="render",
-                failure_code="VISUAL.RENDER_FAILED",
-                timeout_code="VISUAL.RENDER_TIMEOUT",
-                internal_code="INTERNAL.RENDER_ERROR",
-            )
-        elif not all(
-            _valid_staged_file(path)
-            for path in (staged_preview, staged_reference, staged_evidence)
-        ):
-            _issue(
-                result,
-                code="INTERNAL.RENDER_ERROR",
-                stage="render",
-                message="renderer did not produce its complete run-scoped evidence bundle",
-            )
-        else:
-            try:
-                render_evidence = _load_json(staged_evidence, "render evidence")
-                bound_meshes = render_evidence.get("meshes")
-                display_hash = _digest(display_path)
-                bound = isinstance(bound_meshes, list) and any(
-                    isinstance(item, dict)
-                    and Path(str(item.get("path", ""))).resolve() == display_path
-                    and item.get("sha256") == display_hash
-                    for item in bound_meshes
-                )
-                preview_reference = render_evidence.get("preview")
-                preview_bound = (
-                    isinstance(preview_reference, dict)
-                    and Path(str(preview_reference.get("path", ""))).resolve()
-                    == staged_preview
-                    and preview_reference.get("sha256") == _digest(staged_preview)
-                )
-                matched_reference = render_evidence.get("matched_view")
-                matched_bound = (
-                    isinstance(matched_reference, dict)
-                    and matched_reference.get("name") == reference_view
-                    and Path(str(matched_reference.get("path", ""))).resolve()
-                    == staged_reference
-                    and matched_reference.get("sha256") == _digest(staged_reference)
-                )
-                if (
-                    render_evidence.get("schema") != "evidence-render/v2"
-                    or not bound
-                    or not preview_bound
-                    or not matched_bound
-                ):
-                    raise ValueError(
-                        "render evidence is not hash-bound to the current display GLB and previews"
-                    )
-                _publish_render_bundle(
-                    staged_preview=staged_preview,
-                    staged_reference=staged_reference,
-                    preview_path=preview_path,
-                    reference_preview_path=reference_preview_path,
-                    render_audit_path=render_audit_path,
-                    render_evidence=render_evidence,
-                    run_id=run_id,
-                )
-                result["artifacts"]["preview"] = _artifact(preview_path)
-                result["artifacts"]["referencePreview"] = _artifact(
-                    reference_preview_path
-                )
-                result["artifacts"]["renderEvidence"] = _artifact(render_audit_path)
-            except Exception as error:
-                _issue(
-                    result,
-                    code="VISUAL.RENDER_EVIDENCE_INVALID",
-                    stage="render",
-                    message=error,
-                )
-
-    if _compile_deadline_exceeded(result):
-        return _finish(result, result_path=result_path, log_path=log_path)
-
     for warning in report.get("warnings", []):
         _issue(
             result,
@@ -2290,6 +2304,40 @@ def compile_cad(
                 stage="freshness",
                 message="; ".join(freshness_errors),
             )
+    if (
+        not any(issue["severity"] == "error" for issue in result["issues"])
+        and result.get("omittedErrorCount", 0) == 0
+    ):
+        diagnostic = result["artifacts"].get("diagnosticRenderEvidence")
+        if diagnostic is not None:
+            # Publish the canonical pointer only after all QA and freshness pass.
+            # Its image paths remain immutable and specific to this run.
+            try:
+                binding_errors = file_binding_errors(report, report_dir)
+                binding_errors.extend(file_binding_errors(
+                    {"artifacts": result["artifacts"]}, workspace
+                ))
+                if binding_errors:
+                    raise ValueError("; ".join(binding_errors))
+                evidence = _load_json(Path(diagnostic["path"]), "diagnostic render")
+                evidence["purpose"] = "automated-checks-passed"
+                canonical_render = output_dir / f"{model}_render.json"
+                # Prepare all metadata before replacing the previous successful
+                # pointer. A failed write or read must leave it intact.
+                with tempfile.TemporaryDirectory(dir=output_dir, prefix=f".{model}-publish-") as publish_directory:
+                    staged_pointer = Path(publish_directory) / f"{model}.publish.json"
+                    _write_json(staged_pointer, evidence)
+                    pointer_reference = _artifact(staged_pointer)
+                    pointer_reference["path"] = str(canonical_render)
+                    promoted_artifacts = dict(result["artifacts"])
+                    promoted_artifacts["renderEvidence"] = pointer_reference
+                    promoted_artifacts["preview"] = promoted_artifacts.pop("diagnosticPreview")
+                    promoted_artifacts["referencePreview"] = promoted_artifacts.pop("diagnosticReferencePreview")
+                    del promoted_artifacts["diagnosticRenderEvidence"]
+                    staged_pointer.replace(canonical_render)
+                    result["artifacts"] = promoted_artifacts
+            except Exception as error:
+                _issue(result, code="VISUAL.RENDER_EVIDENCE_INVALID", stage="render", message=error)
     return _finish(result, result_path=result_path, log_path=log_path)
 
 

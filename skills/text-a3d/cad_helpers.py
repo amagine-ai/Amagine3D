@@ -32,7 +32,11 @@ from display_glb import (
     export_display_glb,
     load_display_components,
 )
-from geometry_binding import GeometryBindingError, shape_to_mesh
+from geometry_binding import (
+    GeometryBindingError,
+    export_shape_stl,
+    shape_to_mesh,
+)
 
 from build123d import (
     Compound,
@@ -41,7 +45,6 @@ from build123d import (
     Unit,
     chamfer,
     export_step,
-    export_stl,
     fillet,
 )
 
@@ -675,7 +678,9 @@ def _bed_face_for_rotation(name: str) -> str | None:
 def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
     with tempfile.TemporaryDirectory() as directory:
         mesh_path = Path(directory) / "orientation.stl"
-        export_stl(shape, str(mesh_path), tolerance=0.05, angular_tolerance=0.2)
+        export_shape_stl(
+            shape, mesh_path, linear_tolerance_mm=0.05, angular_tolerance_rad=0.2
+        )
         mesh = trimesh.load(mesh_path, force="mesh", process=False)
     if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
         return {
@@ -1356,7 +1361,7 @@ def export_part(
         )
     except DisplayGlbError as error:
         raise BuildInvariantError(str(error)) from error
-    export_stl(print_shape, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
+    export_shape_stl(print_shape, stl_path)
 
     color_artifacts = {}
     color_backend_data = {}
@@ -1666,7 +1671,7 @@ def export_assembly(
         print_shape = oriented_parts[part_name]
         print_transform = _orientation_transform(print_orientations[part_name])
         path = output / f"{name}-{part_name}.stl"
-        export_stl(print_shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        export_shape_stl(print_shape, path)
         artifacts[f"stl:{part_name}"] = {
             "path": str(path.resolve()),
             "sha256": _digest(path),
@@ -1700,7 +1705,7 @@ def export_assembly(
     if not assembly_stats["valid"]:
         raise BuildInvariantError("assembly geometry is invalid")
     stl_path = output / f"{name}.stl"
-    export_stl(print_plate, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
+    export_shape_stl(print_plate, stl_path)
     artifacts["stl"] = {
         "path": str(stl_path.resolve()),
         "sha256": _digest(stl_path),
@@ -1746,7 +1751,7 @@ def export_assembly(
     entries = []
     for part_name, shape in plate_parts.items():
         path = internal_plate_dir / f"{name}-{part_name}.stl"
-        export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        export_shape_stl(shape, path)
         internal_plate_meshes[part_name] = {
             "coordinate_frame": "plate-print",
             "path": str(path.resolve()),
