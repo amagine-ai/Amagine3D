@@ -51,6 +51,20 @@ parts cannot fit. Preserve user-visible function when changing your construction
 rebuilding intent to remove a failing target is not a repair. See
 `references/design-review.md` when resolving a failed fit or judging readiness.
 
+## Iterative edits
+
+Treat the paths referenced by the newest valid build report as the current model's
+canonical working set. For a follow-up change, update the same editable source and
+run the same build and compile path so generated scene, evidence, previews, and
+manufacturing outputs are republished at their canonical paths.
+
+Do not rename, move, or copy the current working set merely to preserve a prior
+revision. The compiler's staged publication is the rollback boundary, and the
+conversation is the change history. Create a separate version only when the user
+explicitly asks for a snapshot, fork, variant, or additional model. After a failed
+compile, repair the canonical source and compile again instead of creating an
+alternate set of artifact paths.
+
 Before replying, read the newest five-view preview with the native `view_image`
 tool and compare it to the intended landmarks. Numeric image statistics establish
 neither appearance nor functional correctness. If the tool returns image content
