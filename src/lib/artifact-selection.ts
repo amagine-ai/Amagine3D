@@ -64,12 +64,6 @@ export function defaultPreviewArtifact(
   );
 }
 
-function isPngImage(artifact: ArtifactSummary): boolean {
-  return (
-    artifact.kind === 'image' && artifact.path.toLowerCase().endsWith('.png')
-  );
-}
-
 function isPreviewModel(artifact: ArtifactSummary): boolean {
   return (
     artifact.kind === 'model' &&
@@ -78,13 +72,34 @@ function isPreviewModel(artifact: ArtifactSummary): boolean {
   );
 }
 
+function previewStem(artifact: ArtifactSummary): string {
+  const extension = `.${artifact.format ?? ''}`;
+  const stem = artifact.path.slice(0, -extension.length);
+  return artifact.format === 'glb'
+    ? stem.replace(/(?:-display|_display)$/u, '')
+    : stem;
+}
+
 export function fileSectionArtifacts(
   artifacts: readonly ArtifactSummary[],
 ): ArtifactSummary[] {
   const preferredPath = defaultPreviewArtifact(artifacts)?.path;
+  const topLevelStems = new Set(
+    artifacts
+      .filter(
+        (artifact) =>
+          isPreviewModel(artifact) &&
+          (artifact.format === 'glb' || artifact.format === '3mf'),
+      )
+      .map(previewStem),
+  );
   return artifacts
     .map((artifact, index) => ({ artifact, index }))
-    .filter(({ artifact }) => isPreviewModel(artifact) || isPngImage(artifact))
+    .filter(
+      ({ artifact }) =>
+        isPreviewModel(artifact) &&
+        (artifact.format !== 'stl' || topLevelStems.has(previewStem(artifact))),
+    )
     .sort(
       (left, right) =>
         Number(right.artifact.path === preferredPath) -

@@ -106,10 +106,13 @@ test('honors the explicit preview of a bundled project', () => {
   );
 });
 
-test('shows only previewable model files and PNG images in the file section', () => {
+test('shows GLB, 3MF, and only the matching top-level STL in the file section', () => {
   const artifacts = [
     artifact('part.py', 'source'),
     model('part-display.glb', 'glb', '2026-08-23T08:00:05.000Z'),
+    model('part.3mf', '3mf', '2026-08-23T08:00:04.500Z'),
+    model('part.stl', 'stl', '2026-08-23T08:00:04.250Z'),
+    model('part-shell.stl', 'stl', '2026-08-23T08:00:04.100Z'),
     model('part-assemble.step', undefined, '2026-08-23T08:00:04.000Z'),
     artifact('preview.PNG', 'image'),
     artifact('reference.webp', 'image'),
@@ -117,7 +120,7 @@ test('shows only previewable model files and PNG images in the file section', ()
   ];
   assert.deepEqual(
     fileSectionArtifacts(artifacts).map(({ path }) => path),
-    ['part-display.glb', 'preview.PNG'],
+    ['part-display.glb', 'part.3mf', 'part.stl'],
   );
 });
 
@@ -137,8 +140,6 @@ test('pins the preferred visible model at the top of the file section', () => {
     [
       'shell_case-display.glb',
       'shell_case.stl',
-      'preview.png',
-      'shell_case-top-lid.stl',
     ],
   );
 });
