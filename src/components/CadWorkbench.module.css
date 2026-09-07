@@ -21,6 +21,9 @@
     grid-template-columns:
       var(--workspace-left) 0.375rem minmax(20rem, 1fr) 0.375rem
       var(--workspace-right);
+    height: calc(100dvh - 4.25rem);
+    min-height: 0;
+    overflow-y: hidden;
   }
 
   .panelResizer {

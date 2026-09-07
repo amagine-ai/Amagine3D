@@ -20,7 +20,6 @@ import {
   type Language,
   type LeftView,
   type PendingImage,
-  type RuntimeEntry,
   translator,
 } from './cad-workbench/types';
 import {
@@ -55,7 +54,6 @@ import {
   completeChatTurn,
   startChatStep,
 } from '../lib/chat-turn';
-import { chatStepLabel } from '../lib/chat-step-label';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import {
   ACCEPTED_IMAGE_TYPES,
@@ -67,7 +65,6 @@ import {
   type ArtifactSummary,
   type ArtifactWorkspace,
   type ChatMessage,
-  type LocalizedText,
   type ChatTurn,
   type HealthResponse,
   type ParameterModel,
@@ -110,7 +107,6 @@ export function CadWorkbench({
     const [prompt, setPrompt] = useState('');
     const [printPreview, setPrintPreview] = useState(false);
     const [running, setRunning] = useState(false);
-    const [runtimeEntries, setRuntimeEntries] = useState<RuntimeEntry[]>([]);
     const [selectedPath, setSelectedPath] = useState<string>();
     const [selectedText, setSelectedText] = useState<string>();
     const [sessionId, setSessionId] = useState(BUNDLED_POMODORO_SESSION_ID);
@@ -130,13 +126,10 @@ export function CadWorkbench({
     });
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const {
-      beginLogResize,
       beginSideResize,
       leftCollapsed,
-      logCollapsed,
       rightCollapsed,
       setLeftCollapsed,
-      setLogCollapsed,
       setRightCollapsed,
       workspaceStyle,
     } = useWorkbenchLayout();
@@ -149,18 +142,6 @@ export function CadWorkbench({
       () => sessions.find((session) => session.id === sessionId),
       [sessionId, sessions],
     );
-    const activity = useMemo(() => {
-      const activeTurn = messages.findLast(
-        (message) =>
-          message.role === 'assistant' && message.finishedAt === undefined,
-      );
-      if (!activeTurn || activeTurn.role !== 'assistant') return '';
-      const activeStep = activeTurn.steps.at(-1);
-      return (
-        (activeStep ? chatStepLabel(activeStep, language) : undefined) ??
-        text('Starting A3D', '正在启动 A3D')
-      );
-    }, [language, messages]);
     const sessionTitle = (session: SessionSummary | undefined) =>
       session?.kind === 'builtin'
         ? text('Amagine3D Pomodoro Timer', 'Amagine3D 番茄钟')
@@ -213,25 +194,6 @@ export function CadWorkbench({
       : displayPreviewArtifact ?? printPreviewArtifact;
     const showingPrintPreview =
       previewArtifact?.format === '3mf' || previewArtifact?.format === 'stl';
-
-    function addRuntimeEntry(
-      message: string,
-      stage: string,
-      level: RuntimeEntry['level'] = 'info',
-      localizedMessage?: LocalizedText,
-    ) {
-      setRuntimeEntries((current) => [
-        ...current.slice(-99),
-        {
-          id: crypto.randomUUID(),
-          level,
-          localizedMessage,
-          message,
-          occurredAt: Date.now(),
-          stage,
-        },
-      ]);
-    }
 
     function updateDraftTurn(
       draftId: string,
@@ -300,11 +262,7 @@ export function CadWorkbench({
         sessionId,
         selectedArtifacts.map(({ path }) => path),
       );
-      try {
-        await refreshArtifacts();
-      } catch (error) {
-        addRuntimeEntry(errorText(error, language), 'files', 'error');
-      }
+      await refreshArtifacts().catch(() => undefined);
     }
 
     async function refreshWorkspaceStorage() {
@@ -312,8 +270,8 @@ export function CadWorkbench({
       try {
         const storage = await fetchWorkspaceStorage();
         setStorageGroups(storage.groups);
-      } catch (error) {
-        addRuntimeEntry(errorText(error, language), 'storage', 'error');
+      } catch {
+        setStorageGroups([]);
       } finally {
         setStorageLoading(false);
       }
@@ -378,7 +336,6 @@ export function CadWorkbench({
       setSessionLoading(true);
       setPrompt('');
       setPendingImages([]);
-      setRuntimeEntries([]);
       setLeftView('chat');
       try {
         if (!target.persisted) {
@@ -416,8 +373,8 @@ export function CadWorkbench({
         setPrintPreview(
           selected?.format === '3mf' || selected?.format === 'stl',
         );
-      } catch (error) {
-        addRuntimeEntry(errorText(error, language), 'session', 'error');
+      } catch {
+        // The session remains unchanged when loading its persisted data fails.
       } finally {
         setSessionLoading(false);
       }
@@ -525,9 +482,7 @@ export function CadWorkbench({
           setParameterModels(parameterCollection.models);
           selectInitialArtifact(detail.artifacts);
         })
-        .catch((error: unknown) => {
-          if (live) addRuntimeEntry(errorText(error, language), 'session', 'error');
-        })
+        .catch(() => undefined)
         .finally(() => {
           if (live) setSessionLoading(false);
         });
@@ -583,12 +538,6 @@ export function CadWorkbench({
     ) {
       if (event.type === 'step') {
         updateDraftTurn(draftId, (turn) => startChatStep(turn, event.step));
-        addRuntimeEntry(
-          chatStepLabel(event.step, language),
-          event.step.stage,
-          'info',
-          event.step.localizedLabel,
-        );
         return;
       }
       if (event.type === 'step_delta') {
@@ -624,13 +573,6 @@ export function CadWorkbench({
           .catch((error: unknown) => {
             setParameterIssue(errorText(error, language));
           });
-        addRuntimeEntry(
-          text(
-            `${String(event.artifacts.length)} workspace files discovered`,
-            `已发现 ${String(event.artifacts.length)} 个工作区文件`,
-          ),
-          'files',
-        );
         return;
       }
       if (event.type === 'complete') {
@@ -642,7 +584,6 @@ export function CadWorkbench({
             status: 'completed',
           }),
         );
-        addRuntimeEntry(text('Run completed', '执行完成'), 'done');
         void fetchSessionCatalog()
           .then((catalog) => setSessions(catalog.sessions))
           .catch(() => undefined);
@@ -656,7 +597,6 @@ export function CadWorkbench({
           status: 'failed',
         }),
       );
-      addRuntimeEntry(event.message, 'error', 'error');
     }
 
     async function commitParameter(parameterId: string) {
@@ -677,17 +617,6 @@ export function CadWorkbench({
       parameterBuildingRef.current = true;
       setParameterBuilding(true);
       setParameterIssue(undefined);
-      const parameterLabel =
-        language === 'zh' && parameter.labelZh?.trim()
-          ? parameter.labelZh.trim()
-          : parameter.label;
-      addRuntimeEntry(
-        text(
-          `Rebuilding complete model with ${parameterLabel}=${String(value)}`,
-          `正在以 ${parameterLabel}=${String(value)} 重建完整模型`,
-        ),
-        'parameters',
-      );
       try {
         const next = await rebuildModelParameters(sessionId, model, {
           [parameterId]: value,
@@ -697,10 +626,6 @@ export function CadWorkbench({
         setParameterModels(next.models);
         setSelectedPath(model.displayPreviewPath);
         setPrintPreview(false);
-        addRuntimeEntry(
-          text('Complete model rebuilt', '完整模型已重建'),
-          'parameters',
-        );
       } catch (error) {
         setParameterIssue(errorText(error, language));
         setParameterValues(
@@ -708,7 +633,6 @@ export function CadWorkbench({
             model.parameters.map((item) => [item.id, item.value]),
           ),
         );
-        addRuntimeEntry(errorText(error, language), 'parameters', 'error');
       } finally {
         parameterBuildingRef.current = false;
         setParameterBuilding(false);
@@ -762,10 +686,6 @@ export function CadWorkbench({
       setPendingImages([]);
       setPrompt('');
       setRunning(true);
-      addRuntimeEntry(
-        text('Starting A3D', '正在启动 A3D'),
-        'start',
-      );
 
       try {
         await streamAgent({
@@ -791,7 +711,6 @@ export function CadWorkbench({
             status,
           }),
         );
-        addRuntimeEntry(message, 'error', 'error');
       } finally {
         abortRef.current = undefined;
         setRunning(false);
@@ -804,36 +723,25 @@ export function CadWorkbench({
       event.currentTarget.value = '';
       if (files.length === 0) return;
       if (pendingImages.length + files.length > MAX_IMAGE_COUNT) {
-        addRuntimeEntry(
-          text(
-            `Attach at most ${String(MAX_IMAGE_COUNT)} images.`,
-            `每次最多上传 ${String(MAX_IMAGE_COUNT)} 张图片。`,
-          ),
-          'image',
-          'error',
-        );
         return;
       }
       if (files.some((file) => !acceptedImageTypes.has(file.type))) {
-        addRuntimeEntry(text('Unsupported image format.', '存在不支持的图片格式。'), 'image', 'error');
         return;
       }
       if (files.some((file) => file.size > MAX_IMAGE_BYTES)) {
-        addRuntimeEntry(text('An image is too large.', '单张图片大小超出限制。'), 'image', 'error');
         return;
       }
       const totalSize =
         pendingImages.reduce((sum, image) => sum + image.size, 0) +
         files.reduce((sum, file) => sum + file.size, 0);
       if (totalSize > MAX_TOTAL_IMAGE_BYTES) {
-        addRuntimeEntry(text('Images are too large.', '图片总大小超出限制。'), 'image', 'error');
         return;
       }
       try {
         const next = await Promise.all(files.map(readImage));
         setPendingImages((current) => [...current, ...next]);
-      } catch (error) {
-        addRuntimeEntry(errorText(error, language), 'image', 'error');
+      } catch {
+        // Invalid image data is ignored before it reaches the composer.
       }
     }
 
@@ -864,7 +772,6 @@ export function CadWorkbench({
         setPrompt('');
         setPendingImages([]);
       }
-      setRuntimeEntries([]);
       setLeftView('chat');
       requestAnimationFrame(() => textareaRef.current?.focus());
       return nextSessionId;
@@ -943,12 +850,8 @@ export function CadWorkbench({
         </div>
 
         <PreviewPanel
-          activity={activity}
           connectionStatus={connectionStatus}
           language={language}
-          logCollapsed={logCollapsed}
-          onLogResize={beginLogResize}
-          onToggleLog={() => setLogCollapsed((collapsed) => !collapsed)}
           onTogglePrintPreview={() => setPrintPreview((enabled) => !enabled)}
           previewArtifact={previewArtifact}
           printPreview={showingPrintPreview}
@@ -956,7 +859,6 @@ export function CadWorkbench({
             displayPreviewArtifact && printPreviewArtifact,
           )}
           running={running || parameterBuilding}
-          runtimeEntries={runtimeEntries}
           runtimeReady={Boolean(health?.runtimeReady)}
           selectedArtifact={selectedArtifact}
           selectedText={selectedText}

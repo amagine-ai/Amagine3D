@@ -1,4 +1,4 @@
-import type { ImageAttachment, LocalizedText } from '../../types';
+import type { ImageAttachment } from '../../types';
 
 export type Language = 'en' | 'zh';
 export type LeftView = 'chat' | 'files';
@@ -7,15 +7,6 @@ export interface PendingImage extends ImageAttachment {
   id: string;
   size: number;
   url: string;
-}
-
-export interface RuntimeEntry {
-  id: string;
-  level: 'error' | 'info';
-  localizedMessage?: LocalizedText;
-  message: string;
-  occurredAt: number;
-  stage: string;
 }
 
 export type Translate = (english: string, chinese: string) => string;

@@ -1,8 +1,6 @@
 .centerPanel {
   display: grid;
-  grid-template-rows:
-    auto minmax(18rem, 1fr) var(--workspace-log-resizer)
-    var(--workspace-log-height);
+  grid-template-rows: auto minmax(18rem, 1fr);
   min-width: 0;
   min-height: 42rem;
   align-self: stretch;
