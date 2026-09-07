@@ -41,6 +41,16 @@ Every generation records one semantic scene containing its parts, features, inte
 
 Behind the scenes, the 3D-native Agent turns the request into an immutable intent and one mutable semantic scene. Internal BRep, mesh, mixed-geometry, and color backends compile that scene into one evidence contract. The Agent sees measured dimensions and checks for feature ownership, print orientation, plate fit, connectivity, interference, and exported-file readback, then renders and reads the latest result before accepting it.
 
+Visual review uses the generated five-view preview (isometric, front, side, top,
+bottom) and requires image perception in the configured model/provider. A rendered
+PNG or successful text response does not establish that capability. Run
+`npm run doctor -- --vision` to check both image attachments and native `view_image`
+with two small, randomized image requests. This opt-in check uses the configured
+model/API account and leaves diagnostic logs in isolated local sessions. A failed
+perception check means visual review remains incomplete; check the model's image
+support and gateway forwarding before accepting CAD on visual grounds. The regular
+doctor command does not make these API requests.
+
 <a id="example"></a>
 
 ## Example: BUSY Bar Desktop Device Enclosure

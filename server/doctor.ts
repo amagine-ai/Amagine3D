@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CodexRuntime } from '@amagine3d/a3d-runtime';
+import { CodexRuntime, probeVision } from '@amagine3d/a3d-runtime';
 
 import { activateProjectPython } from './python-runtime.ts';
 
@@ -52,6 +52,19 @@ try {
   });
   for (const diagnostic of runtime.skillDiagnostics) {
     console.warn(`Skill warning: ${diagnostic}`);
+  }
+  if (process.argv.includes('--vision')) {
+    if (!runtime.configured) throw new Error('Vision probe requires a configured API key.');
+    console.log('Vision probe makes two model requests; diagnostic files stay in isolated local sessions.');
+    for (const result of await probeVision(runtime, console.log)) {
+      checks.push({
+        name: `Vision (${result.mode})`,
+        ready: result.status === 'passed',
+        detail: `${result.status}: ${result.detail} Diagnostic session: ${result.sessionId}`,
+      });
+    }
+  } else {
+    console.log('Model image perception is unverified; run npm run doctor -- --vision to test attachments and native view_image.');
   }
 } catch (error) {
   checks.push({

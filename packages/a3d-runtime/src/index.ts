@@ -18,6 +18,10 @@ export {
   type RunTimeoutKind,
 } from './run-supervisor.ts';
 export {
+  probeVision,
+  type VisionProbeResult,
+} from './vision-probe.ts';
+export {
   codexModelId,
   codexPrompt,
   codexReasoningEffort,
