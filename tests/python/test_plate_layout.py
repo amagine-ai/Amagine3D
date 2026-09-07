@@ -4,6 +4,7 @@ import contextlib
 from hashlib import sha256
 import importlib.util
 import io
+from itertools import combinations
 import json
 from pathlib import Path
 import sys
@@ -146,6 +147,34 @@ class PlateLayoutAlgorithmTests(unittest.TestCase):
             first["min"][1], second["min"][1]
         )
         self.assertFalse(overlap_x > 0 and overlap_y > 0)
+
+    def test_recovers_unused_space_above_short_parts(self):
+        # Vary sizes and counts: successful layouts must not depend on a product name.
+        for large, small, count in (([108, 86, 5], 14, 9), ([100, 80, 7], 12, 12)):
+            with self.subTest(large=large, small=small):
+                boxes = {f"large-{i}": {"min": [0, 0, 0], "max": large} for i in range(2)}
+                boxes.update({f"small-{i}": {"min": [-3, 7, -2], "max": [small - 3, small + 7, 2]} for i in range(count)})
+                result = plate_layout.pack_bboxes(boxes, self.profile, spacing_mm=5)
+                other = plate_layout.pack_bboxes(dict(reversed(list(boxes.items()))), self.profile, spacing_mm=5)
+                self.assertEqual(result["transforms"], other["transforms"])
+                self.assertEqual(result["scale"], 1)
+                placed = [p["plate_bbox_mm"] for p in result["parts"].values()]
+                for name, part in result["parts"].items():
+                    self.assertEqual(part["plate_bbox_mm"]["size"], [boxes[name]["max"][i] - boxes[name]["min"][i] for i in range(3)])
+                for p in placed:
+                    self.assertGreaterEqual(min(p["min"]), 0)
+                    self.assertLessEqual(max(p["max"][:2]), 180)
+                for a, b in combinations(placed, 2):
+                    self.assertTrue(any(a["max"][i] + 5 <= b["min"][i] or b["max"][i] + 5 <= a["min"][i] for i in (0, 1)))
+
+    def test_free_rectangle_fallback_respects_exclusions_and_bed_edges(self):
+        limits = {"bounds_mm": [10, 20, 110, 120], "excluded_bounds_mm": [[10, 20, 35, 120]]}
+        parts = {"a": {"size": [70, 100, 5]}}
+        result = plate_layout._pack_free_rectangles(["a"], parts, limits, 5)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["placements"]["a"]["plate_bbox_xy_mm"], [40, 20, 110, 120])
+        parts["a"]["size"][0] = 71
+        self.assertIsNone(plate_layout._pack_free_rectangles(["a"], parts, limits, 5))
 
     def test_layout_fails_closed_instead_of_scaling(self):
         boxes = {

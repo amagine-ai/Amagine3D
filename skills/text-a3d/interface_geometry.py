@@ -112,6 +112,63 @@ def _bbox(record: Any) -> tuple[np.ndarray, np.ndarray] | None:
     return low, high
 
 
+def _wall_engagement(
+    receiver: trimesh.Trimesh,
+    female_bounds: tuple[np.ndarray, np.ndarray],
+    male_bounds: tuple[np.ndarray, np.ndarray],
+    axis: int,
+) -> float:
+    """Union the axial spans of actual inward-facing walls in the mating region.
+
+    Cutter overshoot and empty gaps between receiver walls contribute no length.
+    Clip triangles, rather than their boxes, so a long face cannot contribute
+    material outside the local feature. End caps are not guiding walls.
+    """
+    low, high = (values.copy() for values in female_bounds)
+    center = (low + high) / 2
+    radial = [index for index in range(3) if index != axis]
+    low[radial] -= GEOMETRY_TOLERANCE_MM
+    high[radial] += GEOMETRY_TOLERANCE_MM
+    low[axis] = max(low[axis], male_bounds[0][axis])
+    high[axis] = min(high[axis], male_bounds[1][axis])
+    if high[axis] <= low[axis]:
+        return 0.0
+    intervals = []
+    for triangle, normal in zip(receiver.triangles, receiver.face_normals):
+        if abs(normal[axis]) >= 0.99:
+            continue
+        outward = triangle.mean(axis=0) - center
+        if np.dot(normal[radial], outward[radial]) >= -1e-9:
+            continue
+        if np.any(triangle.max(axis=0) < low) or np.any(triangle.min(axis=0) > high):
+            continue
+        polygon = list(triangle)
+        for dimension in range(3):
+            for limit, sign in ((low[dimension], 1), (high[dimension], -1)):
+                clipped = []
+                for first, second in zip(polygon, polygon[1:] + polygon[:1]):
+                    a = sign * (first[dimension] - limit)
+                    b = sign * (second[dimension] - limit)
+                    if a >= 0:
+                        clipped.append(first)
+                    if (a >= 0) != (b >= 0):
+                        clipped.append(first + a / (a - b) * (second - first))
+                polygon = clipped
+                if not polygon:
+                    break
+            if not polygon:
+                break
+        if len(polygon) >= 3:
+            points = np.asarray(polygon)
+            intervals.append((float(points[:, axis].min()), float(points[:, axis].max())))
+    length = 0.0
+    end = -math.inf
+    for start, stop in sorted(intervals):
+        length += max(0.0, stop - max(start, end))
+        end = max(end, stop)
+    return length
+
+
 def _points_in_bounds(
     mesh: trimesh.Trimesh,
     bounds: tuple[np.ndarray, np.ndarray],
@@ -604,27 +661,36 @@ def audit_interfaces(
             )
 
         if "engagement" in geometry_checks:
-            axial_overlap = max(
-                0.0,
-                min(float(male_high[axis_index]), float(female_high[axis_index]))
-                - max(float(male_low[axis_index]), float(female_low[axis_index])),
+            receiver = part_meshes.get(endpoints["female"].get("partId"))
+            axial_overlap = (
+                _wall_engagement(receiver, (female_low, female_high), (male_low, male_high), axis_index)
+                if receiver is not None else None
             )
             engagement_target = float(target.get("engagement_mm", 0.0))
             engagement_pass = (
-                axial_overlap + GEOMETRY_TOLERANCE_MM >= engagement_target
+                axial_overlap is not None
+                and axial_overlap + GEOMETRY_TOLERANCE_MM >= engagement_target
             )
             checks.append(
                 {
                     "check": "engagement",
                     "interfaceId": interface_id,
                     "observed": axial_overlap,
+                    "measurement": "receiver-wall-axial-coverage",
                     "expected": engagement_target,
                     "pass": engagement_pass,
                     "proofCapability": capability["id"],
-                    "status": "pass" if engagement_pass else "fail",
+                    "status": "not_evaluated" if axial_overlap is None else "pass" if engagement_pass else "fail",
                 }
             )
-            if not engagement_pass:
+            if axial_overlap is None:
+                issues.append(_issue(
+                    code="INTERFACE.EVIDENCE_NOT_EVALUATED", interface_id=interface_id,
+                    check="engagement", features=features, severity="warning",
+                    observed="receiver mesh unavailable", expected="physical receiving walls",
+                    repair_hint="Export the receiving part mesh to measure effective engagement; cutter bounds alone are insufficient.",
+                ))
+            elif not engagement_pass:
                 issues.append(
                     _issue(
                         code="INTERFACE.ENGAGEMENT_SHORT",

@@ -110,31 +110,27 @@ function validMaterialPlan(
     !plan ||
     !exactKeys(plan, [
       'archiveEncodes',
-      'archiveOmits',
       'assignments',
       'coordinateFrame',
       'materials',
       'packageMode',
       'part',
-      'requiresManualSlicerAssignment',
       'scale',
       'schema',
       'sourceBindings',
     ]) ||
-    plan.schema !== 'evidence-color-material-plan/v1' ||
+    plan.schema !== 'evidence-color-material-plan/v2' ||
     plan.part !== buildPart ||
     plan.coordinateFrame !== 'plate-print' ||
     plan.scale !== 1 ||
-    plan.requiresManualSlicerAssignment !== true ||
     JSON.stringify(plan.archiveEncodes) !==
       JSON.stringify(['part', 'region', 'rgb']) ||
-    JSON.stringify(plan.archiveOmits) !==
-      JSON.stringify(['filament', 'transmission', 'slicer-filament-slot']) ||
     !['co_print_body', 'separate_parts'].includes(String(plan.packageMode))
   ) {
     return false;
   }
   if (
+    (backend === 'brep-part' && plan.packageMode !== 'co_print_body') ||
     (backend === 'brep-color-regions' && plan.packageMode !== 'co_print_body') ||
     (backend === 'brep-assembly' && plan.packageMode !== 'separate_parts') ||
     (backend === 'hybrid-mesh' &&
@@ -150,38 +146,14 @@ function validMaterialPlan(
   const materials = new Map<string, Record<string, unknown>>();
   for (const rawMaterial of plan.materials) {
     const material = objectRecord(rawMaterial);
-    const statuses = objectRecord(material?.fieldStatus);
     if (
       !material ||
-      !exactKeys(material, [
-        'color',
-        'fieldStatus',
-        'filament',
-        'id',
-        'status',
-        'transmission',
-      ]) ||
+      !exactKeys(material, ['color', 'id', 'status']) ||
       !nonEmptyString(material.id) ||
       materials.has(material.id) ||
       typeof material.color !== 'string' ||
       !/^#[0-9A-F]{6}$/u.test(material.color) ||
-      !statuses ||
-      !exactKeys(statuses, ['color', 'filament', 'transmission']) ||
-      !Object.values(statuses).every((status) =>
-        ['declared', 'proposed'].includes(String(status)),
-      ) ||
-      material.status !==
-        (Object.values(statuses).includes('declared')
-          ? 'declared'
-          : 'proposed') ||
-      (material.filament !== null && !nonEmptyString(material.filament)) ||
-      (material.transmission !== null &&
-        !['opaque', 'translucent', 'transparent'].includes(
-          String(material.transmission),
-        )) ||
-      (material.filament === null && statuses.filament !== 'proposed') ||
-      (material.transmission === null &&
-        statuses.transmission !== 'proposed')
+      !['declared', 'proposed'].includes(String(material.status))
     ) {
       return false;
     }
@@ -194,7 +166,7 @@ function validMaterialPlan(
   const allowedScopes = new Set(
     backend === 'brep-color-regions'
       ? ['brep-region']
-      : backend === 'brep-assembly'
+      : ['brep-part', 'brep-assembly'].includes(backend)
         ? ['whole-part']
         : ['volumetric-region', 'whole-part'],
   );
@@ -250,7 +222,6 @@ function validMaterialPlan(
       !binding ||
       !exactKeys(binding, [
         'color',
-        'filament',
         'materialId',
         'materialStatus',
         'part',
@@ -258,7 +229,6 @@ function validMaterialPlan(
         'scope',
         'sourceId',
         'sourceKind',
-        'transmission',
       ]) ||
       !nonEmptyString(binding.materialId)
     ) {
@@ -268,8 +238,6 @@ function validMaterialPlan(
     if (
       !material ||
       binding.color !== material.color ||
-      binding.filament !== material.filament ||
-      binding.transmission !== material.transmission ||
       binding.materialStatus !== material.status ||
       ![
         'intent-color-region',
@@ -904,15 +872,29 @@ function validBackendData(
   const brepCommon = () =>
     Boolean(objectRecord(data.exportAudit) && validParameters(data.parameters));
   if (backend === 'brep-part') {
+    const expected = [
+      'exportAudit',
+      'parameters',
+      'printOrientation',
+      'semanticAssembly',
+      ...(requiresThreeMf
+        ? ['partColors', 'printPackageMode', 'threeMf']
+        : []),
+    ];
+    const partColors = objectRecord(data.partColors);
     return Boolean(
-      exactKeys(data, [
-        'exportAudit',
-        'parameters',
-        'printOrientation',
-        'semanticAssembly',
-      ]) &&
+      exactKeys(data, expected) &&
         brepCommon() &&
-        validOrientation(data.printOrientation),
+        validOrientation(data.printOrientation) &&
+        (!requiresThreeMf ||
+          (data.printPackageMode === 'co_print_body' &&
+            partColors &&
+            exactKeys(partColors, partIds) &&
+            Object.values(partColors).every(
+              (color) =>
+                typeof color === 'string' && /^#[0-9A-F]{6}$/u.test(color),
+            ) &&
+            objectRecord(data.threeMf))),
     );
   }
   if (backend === 'brep-assembly') {
@@ -1143,7 +1125,10 @@ function expectedArtifactKeys(
   return expected;
 }
 
-function expectedTopLevelKeys(backend: string): string[] | undefined {
+function expectedTopLevelKeys(
+  backend: string,
+  requiresThreeMf: boolean,
+): string[] | undefined {
   if (!BUILD_BACKENDS.has(backend)) return undefined;
   const expected = new Set([
     'artifactMatrix',
@@ -1166,7 +1151,8 @@ function expectedTopLevelKeys(backend: string): string[] | undefined {
   ]);
   if (backend.startsWith('brep-')) expected.add('events');
   if (
-    ['brep-assembly', 'brep-color-regions', 'hybrid-mesh'].includes(backend)
+    ['brep-assembly', 'brep-color-regions', 'hybrid-mesh'].includes(backend) ||
+    (backend === 'brep-part' && requiresThreeMf)
   ) {
     expected.add('materialPlan');
   }
@@ -1186,7 +1172,14 @@ function expectedTopLevelKeys(backend: string): string[] | undefined {
 
 function validStructure(report: UnifiedBuildReport): boolean {
   const backend = String(report.backend);
-  const topLevelKeys = expectedTopLevelKeys(backend);
+  const matrixParts = objectRecord(report.artifactMatrix?.parts);
+  const declaresThreeMf = Boolean(
+    matrixParts &&
+      Object.values(matrixParts).some(
+        (value) => objectRecord(value)?.threeMf === 'required',
+      ),
+  );
+  const topLevelKeys = expectedTopLevelKeys(backend, declaresThreeMf);
   const reportRecord = objectRecord(report);
   if (
     !topLevelKeys ||
@@ -1205,7 +1198,6 @@ function validStructure(report: UnifiedBuildReport): boolean {
     return false;
   }
   const parts = objectRecord(report.parts);
-  const matrixParts = objectRecord(report.artifactMatrix?.parts);
   const artifacts = objectRecord(report.artifacts);
   const inputs = objectRecord(report.inputs);
   if (!parts || !matrixParts || !artifacts || !inputs) return false;
@@ -1309,7 +1301,6 @@ function validStructure(report: UnifiedBuildReport): boolean {
     return false;
   }
   if (backend === 'hybrid-mesh' && !masters.has('mesh')) return false;
-  if (backend === 'brep-part' && !threeMfStatuses.has('not-applicable')) return false;
   if (
     ['brep-color-regions', 'hybrid-mesh'].includes(backend) &&
     (threeMfStatuses.size !== 1 || !threeMfStatuses.has('required'))
@@ -1664,7 +1655,9 @@ const SCENE_APPEARANCE_PALETTE = [
   '#F6903D',
 ] as const;
 
-function scenePartColor(part: Record<string, unknown>): string | undefined {
+function scenePartExplicitColor(
+  part: Record<string, unknown>,
+): string | undefined {
   const appearance = objectRecord(part.appearance);
   const candidate = Object.prototype.hasOwnProperty.call(part, 'color')
     ? part.color
@@ -1674,6 +1667,12 @@ function scenePartColor(part: Record<string, unknown>): string | undefined {
   if (typeof candidate === 'string' && /^#[0-9A-Fa-f]{6}$/u.test(candidate)) {
     return candidate.toUpperCase();
   }
+  return undefined;
+}
+
+function scenePartColor(part: Record<string, unknown>): string | undefined {
+  const explicit = scenePartExplicitColor(part);
+  if (explicit) return explicit;
   if (!nonEmptyString(part.id)) return undefined;
   const digest = createHash('sha256')
     .update(canonicalJson(part.id))
@@ -1681,6 +1680,51 @@ function scenePartColor(part: Record<string, unknown>): string | undefined {
   return SCENE_APPEARANCE_PALETTE[
     Number.parseInt(digest.slice(0, 2), 16) % SCENE_APPEARANCE_PALETTE.length
   ];
+}
+
+function proposedScenePartColors(
+  parts: Map<string, Record<string, unknown>>,
+  materials: Map<string, Record<string, unknown>>,
+): Map<string, string> {
+  const used = new Set(
+    [...materials.values()]
+      .map((material) => material.color)
+      .filter(
+        (color): color is string =>
+          typeof color === 'string' && /^#[0-9A-Fa-f]{6}$/u.test(color),
+      )
+      .map((color) => color.toUpperCase()),
+  );
+  for (const part of parts.values()) {
+    const explicit = scenePartExplicitColor(part);
+    if (explicit) used.add(explicit);
+  }
+  const result = new Map<string, string>();
+  for (const partId of [...parts.keys()].sort()) {
+    const part = parts.get(partId)!;
+    if (nonEmptyString(part.materialId)) continue;
+    const explicit = scenePartExplicitColor(part);
+    let color = explicit ?? scenePartColor(part);
+    if (!color) continue;
+    if (!explicit && used.has(color)) {
+      const start = SCENE_APPEARANCE_PALETTE.indexOf(
+        color as (typeof SCENE_APPEARANCE_PALETTE)[number],
+      );
+      for (let offset = 1; offset <= SCENE_APPEARANCE_PALETTE.length; offset += 1) {
+        const candidate =
+          SCENE_APPEARANCE_PALETTE[
+            (start + offset) % SCENE_APPEARANCE_PALETTE.length
+          ]!;
+        if (!used.has(candidate)) {
+          color = candidate;
+          break;
+        }
+      }
+    }
+    used.add(color);
+    result.set(partId, color);
+  }
+  return result;
 }
 
 function validMaterialSources(
@@ -1749,6 +1793,10 @@ function validMaterialSources(
     }
     sceneMaterials.set(material.id, material);
   }
+  const proposedPartColors = proposedScenePartColors(
+    sceneParts,
+    sceneMaterials,
+  );
 
   const intentSources = new Set<string>();
   const sceneSourceParts = new Set<string>();
@@ -1756,8 +1804,7 @@ function validMaterialSources(
     const binding = objectRecord(rawBinding);
     if (!binding || !nonEmptyString(binding.materialId)) return false;
     const material = materials.get(binding.materialId);
-    const statuses = objectRecord(material?.fieldStatus);
-    if (!material || !statuses || !nonEmptyString(binding.part)) return false;
+    if (!material || !nonEmptyString(binding.part)) return false;
 
     if (binding.sourceKind === 'intent-color-region') {
       if (!nonEmptyString(binding.sourceId) || intentSources.has(binding.sourceId)) {
@@ -1774,23 +1821,9 @@ function validMaterialSources(
         typeof region.hex !== 'string' ||
         binding.color !== region.hex.toUpperCase() ||
         material.color !== region.hex.toUpperCase() ||
-        statuses.color !== 'declared'
+        material.status !== 'declared'
       ) {
         return false;
-      }
-      const declaredMaterial = objectRecord(region.material) ?? {};
-      for (const field of ['filament', 'transmission'] as const) {
-        if (Object.prototype.hasOwnProperty.call(declaredMaterial, field)) {
-          if (
-            binding[field] !== declaredMaterial[field] ||
-            material[field] !== declaredMaterial[field] ||
-            statuses[field] !== 'declared'
-          ) {
-            return false;
-          }
-        } else if (statuses[field] !== 'proposed') {
-          return false;
-        }
       }
       continue;
     }
@@ -1805,8 +1838,6 @@ function validMaterialSources(
     }
     sceneSourceParts.add(binding.part);
     let expectedColor: unknown;
-    let expectedFilament: unknown = null;
-    let expectedTransmission: unknown = null;
     if (nonEmptyString(part.materialId)) {
       const sceneMaterial = sceneMaterials.get(part.materialId);
       if (
@@ -1821,8 +1852,6 @@ function validMaterialSources(
         typeof sceneMaterial.color === 'string'
           ? sceneMaterial.color.toUpperCase()
           : sceneMaterial.color;
-      expectedFilament = sceneMaterial.filament ?? null;
-      expectedTransmission = sceneMaterial.transmission ?? null;
     } else {
       if (
         binding.sourceKind !== 'scene-part-appearance' ||
@@ -1831,18 +1860,12 @@ function validMaterialSources(
       ) {
         return false;
       }
-      expectedColor = scenePartColor(part);
+      expectedColor = proposedPartColors.get(binding.part);
     }
     if (
       binding.color !== expectedColor ||
       material.color !== expectedColor ||
-      binding.filament !== expectedFilament ||
-      material.filament !== expectedFilament ||
-      binding.transmission !== expectedTransmission ||
-      material.transmission !== expectedTransmission ||
-      ['color', 'filament', 'transmission'].some(
-        (field) => statuses[field] !== 'proposed',
-      )
+      material.status !== 'proposed'
     ) {
       return false;
     }

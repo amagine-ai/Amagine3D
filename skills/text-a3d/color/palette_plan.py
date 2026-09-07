@@ -16,7 +16,7 @@ def rgb(value: str) -> np.ndarray:
 
 
 def distance(left: str, right: str) -> float:
-    # Weighted RGB is deterministic and adequate for filament shortlist planning.
+    # Weighted RGB is deterministic and adequate for color reduction planning.
     delta = (rgb(left) - rgb(right)) * np.array([0.30, 0.59, 0.11])
     return float(np.linalg.norm(delta))
 
@@ -83,7 +83,7 @@ def main() -> int:
             {"hex": value, "mapped_pixels": totals[value]} for value in selected
         ],
         "pass": True,
-        "schema": "filament-palette-plan/v2",
+        "schema": "color-palette-plan/v3",
         "source_color_count": len(source),
         "target_color_count": len(selected),
     }

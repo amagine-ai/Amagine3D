@@ -1,4 +1,4 @@
-"""Build and validate the one manufactured-material plan used by every backend."""
+"""Build and validate the manufactured-color plan used by every backend."""
 
 from __future__ import annotations
 
@@ -8,11 +8,9 @@ import re
 from typing import Any, Iterable
 
 
-MATERIAL_PLAN_SCHEMA = "evidence-color-material-plan/v1"
+MATERIAL_PLAN_SCHEMA = "evidence-color-material-plan/v2"
 PACKAGE_MODES = {"co_print_body", "separate_parts"}
-FIELD_STATUSES = {"declared", "proposed"}
 MATERIAL_STATUSES = {"declared", "proposed"}
-TRANSMISSIONS = {"opaque", "translucent", "transparent"}
 SCOPES = {"brep-region", "volumetric-region", "whole-part"}
 SOURCE_KINDS = {
     "intent-color-region",
@@ -36,28 +34,12 @@ def material_record(
     material_id: str,
     color: str,
     *,
-    filament: str | None,
-    transmission: str | None,
-    color_status: str,
-    filament_status: str,
-    transmission_status: str,
+    status: str,
 ) -> dict[str, Any]:
-    field_status = {
-        "color": color_status,
-        "filament": filament_status,
-        "transmission": transmission_status,
-    }
     record = {
         "color": color.upper(),
-        "fieldStatus": field_status,
-        "filament": filament,
         "id": material_id,
-        "status": (
-            "declared"
-            if any(value == "declared" for value in field_status.values())
-            else "proposed"
-        ),
-        "transmission": transmission,
+        "status": status,
     }
     errors = validate_material(record, "material")
     if errors:
@@ -76,7 +58,6 @@ def source_binding(
 ) -> dict[str, Any]:
     return {
         "color": material["color"],
-        "filament": material["filament"],
         "materialId": material["id"],
         "materialStatus": material["status"],
         "part": part,
@@ -84,7 +65,6 @@ def source_binding(
         "scope": scope,
         "sourceId": source_id,
         "sourceKind": source_kind,
-        "transmission": material["transmission"],
     }
 
 
@@ -98,19 +78,11 @@ def build_material_plan(
 ) -> dict[str, Any]:
     plan = {
         "archiveEncodes": ["part", "region", "rgb"],
-        "archiveOmits": [
-            "filament",
-            "transmission",
-            "slicer-filament-slot",
-        ],
         "assignments": list(assignments),
         "coordinateFrame": "plate-print",
         "materials": list(materials),
         "packageMode": package_mode,
         "part": part,
-        # The archive intentionally has no slicer slot mapping, irrespective
-        # of whether a real filament name was declared in intent.
-        "requiresManualSlicerAssignment": True,
         "scale": 1.0,
         "schema": MATERIAL_PLAN_SCHEMA,
         "sourceBindings": list(source_bindings),
@@ -125,14 +97,7 @@ def validate_material(value: Any, path: str) -> list[str]:
     if not isinstance(value, dict):
         return [f"{path} must be an object"]
     errors: list[str] = []
-    if set(value) != {
-        "color",
-        "fieldStatus",
-        "filament",
-        "id",
-        "status",
-        "transmission",
-    }:
+    if set(value) != {"color", "id", "status"}:
         errors.append(f"{path} has unsupported or missing fields")
     if not isinstance(value.get("id"), str) or not value["id"].strip():
         errors.append(f"{path}.id must be a non-empty string")
@@ -140,37 +105,8 @@ def validate_material(value: Any, path: str) -> list[str]:
         value["color"]
     ):
         errors.append(f"{path}.color must be uppercase #RRGGBB")
-    filament = value.get("filament")
-    if filament is not None and (
-        not isinstance(filament, str) or not filament.strip()
-    ):
-        errors.append(f"{path}.filament must be null or a non-empty string")
-    transmission = value.get("transmission")
-    if transmission is not None and transmission not in TRANSMISSIONS:
-        errors.append(f"{path}.transmission is invalid")
     if value.get("status") not in MATERIAL_STATUSES:
         errors.append(f"{path}.status must be declared or proposed")
-    statuses = value.get("fieldStatus")
-    if not isinstance(statuses, dict) or set(statuses) != {
-        "color",
-        "filament",
-        "transmission",
-    }:
-        errors.append(f"{path}.fieldStatus must cover every material field")
-    elif any(status not in FIELD_STATUSES for status in statuses.values()):
-        errors.append(f"{path}.fieldStatus values must be declared or proposed")
-    else:
-        expected_status = (
-            "declared"
-            if any(status == "declared" for status in statuses.values())
-            else "proposed"
-        )
-        if value.get("status") != expected_status:
-            errors.append(f"{path}.status does not match its field statuses")
-        if filament is None and statuses["filament"] != "proposed":
-            errors.append(f"{path}.filament null must be proposed")
-        if transmission is None and statuses["transmission"] != "proposed":
-            errors.append(f"{path}.transmission null must be proposed")
     return errors
 
 
@@ -201,7 +137,6 @@ def _validate_binding(value: Any, path: str) -> list[str]:
     errors = []
     if set(value) != {
         "color",
-        "filament",
         "materialId",
         "materialStatus",
         "part",
@@ -209,7 +144,6 @@ def _validate_binding(value: Any, path: str) -> list[str]:
         "scope",
         "sourceId",
         "sourceKind",
-        "transmission",
     }:
         errors.append(f"{path} has unsupported or missing fields")
     errors.extend(
@@ -242,14 +176,6 @@ def _validate_binding(value: Any, path: str) -> list[str]:
             errors.append(f"{path} scene sources must be proposed")
         if value.get("scope") != "whole-part" or value.get("region") is not None:
             errors.append(f"{path} scene sources must bind one whole part")
-    if value.get("filament") is not None and not isinstance(
-        value.get("filament"), str
-    ):
-        errors.append(f"{path}.filament must be null or a string")
-    if value.get("transmission") is not None and value.get(
-        "transmission"
-    ) not in TRANSMISSIONS:
-        errors.append(f"{path}.transmission is invalid")
     return errors
 
 
@@ -259,13 +185,11 @@ def validate_material_plan(value: Any) -> list[str]:
     errors: list[str] = []
     expected_fields = {
         "archiveEncodes",
-        "archiveOmits",
         "assignments",
         "coordinateFrame",
         "materials",
         "packageMode",
         "part",
-        "requiresManualSlicerAssignment",
         "scale",
         "schema",
         "sourceBindings",
@@ -280,16 +204,8 @@ def validate_material_plan(value: Any) -> list[str]:
         errors.append("coordinateFrame must be plate-print")
     if value.get("scale") != 1.0:
         errors.append("scale must be 1.0")
-    if value.get("requiresManualSlicerAssignment") is not True:
-        errors.append("requiresManualSlicerAssignment must be true")
     if value.get("archiveEncodes") != ["part", "region", "rgb"]:
         errors.append("archiveEncodes must be part, region, rgb")
-    if value.get("archiveOmits") != [
-        "filament",
-        "transmission",
-        "slicer-filament-slot",
-    ]:
-        errors.append("archiveOmits must declare every omitted material field")
     if not isinstance(value.get("part"), str) or not value["part"].strip():
         errors.append("part must be a non-empty string")
 
@@ -355,9 +271,7 @@ def validate_material_plan(value: Any) -> list[str]:
                 if isinstance(material, dict):
                     expected = {
                         "color": material.get("color"),
-                        "filament": material.get("filament"),
                         "materialStatus": material.get("status"),
-                        "transmission": material.get("transmission"),
                     }
                     observed = {field: binding.get(field) for field in expected}
                     if observed != expected:
@@ -395,9 +309,8 @@ def validate_material_plan(value: Any) -> list[str]:
     return errors
 
 
-def _scene_part_color(part: dict[str, Any]) -> str:
-    """Resolve the deterministic color used by the Hybrid scene compiler."""
-
+def scene_part_explicit_color(part: dict[str, Any]) -> str | None:
+    """Return the part's explicit scene appearance color when present."""
     appearance = part.get("appearance")
     appearance = appearance if isinstance(appearance, dict) else {}
     candidate = (
@@ -409,6 +322,15 @@ def _scene_part_color(part: dict[str, Any]) -> str:
         r"#[0-9A-Fa-f]{6}", candidate
     ):
         return candidate.upper()
+    return None
+
+
+def scene_part_color(part: dict[str, Any]) -> str:
+    """Resolve an explicit scene appearance or a stable proposed fallback."""
+
+    explicit = scene_part_explicit_color(part)
+    if explicit is not None:
+        return explicit
     part_id = part.get("id")
     payload = json.dumps(
         part_id,
@@ -419,6 +341,33 @@ def _scene_part_color(part: dict[str, Any]) -> str:
     ).encode("utf-8")
     index = int(sha256(payload).hexdigest()[:2], 16) % len(DEFAULT_SCENE_PALETTE)
     return DEFAULT_SCENE_PALETTE[index]
+
+
+def distinct_scene_part_color(part: dict[str, Any], used: set[str]) -> str:
+    """Choose a stable fallback distinct from existing manufacturing colors."""
+
+    explicit = scene_part_explicit_color(part)
+    if explicit is not None:
+        used.add(explicit)
+        return explicit
+    color = scene_part_color(part)
+    if color in used:
+        start = DEFAULT_SCENE_PALETTE.index(color)
+        color = next(
+            (
+                DEFAULT_SCENE_PALETTE[
+                    (start + offset) % len(DEFAULT_SCENE_PALETTE)
+                ]
+                for offset in range(1, len(DEFAULT_SCENE_PALETTE) + 1)
+                if DEFAULT_SCENE_PALETTE[
+                    (start + offset) % len(DEFAULT_SCENE_PALETTE)
+                ]
+                not in used
+            ),
+            color,
+        )
+    used.add(color)
+    return color
 
 
 def validate_material_sources(
@@ -485,6 +434,23 @@ def validate_material_sources(
             continue
         scene_materials[material["id"]] = material
 
+    used_scene_colors = {
+        str(material.get("color")).upper()
+        for material in scene_materials.values()
+        if isinstance(material.get("color"), str)
+        and re.fullmatch(r"#[0-9A-Fa-f]{6}", material["color"])
+    }
+    used_scene_colors.update(
+        color
+        for part in scene_parts.values()
+        if (color := scene_part_explicit_color(part)) is not None
+    )
+    proposed_part_colors = {
+        part_id: distinct_scene_part_color(scene_parts[part_id], used_scene_colors)
+        for part_id in sorted(scene_parts)
+        if not isinstance(scene_parts[part_id].get("materialId"), str)
+    }
+
     seen_intent_sources: set[str] = set()
     seen_scene_parts: set[str] = set()
     for index, binding in enumerate(value["sourceBindings"]):
@@ -492,8 +458,6 @@ def validate_material_sources(
         material = materials.get(binding["materialId"])
         if not isinstance(material, dict):
             continue
-        statuses = material.get("fieldStatus")
-        statuses = statuses if isinstance(statuses, dict) else {}
         source_kind = binding["sourceKind"]
         source_id = binding["sourceId"]
         part_id = binding["part"]
@@ -520,27 +484,9 @@ def validate_material_sources(
                 not isinstance(expected_color, str)
                 or binding["color"] != expected_color.upper()
                 or material.get("color") != expected_color.upper()
-                or statuses.get("color") != "declared"
+                or material.get("status") != "declared"
             ):
                 errors.append(f"{path}.color does not match its intent color region")
-            declared_material = region.get("material")
-            declared_material = (
-                declared_material if isinstance(declared_material, dict) else {}
-            )
-            for field in ("filament", "transmission"):
-                if field in declared_material:
-                    if (
-                        binding.get(field) != declared_material[field]
-                        or material.get(field) != declared_material[field]
-                        or statuses.get(field) != "declared"
-                    ):
-                        errors.append(
-                            f"{path}.{field} does not match its intent color region"
-                        )
-                elif statuses.get(field) != "proposed":
-                    errors.append(
-                        f"{path}.{field} must remain proposed when intent omits it"
-                    )
             continue
 
         scene_part = scene_parts.get(part_id)
@@ -567,11 +513,7 @@ def validate_material_sources(
             if scene_material is None:
                 errors.append(f"{path}.sourceId references an unknown scene material")
                 continue
-            expected_fields = {
-                "color": str(scene_material.get("color", "")).upper(),
-                "filament": scene_material.get("filament"),
-                "transmission": scene_material.get("transmission"),
-            }
+            expected_color = str(scene_material.get("color", "")).upper()
         else:
             if (
                 source_kind != "scene-part-appearance"
@@ -580,19 +522,14 @@ def validate_material_sources(
             ):
                 errors.append(f"{path} does not identify the scene part appearance")
                 continue
-            expected_fields = {
-                "color": _scene_part_color(scene_part),
-                "filament": None,
-                "transmission": None,
-            }
-        if any(
-            binding.get(field) != expected
-            or material.get(field) != expected
-            for field, expected in expected_fields.items()
+            expected_color = proposed_part_colors.get(part_id)
+        if (
+            binding.get("color") != expected_color
+            or material.get("color") != expected_color
         ):
             errors.append(f"{path} does not match its hash-bound scene material")
-        if any(statuses.get(field) != "proposed" for field in expected_fields):
-            errors.append(f"{path} scene material fields must all be proposed")
+        if material.get("status") != "proposed":
+            errors.append(f"{path} scene material color must be proposed")
 
     missing_regions = sorted(set(intent_regions) - seen_intent_sources)
     if missing_regions:

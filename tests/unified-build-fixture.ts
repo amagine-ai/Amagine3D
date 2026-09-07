@@ -73,19 +73,11 @@ function materialPlan(
     backend === 'brep-color-regions' ? 'brep-region' : 'whole-part';
   const materials = parts.map((part, index) => ({
     color: index % 2 === 0 ? '#F05A35' : '#171717',
-    fieldStatus: {
-      color: intentColorSource ? 'declared' : 'proposed',
-      filament: 'proposed',
-      transmission: 'proposed',
-    },
-    filament: null,
     id: `material-${part}`,
     status: intentColorSource ? 'declared' : 'proposed',
-    transmission: null,
   }));
   return {
     archiveEncodes: ['part', 'region', 'rgb'],
-    archiveOmits: ['filament', 'transmission', 'slicer-filament-slot'],
     assignments: parts.map((part) => ({
       materialId: `material-${part}`,
       part,
@@ -95,7 +87,6 @@ function materialPlan(
     coordinateFrame: 'plate-print',
     sourceBindings: parts.map((part, index) => ({
       color: materials[index]!.color,
-      filament: null,
       materialId: `material-${part}`,
       materialStatus: intentColorSource ? 'declared' : 'proposed',
       part,
@@ -105,14 +96,12 @@ function materialPlan(
       sourceKind: intentColorSource
         ? 'intent-color-region'
         : 'scene-part-material',
-      transmission: null,
     })),
     materials,
     packageMode: parts.length === 1 ? 'co_print_body' : 'separate_parts',
     part: name,
-    requiresManualSlicerAssignment: true,
     scale: 1,
-    schema: 'evidence-color-material-plan/v1',
+    schema: 'evidence-color-material-plan/v2',
   };
 }
 

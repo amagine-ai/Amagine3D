@@ -82,7 +82,6 @@ async function writeEvidenceInputs(options: {
             boundary: `${region.name} occupies its declared volumetric region`,
             evidence: `${region.name} is required by the test specification`,
             hex: region.hex,
-            material: { transmission: 'opaque' },
             name: region.name,
             part: name,
             purpose: `${region.name} print color`,
@@ -688,7 +687,7 @@ if __name__ == "__main__":
       await execFileAsync(VENV_PYTHON, ['parametric_box.py'], { cwd: root });
       const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
       assert.ok(model);
-      assert.equal(model.primaryPreviewPath, 'parametric_box.stl');
+      assert.equal(model.primaryPreviewPath, 'parametric_box.3mf');
       assert.equal(model.displayPreviewPath, 'parametric_box-display.glb');
       assert.equal(model.parameters[0]?.labelZh, '凹槽深度');
       assert.equal(model.parameters[0]?.groupZh, '局部特征');
@@ -928,7 +927,7 @@ if __name__ == "__main__":
 );
 
 test(
-  'treats the STL as the adjustable top-level single-color print root',
+  'treats the proposed-color 3MF as the adjustable print root',
   { skip: !existsSync(VENV_PYTHON) },
   async () => {
     const root = await mkdtemp(join(tmpdir(), 'amagine-assembly-parameter-'));
@@ -1005,19 +1004,23 @@ if __name__ == "__main__":
       await execFileAsync(VENV_PYTHON, ['shell_case.py'], { cwd: root });
       const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
       assert.ok(model);
-      assert.equal(model.primaryPreviewPath, 'shell_case.stl');
+      assert.equal(model.primaryPreviewPath, 'shell_case.3mf');
       assert.equal(model.displayPreviewPath, 'shell_case-display.glb');
       assert.deepEqual(
         model.artifactPaths.slice().sort(),
         [
+          '.amagine3d-internal/shell_case/plate/shell_case-lower-shell.stl',
+          '.amagine3d-internal/shell_case/plate/shell_case-top-lid.stl',
           'shell_case-lower-shell.stl',
           'shell_case-lower-shell.step',
           'shell_case-top-lid.stl',
           'shell_case-top-lid.step',
+          'shell_case.3mf',
           'shell_case.stl',
           'shell_case-assemble.step',
           'shell_case-display.glb',
           'shell_case_export-audit.json',
+          'shell_case_material-plan.json',
         ].sort(),
       );
       await rebuildModelWithParameters({

@@ -52,7 +52,6 @@ from build_manifest import (
     BUILD_SCHEMA,
     artifact_record as manifest_artifact_record,
     digest_file,
-    digest_json,
     matrix_list,
     new_run_id,
     rigid_matrix_errors,
@@ -65,6 +64,9 @@ from plate_layout import PlateLayoutError, pack_bboxes
 from intent_contract import validate_color_regions
 from material_plan import (
     build_material_plan,
+    distinct_scene_part_color,
+    scene_part_explicit_color,
+    scene_part_color,
     source_binding,
     validate_material_sources,
 )
@@ -84,20 +86,7 @@ MATERIAL_NS = "http://schemas.microsoft.com/3dmanufacturing/material/2015/02"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 MODEL_REL = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
-HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}")
 MODEL_NAME = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
-DEFAULT_PALETTE = (
-    "#5B8FF9",
-    "#61DDAA",
-    "#65789B",
-    "#F6BD16",
-    "#7262FD",
-    "#78D3F8",
-    "#9661BC",
-    "#F6903D",
-)
-
-
 class CompileError(RuntimeError):
     """An actionable semantic-scene compilation failure."""
 
@@ -751,20 +740,14 @@ def _difference(
     return result, removed
 
 
-def _normalize_color(value: Any, part_id: str) -> str:
-    if isinstance(value, str) and HEX_COLOR.fullmatch(value):
-        return value.upper()
-    index = int(digest_json(part_id)[:2], 16) % len(DEFAULT_PALETTE)
-    return DEFAULT_PALETTE[index]
-
-
-def _appearance(part: dict[str, Any]) -> dict[str, Any]:
+def _appearance(
+    part: dict[str, Any],
+    *,
+    color: str | None = None,
+) -> dict[str, Any]:
     raw = part.get("appearance")
     appearance = raw if isinstance(raw, dict) else {}
-    color = _normalize_color(
-        part.get("color", appearance.get("baseColor", appearance.get("color"))),
-        part["id"],
-    )
+    color = color or scene_part_color(part)
     metallic = appearance.get("metallic", appearance.get("metallicFactor", 0.0))
     roughness = appearance.get(
         "roughness", appearance.get("roughnessFactor", 0.58)
@@ -797,20 +780,27 @@ def _material_catalog(
         }
         for material in scene.get("materials", [])
     }
+    used_colors = {material["color"] for material in catalog.values()}
+    used_colors.update(
+        color
+        for part in scene["parts"]
+        if (color := scene_part_explicit_color(part)) is not None
+    )
     assignments: dict[str, str] = {}
-    for part in scene["parts"]:
+    for part in sorted(scene["parts"], key=lambda item: item["id"]):
         material_id = part.get("materialId")
         if isinstance(material_id, str):
             assignments[part["id"]] = material_id
             continue
         material_id = f"proposed-{part['id']}"
-        appearance = _appearance(part)
+        appearance = _appearance(
+            part,
+            color=distinct_scene_part_color(part, used_colors),
+        )
         catalog[material_id] = {
             "color": appearance["baseColor"],
-            "filament": None,
             "id": material_id,
             "status": "proposed",
-            "transmission": None,
         }
         assignments[part["id"]] = material_id
     return catalog, assignments
@@ -833,13 +823,6 @@ def _build_source_bindings(
                 "scene colorRegions require matching intent.color_regions declarations"
             )
         for material in materials.values():
-            material.setdefault("filament", None)
-            material.setdefault("transmission", None)
-            material["fieldStatus"] = {
-                "color": "proposed",
-                "filament": "proposed",
-                "transmission": "proposed",
-            }
             material["status"] = "proposed"
         return [
             source_binding(
@@ -942,14 +925,7 @@ def _build_source_bindings(
 
     for material_id, material in materials.items():
         bindings = material_bindings.get(material_id, [])
-        material.setdefault("filament", None)
-        material.setdefault("transmission", None)
         if not bindings:
-            material["fieldStatus"] = {
-                "color": "proposed",
-                "filament": "proposed",
-                "transmission": "proposed",
-            }
             material["status"] = "proposed"
             continue
 
@@ -959,35 +935,7 @@ def _build_source_bindings(
                 f"scene material {material_id} color {material.get('color')!r} "
                 f"does not match intent region color(s) {sorted(colors)}"
             )
-        field_status = {"color": "declared"}
-        for field in ("filament", "transmission"):
-            declared_values = {
-                region["material"][field]
-                for region in bindings
-                if isinstance(region.get("material"), dict)
-                and field in region["material"]
-            }
-            if len(declared_values) > 1:
-                raise CompileError(
-                    f"intent regions sharing material {material_id} disagree on {field}"
-                )
-            if declared_values:
-                expected_value = next(iter(declared_values))
-                observed_value = material.get(field)
-                if observed_value is not None and observed_value != expected_value:
-                    raise CompileError(
-                        f"scene material {material_id}.{field} {observed_value!r} "
-                        f"does not match intent {expected_value!r}"
-                    )
-                material[field] = expected_value
-                field_status[field] = "declared"
-            else:
-                field_status[field] = "proposed"
-        material["fieldStatus"] = field_status
         material["intentRegionIds"] = sorted(region["name"] for region in bindings)
-        # The intent hex is itself an authoritative material declaration. Keep
-        # optional spool/transmission choices independently proposed when the
-        # user did not select them.
         material["status"] = "declared"
 
     bound_parts = {region["part"] for region, _, _ in binding_specs}
@@ -2375,11 +2323,8 @@ def compile_scene(
                 field: material.get(field)
                 for field in (
                     "color",
-                    "fieldStatus",
-                    "filament",
                     "id",
                     "status",
-                    "transmission",
                 )
             }
             for material in (materials[key] for key in sorted(materials))

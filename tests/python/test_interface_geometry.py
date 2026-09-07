@@ -334,6 +334,47 @@ class InterfaceGeometryTests(unittest.TestCase):
         }
         self.assertEqual(clearances, {"diameter": 0.4, "length": 0.2})
 
+    def test_engagement_uses_receiver_walls_not_cutter_overshoot(self):
+        # Normal long/deep fits stay valid on every principal axis, while
+        # overshooting cutters cannot turn a short seat into a valid fit.
+        for axis, rotation in (("+Z", [0, 0, 0]), ("-Z", [180, 0, 0]),
+                               ("+X", [0, 90, 0]), ("+Y", [-90, 0, 0])):
+            for depth in (3.0, 4.0, 6.0):
+                for overshoot in (1.0, 20.0):
+                    with self.subTest(axis=axis, depth=depth, overshoot=overshoot):
+                        intent, scene = _pin_contract()
+                        target = intent["manufacturing"]["interfaces"][0]
+                        target.update(assembly_axis=axis, engagement_mm=4.0)
+                        pin = _cylinder(2, 8, 6)
+                        cutter = _cylinder(2.2, depth + overshoot, 2 + (depth + overshoot) / 2)
+                        receiver = _annulus(2.2, 5, depth, 2 + depth / 2)
+                        matrix = trimesh.transformations.euler_matrix(*[math.radians(v) for v in rotation])
+                        for mesh in (pin, cutter, receiver):
+                            mesh.apply_transform(matrix)
+                        result = interface_geometry.audit_interfaces(
+                            intent=intent, scene=scene,
+                            feature_records={
+                                "pin/stem": _record(*pin.bounds.tolist()),
+                                "guide/bore": _record(*cutter.bounds.tolist()),
+                            }, part_meshes={"pin": pin, "guide": receiver},
+                        )
+                        check = next(c for c in result["checks"] if c["check"] == "engagement")
+                        self.assertAlmostEqual(check["observed"], depth, places=5)
+                        self.assertEqual(check["pass"], depth >= 4)
+                        self.assertEqual(result["pass"], depth >= 4)
+
+    def test_empty_gap_between_receiver_walls_is_not_engagement(self):
+        receiver = trimesh.util.concatenate([
+            _annulus(2.2, 5, 1, 0.5), _annulus(2.2, 5, 1, 4.5),
+        ])
+        bounds = ([ -2.2, -2.2, 0], [2.2, 2.2, 5])
+        import numpy as np
+        measured = interface_geometry._wall_engagement(
+            receiver, tuple(np.asarray(x, dtype=float) for x in bounds),
+            tuple(np.asarray(x, dtype=float) for x in bounds), 2,
+        )
+        self.assertAlmostEqual(measured, 2.0)
+
     def test_independent_interface_failures_are_aggregated(self):
         intent, scene = _pin_contract()
         guide = _annulus(2.5, 3.5, 4.0, 7.0)

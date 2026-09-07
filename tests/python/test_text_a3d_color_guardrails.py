@@ -399,9 +399,23 @@ class ColorPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "region/material/build graph"):
                 exporter.inspect_color_archive(str(archive_path))
 
-    def test_color_qa_never_infers_package_mode_from_the_build_report(self):
+    def test_color_qa_uses_plan_mode_only_for_proposed_whole_part_color(self):
         self.assertEqual(color_qa.print_package_mode(None), "invalid")
         self.assertEqual(color_qa.print_package_mode({"printability": {}}), "invalid")
+        self.assertEqual(
+            color_qa.print_package_mode(
+                {"printability": {}},
+                {"materialPlan": {"packageMode": "co_print_body"}},
+            ),
+            "co_print_body",
+        )
+        self.assertEqual(
+            color_qa.print_package_mode(
+                {"color_regions": [], "printability": {}},
+                {"materialPlan": {"packageMode": "co_print_body"}},
+            ),
+            "invalid",
+        )
         self.assertEqual(
             color_qa.print_package_mode({
                 "printability": {"print_package_mode": "co_print_body"}
@@ -490,7 +504,6 @@ class ColorPipelineTests(unittest.TestCase):
                     "purpose": "right field",
                     "boundary": "X 10 through 20 mm",
                     "evidence": "fixture specification",
-                    "material": {"transmission": "translucent"},
                 },
             ],
             "palette_reduction": {"applied": False, "reason": "two colors"},
@@ -658,11 +671,7 @@ class ColorPipelineTests(unittest.TestCase):
             )
             self.assertNotIn("status-surface", report["parts"])
             plan = json.loads((root / "tile_material-plan.json").read_text())
-            self.assertTrue(plan["requiresManualSlicerAssignment"])
-            self.assertEqual(
-                plan["archiveOmits"],
-                ["filament", "transmission", "slicer-filament-slot"],
-            )
+            self.assertEqual(plan["archiveEncodes"], ["part", "region", "rgb"])
             assemble = subprocess.run(
                 [
                     sys.executable,
@@ -702,7 +711,6 @@ class ColorPipelineTests(unittest.TestCase):
             self.assertEqual(
                 assembly_payload["schema"], "evidence-assembly-audit/v1"
             )
-            self.assertTrue(assembly_payload["requiresManualSlicerAssignment"])
 
     def test_material_plan_artifact_must_equal_inline_plan(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1319,15 +1327,6 @@ class ColorContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["pass"])
-
-    def test_non_opaque_regions_leave_filament_choice_to_user(self):
-        example_path = SINGLE / "examples" / "intent.example.json"
-        data = json.loads(example_path.read_text())
-        data["color_regions"][0].pop("material", None)
-        data["color_regions"][1]["material"] = {"transmission": "translucent"}
-        errors = color_intent.validate(data, example_path.parent)
-        self.assertFalse(any("filament" in item for item in errors))
-        self.assertFalse(any("material" in item for item in errors))
 
     def test_flat_semantic_feature_fields_are_validated(self):
         example_path = SINGLE / "examples" / "intent.example.json"

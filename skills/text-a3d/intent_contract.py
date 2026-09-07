@@ -34,7 +34,6 @@ FEATURE_ID_PATTERN = re.compile(
 )
 DIMENSION_FIELD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._/-]*")
 HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
-MATERIAL_TRANSMISSIONS = {"opaque", "translucent", "transparent"}
 REGION_CONTINUITY = {
     "continuous-core",
     "not-applicable",
@@ -634,21 +633,6 @@ def validate_color_regions(
         continuity = region.get("continuity")
         if continuity is not None and continuity not in REGION_CONTINUITY:
             errors.append(f"{prefix}.continuity is invalid")
-        material = region.get("material")
-        if material is not None and not isinstance(material, dict):
-            errors.append(f"{prefix}.material must be an object")
-        elif isinstance(material, dict):
-            transmission = material.get("transmission", "opaque")
-            if transmission not in MATERIAL_TRANSMISSIONS:
-                errors.append(f"{prefix}.material.transmission is invalid")
-            filament = material.get("filament")
-            if filament is not None and (
-                not isinstance(filament, str) or not filament.strip()
-            ):
-                errors.append(
-                    f"{prefix}.material.filament must be a non-empty string"
-                )
-
     if len(names) != len(set(names)):
         errors.append("color region names must be unique")
     return errors

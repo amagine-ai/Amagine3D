@@ -19,7 +19,12 @@ from build_manifest import BUILD_SCHEMA
 from material_plan import MATERIAL_PLAN_SCHEMA, validate_material_plan
 from export_3mf import inspect_color_archive
 
-SUPPORTED_BACKENDS = {"brep-assembly", "brep-color-regions", "hybrid-mesh"}
+SUPPORTED_BACKENDS = {
+    "brep-part",
+    "brep-assembly",
+    "brep-color-regions",
+    "hybrid-mesh",
+}
 
 
 def _expected_colors(report: dict) -> dict[str, str]:
@@ -152,7 +157,6 @@ def audit(report_path: Path, three_mf_path: Path, max_overlap: float) -> dict:
         "archive": archive,
         "checks": checks,
         "pass": all(check["pass"] for check in checks),
-        "requiresManualSlicerAssignment": plan.get("requiresManualSlicerAssignment") if isinstance(plan, dict) else None,
         "schema": "evidence-assembly-audit/v1",
     }
 

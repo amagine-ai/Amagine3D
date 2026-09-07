@@ -723,12 +723,6 @@ def _backend_data_errors(
     if not isinstance(value, dict):
         return ["backendData must be an object"]
     expected_by_backend = {
-        "brep-part": {
-            "exportAudit",
-            "parameters",
-            "printOrientation",
-            "semanticAssembly",
-        },
         "brep-color-regions": {
             "assembly",
             "exportAudit",
@@ -763,6 +757,15 @@ def _backend_data_errors(
         }
         if requires_three_mf:
             expected.update({"internalPartMeshes", "partColors", "printPackageMode", "threeMf"})
+    elif backend == "brep-part":
+        expected = {
+            "exportAudit",
+            "parameters",
+            "printOrientation",
+            "semanticAssembly",
+        }
+        if requires_three_mf:
+            expected.update({"partColors", "printPackageMode", "threeMf"})
     else:
         expected = expected_by_backend.get(backend)
     if expected is None:
@@ -782,6 +785,20 @@ def _backend_data_errors(
         errors.extend(_parameter_errors(value.get("parameters")))
     if backend in {"brep-part", "brep-color-regions"}:
         errors.extend(_orientation_errors(value.get("printOrientation"), "backendData.printOrientation"))
+
+    if backend == "brep-part" and requires_three_mf:
+        if value.get("printPackageMode") != "co_print_body":
+            errors.append("backendData.printPackageMode must be co_print_body")
+        colors = value.get("partColors")
+        if not isinstance(colors, dict) or set(colors) != part_ids or any(
+            not isinstance(color, str) or not re.fullmatch(r"#[0-9A-F]{6}", color)
+            for color in colors.values()
+        ):
+            errors.append(
+                "backendData.partColors must exactly map parts to uppercase #RRGGBB"
+            )
+        if not isinstance(value.get("threeMf"), dict):
+            errors.append("backendData.threeMf must be an object")
 
     if backend == "brep-assembly":
         assembly = value.get("assembly")
@@ -920,7 +937,19 @@ def validate_manifest(data: Any) -> list[str]:
         }
         if backend.startswith("brep-"):
             expected_top_level.add("events")
-        if backend in {"brep-assembly", "brep-color-regions", "hybrid-mesh"}:
+        matrix_parts = (
+            data.get("artifactMatrix", {}).get("parts", {})
+            if isinstance(data.get("artifactMatrix"), dict)
+            else {}
+        )
+        declares_three_mf = any(
+            isinstance(requirements, dict)
+            and requirements.get("threeMf") == "required"
+            for requirements in matrix_parts.values()
+        ) if isinstance(matrix_parts, dict) else False
+        if backend in {"brep-assembly", "brep-color-regions", "hybrid-mesh"} or (
+            backend == "brep-part" and declares_three_mf
+        ):
             expected_top_level.add("materialPlan")
         if backend == "hybrid-mesh":
             expected_top_level.update({
@@ -1243,8 +1272,6 @@ def validate_manifest(data: Any) -> list[str]:
             three_mf_statuses != {"required"}
         ):
             errors.append(f"{backend} requires 3MF for every physical part")
-        if backend == "brep-part" and three_mf_statuses != {"not-applicable"}:
-            errors.append("brep-part must mark 3MF not-applicable")
         if backend == "brep-assembly" and len(three_mf_statuses) > 1:
             errors.append(
                 "brep-assembly cannot mix required and not-applicable 3MF statuses"
@@ -1358,6 +1385,7 @@ def validate_manifest(data: Any) -> list[str]:
                     if isinstance(item, dict)
                 }
                 expected_scopes = {
+                    "brep-part": {"whole-part"},
                     "brep-color-regions": {"brep-region"},
                     "brep-assembly": {"whole-part"},
                     "hybrid-mesh": {"volumetric-region", "whole-part"},

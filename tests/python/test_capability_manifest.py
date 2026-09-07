@@ -126,6 +126,19 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertIn("bind_mesh_feature", binding_helpers)
         self.assertIn("shape", binding_helpers["bind_brep_feature"])
 
+    def test_queries_resolve_public_authoring_and_export_helpers(self):
+        names = ["write_intent", "write_scene", "export_part", "export_assembly", "retained_slider"]
+        manifest = capability_manifest.build_manifest(names)
+        for name in names:
+            with self.subTest(name=name):
+                item = manifest["query"][name]
+                self.assertTrue(item["available"])
+                self.assertIn("signature", item)
+                self.assertTrue(item["description"])
+                self.assertIn("*", item["signature"])
+        self.assertEqual(manifest["query"]["write_intent"]["provider"], "authoring")
+        self.assertIn("out_dir: str='.'", manifest["query"]["export_assembly"]["signature"])
+
 
 if __name__ == "__main__":
     unittest.main()

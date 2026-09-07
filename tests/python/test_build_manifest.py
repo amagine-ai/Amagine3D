@@ -526,11 +526,7 @@ class BuildManifestTests(unittest.TestCase):
         declared = material_record(
             "orange",
             "#F05A35",
-            filament=None,
-            transmission=None,
-            color_status="declared",
-            filament_status="proposed",
-            transmission_status="proposed",
+            status="declared",
         )
         assignment = {
             "materialId": "orange",
@@ -575,11 +571,7 @@ class BuildManifestTests(unittest.TestCase):
             return material_record(
                 material_id,
                 color,
-                filament=None,
-                transmission=None,
-                color_status="proposed",
-                filament_status="proposed",
-                transmission_status="proposed",
+                status="proposed",
             )
 
         for source_kind, source_id, material_id, scene in (

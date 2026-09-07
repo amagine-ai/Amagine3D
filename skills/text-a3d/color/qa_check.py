@@ -129,7 +129,14 @@ def _report_print_record(
     frame = _report_coordinate_frame(report, artifact_key)
     if frame == "plate-print":
         record = report.get("backendData", {}).get("printPlate")
-        return record if isinstance(record, dict) else None
+        if isinstance(record, dict):
+            return record
+        parts = report.get("parts", {})
+        if isinstance(parts, dict) and len(parts) == 1:
+            part = next(iter(parts.values()))
+            record = part.get("print") if isinstance(part, dict) else None
+            return record if isinstance(record, dict) else None
+        return None
     if frame == "part-print":
         part_name = _artifact_part_name(report, artifact_key)
         if part_name is None:
@@ -569,11 +576,17 @@ def evidence_feature_ids(
     return identifiers
 
 
-def print_package_mode(intent: dict | None) -> str:
+def print_package_mode(intent: dict | None, report: dict | None = None) -> str:
     if not isinstance(intent, dict):
         return "invalid"
     mode = intent.get("printability", {}).get("print_package_mode")
-    return mode if mode in PRINT_PACKAGE_MODES else "invalid"
+    if mode in PRINT_PACKAGE_MODES:
+        return mode
+    if intent.get("color_regions") is None and isinstance(report, dict):
+        proposed_mode = report.get("materialPlan", {}).get("packageMode")
+        if proposed_mode in PRINT_PACKAGE_MODES:
+            return proposed_mode
+    return "invalid"
 
 
 def region_continuity_observation(intent: dict | None, report: dict | None) -> dict:
@@ -1129,7 +1142,7 @@ def main() -> int:
                 raise ValueError("build report is not bound to the supplied intent")
             if report.get("inputs", {}).get("profile", {}).get("sha256") != profile_hash:
                 raise ValueError("build report is not bound to the supplied profile")
-            if print_package_mode(intent) == "invalid":
+            if print_package_mode(intent, report) == "invalid":
                 raise ValueError(
                     "printability.print_package_mode must be co_print_body or separate_parts"
                 )
@@ -1148,7 +1161,9 @@ def main() -> int:
                 raise ValueError(
                     "build report has invalid materialPlan: " + "; ".join(plan_errors)
                 )
-            if report["materialPlan"]["packageMode"] != print_package_mode(intent):
+            if report["materialPlan"]["packageMode"] != print_package_mode(
+                intent, report
+            ):
                 raise ValueError(
                     "materialPlan.packageMode does not match intent print_package_mode"
                 )
@@ -1228,7 +1243,7 @@ def main() -> int:
             item["name"]: (item["color"] or "").upper()
             for item in region_inventory
         }
-        expected_package_mode = print_package_mode(intent)
+        expected_package_mode = print_package_mode(intent, report)
         audit.add(
             "print_package_unit",
             str(archive.get("unit", "")).lower() == "millimeter",

@@ -98,6 +98,8 @@ def _function_signatures(path: Path, public_names: set[str]) -> list[dict[str, A
             {
                 "name": statement.name,
                 "parameters": positional + keywords,
+                "signature": f"{statement.name}({ast.unparse(statement.args)})",
+                "description": (ast.get_docstring(statement) or "").split("\n\n")[0],
             }
         )
     return sorted(signatures, key=lambda item: item["name"])
@@ -215,7 +217,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
     )
     authoring_helpers = _function_signatures(
         root / "authoring.py",
-        {"paired_dimensions", "paired_interface"},
+        {"write_intent", "write_scene", "paired_dimensions", "paired_interface"},
     )
     organic_shell_helpers = _function_signatures(
         root / "organic_shell.py",
@@ -229,22 +231,42 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             "checked_fillet",
             "checked_union",
             "observe",
+            "export_part",
+            "export_assembly",
         },
     )
     binding_helpers = _function_signatures(
         root / "geometry_binding.py",
         {"bind_brep_feature", "bind_mesh_feature", "shape_to_mesh"},
     )
+    installation_helpers = _function_signatures(
+        root / "installation_check.py", {"check_installation"},
+    )
     organic_shell_names = {item["name"] for item in organic_shell_helpers}
     geometry_helper_names = {item["name"] for item in geometry_helpers}
     binding_helper_names = {item["name"] for item in binding_helpers}
+    helper_symbols = {
+        item["name"]: {**item, "provider": provider}
+        for provider, helpers in (
+            ("authoring", authoring_helpers),
+            ("cad_helpers", geometry_helpers),
+            ("geometry_binding", binding_helpers),
+            ("installation_check", installation_helpers),
+            ("interface_recipes", interface_helpers),
+            ("organic_shell", organic_shell_helpers),
+        )
+        for item in helpers
+    }
+    all_names = available | helper_symbols.keys()
     query = {
         name: {
-            "available": name in available,
+            "available": name in all_names,
             **(
-                {}
+                helper_symbols[name]
+                if name in helper_symbols
+                else {"provider": "build123d"}
                 if name in available
-                else {"suggestions": get_close_matches(name, sorted(available), n=5)}
+                else {"suggestions": get_close_matches(name, sorted(all_names), n=5)}
             ),
         }
         for name in requested
@@ -285,6 +307,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             "authoringHelpers": authoring_helpers,
             "geometryHelpers": geometry_helpers,
             "geometryBindingHelpers": binding_helpers,
+            "installationHelpers": installation_helpers,
             "interfaceRecipes": interface_helpers,
             "interfaceProofs": proof_capabilities(),
             "modelingRecipes": recipes,
@@ -322,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         print(json.dumps({"error": str(error)}))
         return 2
+    if args.symbol:
+        result = {key: result[key] for key in ("schema", "runtime", "fingerprint", "query")}
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

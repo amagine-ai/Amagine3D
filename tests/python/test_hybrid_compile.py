@@ -265,10 +265,6 @@ def _color_region_fixture(root: Path) -> dict:
                     "boundary": "the complete left half-volume",
                     "evidence": "The left half is navy.",
                     "continuity": "continuous-core",
-                    "material": {
-                        "filament": "Bambu PLA Basic Navy",
-                        "transmission": "opaque",
-                    },
                 },
                 {
                     "name": "right",
@@ -278,10 +274,6 @@ def _color_region_fixture(root: Path) -> dict:
                     "boundary": "the complete right half-volume",
                     "evidence": "The right half is warm white.",
                     "continuity": "continuous-core",
-                    "material": {
-                        "filament": "Bambu PLA Basic Jade White",
-                        "transmission": "translucent",
-                    },
                 },
             ],
         ),
@@ -368,10 +360,6 @@ def _multipart_color_fixture(root: Path) -> dict:
             "boundary": "the complete left half-volume of badge",
             "evidence": "The left badge half is navy.",
             "continuity": "continuous-core",
-            "material": {
-                "filament": "Bambu PLA Basic Navy",
-                "transmission": "opaque",
-            },
         },
         {
             "name": "badge-right",
@@ -381,10 +369,6 @@ def _multipart_color_fixture(root: Path) -> dict:
             "boundary": "the complete right half-volume of badge",
             "evidence": "The right badge half is warm white.",
             "continuity": "continuous-core",
-            "material": {
-                "filament": "Bambu PLA Basic Jade White",
-                "transmission": "translucent",
-            },
         },
         {
             "name": "button",
@@ -394,10 +378,6 @@ def _multipart_color_fixture(root: Path) -> dict:
             "boundary": "the complete separately printable button",
             "evidence": "The button is a single coral material.",
             "continuity": "separate-part",
-            "material": {
-                "filament": "Bambu PLA Basic Red",
-                "transmission": "transparent",
-            },
         },
     ]
     manufacturing = {
@@ -439,8 +419,6 @@ def _multipart_color_fixture(root: Path) -> dict:
         ),
         "units": "mm",
         "coordinateSystem": {"handedness": "right", "up": "Z"},
-        # Filament and transmission intentionally live only in the immutable
-        # intent. The compiler must propagate them into the material plan.
         "materials": [
             {"id": "badge-left", "color": "#112244"},
             {"id": "badge-right", "color": "#F4F4F0"},
@@ -784,7 +762,6 @@ class HybridCompileTests(unittest.TestCase):
                 [
                     {
                         "color": "#112244",
-                        "filament": "Bambu PLA Basic Navy",
                         "materialId": "left",
                         "materialStatus": "declared",
                         "part": "badge",
@@ -792,11 +769,9 @@ class HybridCompileTests(unittest.TestCase):
                         "scope": "volumetric-region",
                         "sourceId": "left",
                         "sourceKind": "intent-color-region",
-                        "transmission": "opaque",
                     },
                     {
                         "color": "#F4F4F0",
-                        "filament": "Bambu PLA Basic Jade White",
                         "materialId": "right",
                         "materialStatus": "declared",
                         "part": "badge",
@@ -804,20 +779,14 @@ class HybridCompileTests(unittest.TestCase):
                         "scope": "volumetric-region",
                         "sourceId": "right",
                         "sourceKind": "intent-color-region",
-                        "transmission": "translucent",
                     },
                 ],
             )
             materials = {
                 item["id"]: item for item in report["materialPlan"]["materials"]
             }
-            self.assertEqual(materials["left"]["filament"], "Bambu PLA Basic Navy")
-            self.assertEqual(materials["left"]["transmission"], "opaque")
-            self.assertEqual(
-                materials["right"]["filament"], "Bambu PLA Basic Jade White"
-            )
-            self.assertEqual(materials["right"]["transmission"], "translucent")
-            self.assertTrue(report["materialPlan"]["requiresManualSlicerAssignment"])
+            self.assertEqual(materials["left"]["status"], "declared")
+            self.assertEqual(materials["right"]["status"], "declared")
             glb = report["artifacts"]["glb:display"]
             expected_region_nodes = [
                 "badge--region--left",
@@ -1045,41 +1014,13 @@ class HybridCompileTests(unittest.TestCase):
             }
             self.assertEqual(
                 {
-                    key: (
-                        value["filament"],
-                        value["transmission"],
-                        value["fieldStatus"],
-                    )
+                    key: value["status"]
                     for key, value in material_by_id.items()
                 },
                 {
-                    "badge-left": (
-                        "Bambu PLA Basic Navy",
-                        "opaque",
-                        {
-                            "color": "declared",
-                            "filament": "declared",
-                            "transmission": "declared",
-                        },
-                    ),
-                    "badge-right": (
-                        "Bambu PLA Basic Jade White",
-                        "translucent",
-                        {
-                            "color": "declared",
-                            "filament": "declared",
-                            "transmission": "declared",
-                        },
-                    ),
-                    "button": (
-                        "Bambu PLA Basic Red",
-                        "transparent",
-                        {
-                            "color": "declared",
-                            "filament": "declared",
-                            "transmission": "declared",
-                        },
-                    ),
+                    "badge-left": "declared",
+                    "badge-right": "declared",
+                    "button": "declared",
                 },
             )
             for checker, artifact in (
@@ -1133,7 +1074,7 @@ class HybridCompileTests(unittest.TestCase):
                 "required",
             )
 
-    def test_scene_color_binding_rejects_id_owner_color_and_material_mismatches(self):
+    def test_scene_color_binding_rejects_id_owner_and_color_mismatches(self):
         mutations = {
             "region-id": lambda scene, intent: scene["parts"][0]["colorRegions"][0].update(
                 {"id": "unknown-left"}
@@ -1143,12 +1084,6 @@ class HybridCompileTests(unittest.TestCase):
             ),
             "color": lambda scene, intent: scene["materials"][0].update(
                 {"color": "#000000"}
-            ),
-            "filament": lambda scene, intent: scene["materials"][0].update(
-                {"filament": "Different PLA"}
-            ),
-            "transmission": lambda scene, intent: scene["materials"][1].update(
-                {"transmission": "opaque"}
             ),
         }
         for name, mutate in mutations.items():
@@ -1167,12 +1102,11 @@ class HybridCompileTests(unittest.TestCase):
                         consistency_samples=64,
                     )
 
-    def test_omitted_intent_material_fields_are_explicitly_proposed(self):
+    def test_declared_intent_color_has_declared_plan_status(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scene = _color_region_fixture(root)
             _, intent = _read_bound_intent(scene, root)
-            intent["color_regions"][1].pop("material")
             _rewrite_bound_intent(scene, root, intent)
 
             report = hybrid_compile.compile_scene(
@@ -1188,24 +1122,12 @@ class HybridCompileTests(unittest.TestCase):
                 if item["id"] == "right"
             )
             self.assertEqual(material["status"], "declared")
-            self.assertIsNone(material["filament"])
-            self.assertIsNone(material["transmission"])
-            self.assertEqual(
-                material["fieldStatus"],
-                {
-                    "color": "declared",
-                    "filament": "proposed",
-                    "transmission": "proposed",
-                },
-            )
             binding = next(
                 item
                 for item in report["materialPlan"]["sourceBindings"]
                 if item["region"] == "right"
             )
             self.assertEqual(binding["materialStatus"], "declared")
-            self.assertIsNone(binding["filament"])
-            self.assertIsNone(binding["transmission"])
 
     def test_hybrid_rejects_internal_regions_on_a_brep_master(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1741,6 +1663,10 @@ class HybridCompileTests(unittest.TestCase):
             self.assertEqual(
                 {item["id"]: item["status"] for item in report["materialPlan"]["materials"]},
                 {"proposed-button": "proposed", "proposed-housing": "proposed"},
+            )
+            self.assertEqual(
+                len({item["color"] for item in report["materialPlan"]["materials"]}),
+                2,
             )
             self.assertEqual(
                 {

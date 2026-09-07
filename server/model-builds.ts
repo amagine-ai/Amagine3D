@@ -49,7 +49,6 @@ function primaryArtifactKey(
     (record) => record.threeMf === 'required',
   );
   if (
-    (backend === 'brep-part' && requiresThreeMf) ||
     (['brep-color-regions', 'hybrid-mesh'].includes(backend) &&
       !requiresThreeMf) ||
     (backend.startsWith('brep-') &&

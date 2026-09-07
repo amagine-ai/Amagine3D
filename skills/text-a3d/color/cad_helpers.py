@@ -858,39 +858,11 @@ def export_regions(
             raise RegionInvariantError(
                 f"intent color for {region_name!r} does not match exported color"
             )
-        material = item.get("material")
-        if material is not None and not isinstance(material, dict):
-            raise RegionInvariantError(
-                f"intent material for {region_name!r} must be an object"
-            )
-        material = material or {}
-        transmission = material.get("transmission")
-        if transmission is not None and transmission not in {
-            "opaque", "translucent", "transparent"
-        }:
-            raise RegionInvariantError(
-                f"intent transmission for {region_name!r} is invalid"
-            )
-        filament = material.get("filament")
-        if filament is not None and (
-            not isinstance(filament, str) or not filament.strip()
-        ):
-            raise RegionInvariantError(
-                f"intent filament for {region_name!r} must be a non-empty string"
-            )
         material_regions.append(
             material_record(
                 region_name,
                 color,
-                filament=filament,
-                transmission=transmission,
-                color_status="declared",
-                filament_status=(
-                    "declared" if "filament" in material else "proposed"
-                ),
-                transmission_status=(
-                    "declared" if "transmission" in material else "proposed"
-                ),
+                status="declared",
             )
         )
         continuity = item.get("continuity")

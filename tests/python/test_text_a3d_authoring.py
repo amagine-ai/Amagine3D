@@ -441,7 +441,6 @@ class AuthoringTests(unittest.TestCase):
                         "boundary": "the complete base physical body",
                         "evidence": "the base color is explicitly chosen",
                         "continuity": "separate-part",
-                        "material": {"transmission": "opaque"},
                     },
                     {
                         "name": "button",
@@ -451,7 +450,6 @@ class AuthoringTests(unittest.TestCase):
                         "boundary": "the complete button physical body",
                         "evidence": "the button color is explicitly chosen",
                         "continuity": "separate-part",
-                        "material": {"transmission": "opaque"},
                     },
                 ],
                 palette_reduction={

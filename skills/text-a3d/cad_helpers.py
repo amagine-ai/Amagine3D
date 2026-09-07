@@ -97,6 +97,7 @@ _material_plan = _load_local_module(
     "material_plan.py",
 )
 build_material_plan = _material_plan.build_material_plan
+distinct_scene_part_color = _material_plan.distinct_scene_part_color
 material_record = _material_plan.material_record
 source_binding = _material_plan.source_binding
 validate_material_sources = _material_plan.validate_material_sources
@@ -120,15 +121,6 @@ _DEFERRED_ISSUES: list[dict] = []
 _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
-_DISPLAY_TINTS = (
-    (155, 167, 179),
-    (112, 142, 166),
-    (176, 151, 118),
-    (124, 158, 130),
-    (168, 132, 148),
-)
-
-
 def _collect_source_diagnostics() -> bool:
     return os.environ.get("AMAGINE3D_SOURCE_PHASE") == "compile"
 
@@ -276,16 +268,109 @@ def _rgb_color(value: str) -> tuple[int, int, int]:
 def _part_color_plan(
     part_colors,
     intent_data: dict,
+    scene_data: dict,
     part_names: set[str],
-) -> tuple[dict[str, str] | None, list[dict] | None]:
+) -> tuple[dict[str, str], list[dict], list[dict]]:
     declared = intent_data.get("color_regions")
-    if part_colors is None:
-        if declared is not None:
+    if part_colors is None and declared is None:
+        scene_parts = {
+            part["id"]: part
+            for part in scene_data.get("parts", [])
+            if isinstance(part, dict) and isinstance(part.get("id"), str)
+        }
+        scene_materials = {
+            material["id"]: material
+            for material in scene_data.get("materials", [])
+            if isinstance(material, dict) and isinstance(material.get("id"), str)
+        }
+        if set(scene_parts) != part_names:
             raise BuildInvariantError(
-                "intent declares color_regions; pass matching part_colors to "
-                "export_assembly"
+                "scene parts must exactly match the exported physical parts"
             )
-        return None, None
+        normalized: dict[str, str] = {}
+        material_by_id: dict[str, dict] = {}
+        bindings: list[dict] = []
+        used_colors = {
+            str(value).upper()
+            for part in scene_parts.values()
+            for value in (
+                part.get("color"),
+                (part.get("appearance") or {}).get("baseColor")
+                if isinstance(part.get("appearance"), dict)
+                else None,
+                (part.get("appearance") or {}).get("color")
+                if isinstance(part.get("appearance"), dict)
+                else None,
+            )
+            if isinstance(value, str) and _HEX_COLOR.fullmatch(value)
+        }
+        used_colors.update(
+            str(material.get("color")).upper()
+            for material in scene_materials.values()
+            if isinstance(material.get("color"), str)
+            and _HEX_COLOR.fullmatch(material["color"])
+        )
+        for part_name in sorted(part_names):
+            scene_part = scene_parts[part_name]
+            explicit_id = scene_part.get("materialId")
+            if isinstance(explicit_id, str):
+                raw_material = scene_materials.get(explicit_id)
+                if raw_material is None:
+                    raise BuildInvariantError(
+                        f"scene part {part_name!r} references unknown material "
+                        f"{explicit_id!r}"
+                    )
+                material_id = explicit_id
+                color = str(raw_material.get("color", "")).upper()
+                source_id = explicit_id
+                source_kind = "scene-part-material"
+            else:
+                material_id = f"proposed-{part_name}"
+                color = distinct_scene_part_color(scene_part, used_colors)
+                source_id = part_name
+                source_kind = "scene-part-appearance"
+            material = material_record(
+                material_id,
+                color,
+                status="proposed",
+            )
+            previous = material_by_id.get(material_id)
+            if previous is not None and previous != material:
+                raise BuildInvariantError(
+                    f"scene material {material_id!r} resolves inconsistently"
+                )
+            material_by_id[material_id] = material
+            normalized[part_name] = material["color"]
+            bindings.append(
+                source_binding(
+                    material=material,
+                    part=part_name,
+                    region=None,
+                    scope="whole-part",
+                    source_id=source_id,
+                    source_kind=source_kind,
+                )
+            )
+        return normalized, list(material_by_id.values()), bindings
+    if part_colors is None:
+        if not isinstance(declared, list):
+            raise BuildInvariantError("intent color_regions must be a list")
+        declared_by_name = {
+            item["name"]: item
+            for item in declared
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        if set(declared_by_name) != part_names or any(
+            declared_by_name[part_name].get("part") != part_name
+            for part_name in part_names
+        ):
+            raise BuildInvariantError(
+                "internal color regions require the matching region export path"
+            )
+        part_colors = {
+            part_name: declared_by_name[part_name].get("hex")
+            for part_name in part_names
+        }
     if not isinstance(part_colors, dict):
         raise BuildInvariantError("part_colors must be a part-name to #RRGGBB object")
     if set(part_colors) != part_names:
@@ -333,35 +418,44 @@ def _part_color_plan(
                 f"intent color for {part_name!r} does not match part_colors"
             )
     package_mode = intent_data.get("printability", {}).get("print_package_mode")
-    if package_mode != "separate_parts":
+    expected_package_mode = (
+        "co_print_body" if len(part_names) == 1 else "separate_parts"
+    )
+    if package_mode != expected_package_mode:
         raise BuildInvariantError(
-            "part-colored multipart assemblies require separate_parts 3MF output"
+            f"declared whole-part colors require {expected_package_mode} 3MF output"
         )
 
     materials = []
     for part_name in normalized:
-        declared_region = declared_by_name[part_name]
-        raw_material = declared_region.get("material")
-        material = raw_material if isinstance(raw_material, dict) else {}
         materials.append(
             material_record(
                 part_name,
                 normalized[part_name],
-                filament=material.get("filament"),
-                transmission=material.get("transmission"),
-                color_status="declared",
-                filament_status=(
-                    "declared" if "filament" in material else "proposed"
-                ),
-                transmission_status=(
-                    "declared" if "transmission" in material else "proposed"
-                ),
+                status="declared",
             )
         )
-    return normalized, materials
+    bindings = [
+        source_binding(
+            material=material,
+            part=material["id"],
+            region=None,
+            scope="whole-part",
+            source_id=material["id"],
+            source_kind="intent-color-region",
+        )
+        for material in materials
+    ]
+    return normalized, materials, bindings
 
 
-def _write_part_color_archive(entries, path: Path, name: str) -> dict:
+def _write_part_color_archive(
+    entries,
+    path: Path,
+    name: str,
+    *,
+    package_mode: str,
+) -> dict:
     """Load the unified color writer lazily and through its package namespace."""
     try:
         from color import export_3mf as color_export_3mf
@@ -379,7 +473,7 @@ def _write_part_color_archive(entries, path: Path, name: str) -> dict:
         return color_export_3mf.write_color_archive(
             entries,
             str(path),
-            package_mode="separate_parts",
+            package_mode=package_mode,
             package_name=name,
         )
     except CadDiagnosticError as error:
@@ -1199,7 +1293,7 @@ def export_part(
     scene_path: str,
     source_path: str,
 ) -> dict:
-    """Export printable STL, display GLB, assembly STEP, and build evidence."""
+    """Export STEP/STL, appearance GLB, optional material 3MF, and evidence."""
     stats = _stats(shape)
     if not stats["valid"] or stats["solid_count"] != 1:
         raise BuildInvariantError(
@@ -1223,6 +1317,13 @@ def export_part(
         raise BuildInvariantError(
             "export_part requires manufacturing.mode='single-part' in the intent"
         )
+    part_colors, materials, material_bindings = _part_color_plan(
+        None,
+        intent_data,
+        scene_data,
+        {name},
+    )
+    manufactured_color = bool(material_bindings)
     intent_path_resolved = Path(intent_path).resolve()
     print_orientation = _select_print_orientation(
         shape,
@@ -1243,13 +1344,71 @@ def export_part(
     try:
         display_components = load_display_components(scene_data, scene_path)
         display_nodes = export_display_glb(
-            ((name, _display_mesh(shape, name), _display_style(_DISPLAY_TINTS[0])),),
+            (
+                (
+                    name,
+                    _display_mesh(shape, name),
+                    _display_style(_rgb_color(part_colors[name])),
+                ),
+            ),
             display_glb_path,
             display_items=display_components,
         )
     except DisplayGlbError as error:
         raise BuildInvariantError(str(error)) from error
     export_stl(print_shape, str(stl_path), tolerance=0.01, angular_tolerance=0.1)
+
+    color_artifacts = {}
+    color_backend_data = {}
+    material_plan = None
+    if manufactured_color:
+        archive_path = output / f"{name}.3mf"
+        three_mf = _write_part_color_archive(
+            [(str(stl_path), part_colors[name], name)],
+            archive_path,
+            name,
+            package_mode="co_print_body",
+        )
+        assignments = [
+            {
+                "materialId": binding["materialId"],
+                "part": binding["part"],
+                "region": binding["region"],
+                "scope": binding["scope"],
+            }
+            for binding in material_bindings
+        ]
+        material_plan = build_material_plan(
+            part=name,
+            package_mode="co_print_body",
+            materials=materials,
+            assignments=assignments,
+            source_bindings=material_bindings,
+        )
+        source_errors = validate_material_sources(
+            material_plan, intent_data, scene_data
+        )
+        if source_errors:
+            raise BuildInvariantError(
+                "invalid material provenance: " + "; ".join(source_errors)
+            )
+        material_plan_path = output / f"{name}_material-plan.json"
+        material_plan_path.write_text(
+            json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
+        )
+        color_artifacts = {
+            "3mf": {
+                **artifact_record(archive_path, coordinateFrame="plate-print"),
+                "validator": "lib3mf",
+                "verified": True,
+            },
+            "materialPlan": artifact_record(material_plan_path),
+        }
+        color_backend_data = {
+            "partColors": part_colors,
+            "printPackageMode": "co_print_body",
+            "threeMf": three_mf,
+        }
 
     try:
         export_audit = audit_exports(
@@ -1288,7 +1447,14 @@ def export_part(
     report = {
         "artifactMatrix": {
             "parts": {
-                name: {"glb": "required", "step": "required", "stl": "required", "threeMf": "not-applicable"}
+                name: {
+                    "glb": "required",
+                    "step": "required",
+                    "stl": "required",
+                    "threeMf": (
+                        "required" if manufactured_color else "not-applicable"
+                    ),
+                }
             }
         },
         "artifacts": {
@@ -1300,6 +1466,7 @@ def export_part(
                 **artifact_record(display_glb_path, coordinateFrame="semantic"),
                 **display_nodes,
             },
+            **color_artifacts,
             "exportAudit": artifact_record(export_audit_path),
         },
         "autoScale": False,
@@ -1309,6 +1476,7 @@ def export_part(
             "parameters": dict(_PARAMETERS),
             "printOrientation": print_orientation,
             "semanticAssembly": semantic_assembly,
+            **color_backend_data,
         },
         "builtAt": utc_timestamp(),
         "coordinateFrames": {
@@ -1346,6 +1514,7 @@ def export_part(
         "scale": 1.0,
         "schema": "evidence-a3d-build/v1",
         "warnings": [],
+        **({"materialPlan": material_plan} if material_plan is not None else {}),
     }
     manifest_errors = validate_manifest(report)
     if manifest_errors:
@@ -1370,11 +1539,12 @@ def export_assembly(
     max_overlap_mm3: float = 0.01,
     part_colors: dict[str, str] | None = None,
 ) -> dict:
-    """Export a BRep-master multi-part assembly, optionally colored by part.
+    """Export a BRep-master multi-part assembly with whole-part color.
 
     Each named part must be one valid solid. The top-level STL is an arranged
     print plate, while the STEP master and display GLB keep semantic assembly
-    coordinates. When ``part_colors`` is supplied, the same plate-aligned
+    coordinates. ``part_colors`` binds declared intent colors; otherwise scene
+    appearance or stable proposed colors are used. The same plate-aligned
     physical parts become a separate-parts 3MF; no export path applies scale.
     """
     if not isinstance(parts, dict) or len(parts) < 2:
@@ -1404,9 +1574,10 @@ def export_assembly(
     manufacturing = _validate_assembly_intent(
         intent_path_resolved, name, set(normalized)
     )
-    normalized_colors, material_regions = _part_color_plan(
+    normalized_colors, material_regions, material_bindings = _part_color_plan(
         part_colors,
         intent_data,
+        scene_data,
         set(normalized),
     )
     _validate_assembly_evidence(set(normalized))
@@ -1460,11 +1631,28 @@ def export_assembly(
                 ):
                     continue
 
+    # Reuse the single-part orientation policy before packing. Semantic solids
+    # remain untouched; individual STLs and the 3MF use the same selected pose.
+    print_orientations = {
+        part_name: _select_print_orientation(shape, plate_profile, intent_data=intent_data)
+        for part_name, (shape, _) in normalized.items()
+    }
+    oriented_parts = {
+        part_name: _apply_print_orientation(shape, print_orientations[part_name])
+        for part_name, (shape, _) in normalized.items()
+    }
     # Prove the profile-bound plate layout before writing export artifacts.
     print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
-        {part_name: shape for part_name, (shape, _) in normalized.items()},
+        oriented_parts,
         profile=plate_profile,
     )
+    for part_name, transform in plate_transforms.items():
+        semantic_to_part = _orientation_transform(print_orientations[part_name])
+        transform["matrix"] = (
+            np.asarray(transform["matrix"]) @ np.asarray(semantic_to_part["matrix"])
+        ).round(10).tolist()
+    plate_layout["orientations"] = print_orientations
+    plate_layout["inputFrame"] = "part-print"
     print_plate_stats = _stats(print_plate)
     if not print_plate_stats["valid"]:
         raise BuildInvariantError("print plate geometry is invalid")
@@ -1475,7 +1663,8 @@ def export_assembly(
     children = []
     print_parts = {}
     for part_name, (shape, stats) in normalized.items():
-        print_shape, print_transform = _print_part(shape)
+        print_shape = oriented_parts[part_name]
+        print_transform = _orientation_transform(print_orientations[part_name])
         path = output / f"{name}-{part_name}.stl"
         export_stl(print_shape, str(path), tolerance=0.01, angular_tolerance=0.1)
         artifacts[f"stl:{part_name}"] = {
@@ -1528,13 +1717,9 @@ def export_assembly(
                 (
                     part_name,
                     _display_mesh(shape, part_name),
-                    _display_style(
-                        _rgb_color(normalized_colors[part_name])
-                        if normalized_colors is not None
-                        else _DISPLAY_TINTS[index % len(_DISPLAY_TINTS)]
-                    ),
+                    _display_style(_rgb_color(normalized_colors[part_name])),
                 )
-                for index, (part_name, (shape, _)) in enumerate(normalized.items())
+                for part_name, (shape, _) in normalized.items()
             ),
             display_glb_path,
             display_items=display_components,
@@ -1555,91 +1740,83 @@ def export_assembly(
         **display_nodes,
     }
 
-    color_fields = {}
-    material_plan = None
-    if normalized_colors is not None and material_regions is not None:
-        internal_plate_dir = output / ".amagine3d-internal" / name / "plate"
-        internal_plate_dir.mkdir(parents=True, exist_ok=True)
-        internal_plate_meshes = {}
-        entries = []
-        for part_name, shape in plate_parts.items():
-            path = internal_plate_dir / f"{name}-{part_name}.stl"
-            export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
-            internal_plate_meshes[part_name] = {
-                "coordinate_frame": "plate-print",
-                "path": str(path.resolve()),
-                "scale": 1.0,
-                "sha256": _digest(path),
-            }
-            artifacts[f"plate-stl:{part_name}"] = {
-                "coordinateFrame": "plate-print",
-                "path": str(path.resolve()),
-                "sha256": _digest(path),
-            }
-            audit_stls[f"plate-stl:{part_name}"] = (
-                path,
-                export_geometry_record(shape),
-            )
-            entries.append((str(path), normalized_colors[part_name], part_name))
-
-        archive_path = output / f"{name}.3mf"
-        three_mf = _write_part_color_archive(entries, archive_path, name)
-        artifacts["3mf"] = {
-            "coordinateFrame": "plate-print",
-            "path": str(archive_path.resolve()),
+    internal_plate_dir = output / ".amagine3d-internal" / name / "plate"
+    internal_plate_dir.mkdir(parents=True, exist_ok=True)
+    internal_plate_meshes = {}
+    entries = []
+    for part_name, shape in plate_parts.items():
+        path = internal_plate_dir / f"{name}-{part_name}.stl"
+        export_stl(shape, str(path), tolerance=0.01, angular_tolerance=0.1)
+        internal_plate_meshes[part_name] = {
+            "coordinate_frame": "plate-print",
+            "path": str(path.resolve()),
             "scale": 1.0,
-            "sha256": _digest(archive_path),
-            "validator": "lib3mf",
-            "verified": True,
+            "sha256": _digest(path),
         }
+        artifacts[f"plate-stl:{part_name}"] = {
+            "coordinateFrame": "plate-print",
+            "path": str(path.resolve()),
+            "sha256": _digest(path),
+        }
+        audit_stls[f"plate-stl:{part_name}"] = (
+            path,
+            export_geometry_record(shape),
+        )
+        entries.append((str(path), normalized_colors[part_name], part_name))
 
-        assignments = [
-            {
-                "materialId": material["id"],
-                "part": material["id"],
-                "region": None,
-                "scope": "whole-part",
-            }
-            for material in material_regions
-        ]
-        material_plan = build_material_plan(
-            part=name,
-            package_mode="separate_parts",
-            materials=material_regions,
-            assignments=assignments,
-            source_bindings=[
-                source_binding(
-                    material=material,
-                    part=material["id"],
-                    region=None,
-                    scope="whole-part",
-                    source_id=material["id"],
-                    source_kind="intent-color-region",
-                )
-                for material in material_regions
-            ],
-        )
-        source_errors = validate_material_sources(
-            material_plan, intent_data, scene_data
-        )
-        if source_errors:
-            raise BuildInvariantError(
-                "invalid material provenance: " + "; ".join(source_errors)
-            )
-        material_plan_path = output / f"{name}_material-plan.json"
-        material_plan_path.write_text(
-            json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
-        )
-        artifacts["materialPlan"] = {
-            "path": str(material_plan_path.resolve()),
-            "sha256": _digest(material_plan_path),
+    archive_path = output / f"{name}.3mf"
+    three_mf = _write_part_color_archive(
+        entries,
+        archive_path,
+        name,
+        package_mode="separate_parts",
+    )
+    artifacts["3mf"] = {
+        "coordinateFrame": "plate-print",
+        "path": str(archive_path.resolve()),
+        "scale": 1.0,
+        "sha256": _digest(archive_path),
+        "validator": "lib3mf",
+        "verified": True,
+    }
+
+    assignments = [
+        {
+            "materialId": binding["materialId"],
+            "part": binding["part"],
+            "region": binding["region"],
+            "scope": binding["scope"],
         }
-        color_fields = {
-            "internalPartMeshes": {"plate-print": internal_plate_meshes},
-            "partColors": normalized_colors,
-            "printPackageMode": "separate_parts",
-            "threeMf": three_mf,
-        }
+        for binding in material_bindings
+    ]
+    material_plan = build_material_plan(
+        part=name,
+        package_mode="separate_parts",
+        materials=material_regions,
+        assignments=assignments,
+        source_bindings=material_bindings,
+    )
+    source_errors = validate_material_sources(
+        material_plan, intent_data, scene_data
+    )
+    if source_errors:
+        raise BuildInvariantError(
+            "invalid material provenance: " + "; ".join(source_errors)
+        )
+    material_plan_path = output / f"{name}_material-plan.json"
+    material_plan_path.write_text(
+        json.dumps(material_plan, indent=2) + "\n", encoding="utf-8"
+    )
+    artifacts["materialPlan"] = {
+        "path": str(material_plan_path.resolve()),
+        "sha256": _digest(material_plan_path),
+    }
+    color_fields = {
+        "internalPartMeshes": {"plate-print": internal_plate_meshes},
+        "partColors": normalized_colors,
+        "printPackageMode": "separate_parts",
+        "threeMf": three_mf,
+    }
 
     try:
         export_audit = audit_exports(
@@ -1711,9 +1888,7 @@ def export_assembly(
                     "glb": "required",
                     "step": "required",
                     "stl": "required",
-                    "threeMf": (
-                        "required" if normalized_colors is not None else "not-applicable"
-                    ),
+                    "threeMf": "required",
                 }
                 for part_name in normalized
             }

@@ -116,6 +116,7 @@ class CadDiagnosticsTests(unittest.TestCase):
                             [(str(mesh_path), "#112233", "freeform-shell")],
                             root / "model.3mf",
                             "model",
+                            package_mode="separate_parts",
                         )
 
             payload = json.loads(output.getvalue())

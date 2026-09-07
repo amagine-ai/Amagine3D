@@ -262,6 +262,75 @@ def _pack_order(
     return {"order": order, "placements": placements, "shelves": shelves}
 
 
+def _subtract_rectangle(free: list[list[float]], occupied: list[float]) -> list[list[float]]:
+    """Keep maximal free rectangles; overlapping free regions are intentional."""
+    split = []
+    for rect in free:
+        if not _intersects(rect, occupied):
+            split.append(rect)
+            continue
+        x0, y0, x1, y1 = rect
+        ox0, oy0, ox1, oy1 = occupied
+        if x0 < ox0 < x1:
+            split.append([x0, y0, ox0, y1])
+        if x0 < ox1 < x1:
+            split.append([ox1, y0, x1, y1])
+        if y0 < oy0 < y1:
+            split.append([x0, y0, x1, oy0])
+        if y0 < oy1 < y1:
+            split.append([x0, oy1, x1, y1])
+    unique = sorted(set(tuple(rect) for rect in split))
+    return [
+        list(rect) for rect in unique
+        if not any(
+            other != rect
+            and other[0] <= rect[0] and other[1] <= rect[1]
+            and other[2] >= rect[2] and other[3] >= rect[3]
+            for other in unique
+        )
+    ]
+
+
+def _pack_free_rectangles(order: list[str], parts: dict, limits: dict, spacing: float) -> dict | None:
+    """Reuse gaps above short parts that a shelf cursor cannot revisit.
+
+    Reserve spacing on each footprint's +X/+Y edges, extending the bed by that
+    same amount so touching a bed edge remains legal. Never rotate or scale.
+    """
+    x0, y0, x1, y1 = limits["bounds_mm"]
+    free = [[x0, y0, x1 + spacing, y1 + spacing]]
+    for ex0, ey0, ex1, ey1 in limits["excluded_bounds_mm"]:
+        free = _subtract_rectangle(free, [ex0, ey0, ex1 + spacing, ey1 + spacing])
+    placements = {}
+    for name in order:
+        width, depth, _ = parts[name]["size"]
+        choices = [
+            rect for rect in free
+            if width + spacing <= rect[2] - rect[0] + _EPSILON
+            and depth + spacing <= rect[3] - rect[1] + _EPSILON
+        ]
+        if not choices:
+            return None
+        rect = min(choices, key=lambda r: (r[1], r[0], r[2], r[3]))
+        x, y = rect[:2]
+        placements[name] = {
+            "plate_bbox_xy_mm": [x, y, x + width, y + depth],
+            "shelf": None,
+        }
+        free = _subtract_rectangle(free, [x, y, x + width + spacing, y + depth + spacing])
+    return {
+        "order": order,
+        "placements": placements,
+        "shelves": [],
+        "strategy": "deterministic-bbox-maxrects",
+        "score": (
+            round(max(p["plate_bbox_xy_mm"][3] for p in placements.values()) - y0, 9),
+            round(max(p["plate_bbox_xy_mm"][2] for p in placements.values()) - x0, 9),
+            tuple(order),
+        ),
+    }
+
+
 def pack_bboxes(
     bboxes: Mapping[str, Mapping],
     profile: dict,
@@ -318,11 +387,18 @@ def pack_bboxes(
             f"{name}={part['size'][0]:.5g}x{part['size'][1]:.5g} mm"
             for name, part in sorted(parts.items())
         )
-        raise PlateLayoutError(
-            "single-plate bbox shelf layout failed at scale=1: "
-            f"parts [{sizes}] do not fit usable bed {bed_width:.5g}x"
-            f"{bed_depth:.5g} mm with {spacing:.5g} mm spacing; scaling is disabled"
-        )
+        for order in _orderings(parts):
+            candidate = _pack_free_rectangles(order, parts, limits, spacing)
+            if candidate is not None:
+                candidates.append(candidate)
+        if not candidates:
+            raise PlateLayoutError(
+                "single-plate heuristic layout failed at scale=1: no placement found "
+                f"for parts [{sizes}] on usable bed {bed_width:.5g}x"
+                f"{bed_depth:.5g} mm with {spacing:.5g} mm spacing; scaling is disabled. "
+                "This is not proof of infeasibility. Review packing or plate grouping "
+                "without changing the design dimensions."
+            )
 
     selected = min(candidates, key=lambda item: item["score"])
     transforms = {}
@@ -388,6 +464,6 @@ def pack_bboxes(
         "scale": 1.0,
         "shelves": shelves,
         "spacing_mm": round(spacing, 5),
-        "strategy": "deterministic-bbox-shelf",
+        "strategy": selected.get("strategy", "deterministic-bbox-shelf"),
         "transforms": transforms,
     }

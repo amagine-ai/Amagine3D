@@ -58,7 +58,6 @@ TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._/-]*")
 REVISION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 HEX_COLOR_PATTERN = re.compile(r"#[0-9A-Fa-f]{6}")
-MATERIAL_TRANSMISSIONS = {"opaque", "translucent", "transparent"}
 INTENT_ONLY_FIELDS = {
     "assumptions",
     "dimensions_mm",
@@ -1318,19 +1317,6 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             color = material.get("color")
             if not isinstance(color, str) or not HEX_COLOR_PATTERN.fullmatch(color):
                 errors.append(f"{path}.color must be #RRGGBB")
-            filament = material.get("filament")
-            if filament is not None and (
-                not isinstance(filament, str) or not filament.strip()
-            ):
-                errors.append(f"{path}.filament must be a non-empty string or null")
-            transmission = material.get("transmission")
-            if (
-                transmission is not None
-                and transmission not in MATERIAL_TRANSMISSIONS
-            ):
-                errors.append(
-                    f"{path}.transmission must be opaque, translucent, transparent, or null"
-                )
         if len(material_ids) != len(set(material_ids)):
             errors.append("material ids must be unique")
 

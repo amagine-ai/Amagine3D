@@ -969,6 +969,15 @@ class SinglePartOrientationExportTests(unittest.TestCase):
                 ["glb:display", "step:tower", "stl:tower"],
             )
             self.assertTrue((root / "tower_export-audit.json").is_file())
+            self.assertTrue((root / "tower.3mf").is_file())
+            self.assertTrue((root / "tower_material-plan.json").is_file())
+            self.assertEqual(
+                report["materialPlan"]["materials"][0]["status"], "proposed"
+            )
+            self.assertEqual(
+                report["materialPlan"]["sourceBindings"][0]["scope"],
+                "whole-part",
+            )
 
             self.assertEqual(
                 report["parts"]["tower"]["semantic"]["boundsMm"]["size"],
@@ -1133,8 +1142,22 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             cad_helpers._part_color_plan(
                 {"base": "#E8E0D4", "lid": "#20242A"},
                 intent,
+                {},
                 {"base", "lid"},
             )
+        intent["printability"]["print_package_mode"] = "separate_parts"
+        colors, materials, bindings = cad_helpers._part_color_plan(
+            None,
+            intent,
+            {},
+            {"base", "lid"},
+        )
+        self.assertEqual(colors, {"base": "#E8E0D4", "lid": "#20242A"})
+        self.assertTrue(all(item["status"] == "declared" for item in materials))
+        self.assertEqual(
+            {item["sourceKind"] for item in bindings},
+            {"intent-color-region"},
+        )
 
     def setUp(self):
         cad_helpers._FEATURES.clear()
@@ -1264,7 +1287,7 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             self.assertTrue(report["backendData"]["exportAudit"]["pass"])
             self.assertIn("exportAudit", report["artifacts"])
             self.assertEqual(
-                len(report["backendData"]["exportAudit"]["artifacts"]), 7
+                len(report["backendData"]["exportAudit"]["artifacts"]), 9
             )
 
             self.assertEqual(report["schema"], "evidence-a3d-build/v1")
@@ -1289,9 +1312,30 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 ["status-surface"],
             )
             self.assertNotIn("status-surface", report["parts"])
-            self.assertFalse((root / "case.3mf").exists())
-            self.assertFalse((root / "case_material-plan.json").exists())
-            self.assertNotIn("part_colors", report)
+            self.assertTrue((root / "case.3mf").is_file())
+            self.assertTrue((root / "case_material-plan.json").is_file())
+            self.assertEqual(
+                report["backendData"]["printPackageMode"], "separate_parts"
+            )
+            self.assertEqual(
+                set(report["backendData"]["partColors"]),
+                {"lower-shell", "top-lid"},
+            )
+            self.assertEqual(
+                len(set(report["backendData"]["partColors"].values())),
+                2,
+            )
+            self.assertTrue(all(
+                material["status"] == "proposed"
+                for material in report["materialPlan"]["materials"]
+            ))
+            self.assertEqual(
+                {
+                    binding["sourceKind"]
+                    for binding in report["materialPlan"]["sourceBindings"]
+                },
+                {"scene-part-appearance"},
+            )
 
             audit = assembly_check.audit_report(
                 root / "case_report.json",
@@ -1518,10 +1562,6 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                         "boundary": "complete base physical part",
                         "evidence": "The housing is warm ivory.",
                         "acceptance": "The base is encoded as ivory.",
-                        "material": {
-                            "filament": "Ivory PLA",
-                            "transmission": "opaque",
-                        },
                     },
                     {
                         "name": "lid",
@@ -1531,7 +1571,6 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                         "boundary": "complete lid physical part",
                         "evidence": "The cover is dark graphite.",
                         "acceptance": "The lid is encoded as graphite.",
-                        "material": {"transmission": "opaque"},
                     },
                 ],
                 "palette_reduction": {
@@ -1960,7 +1999,6 @@ class ContractTests(unittest.TestCase):
                 "purpose": "contrasting lid",
                 "boundary": "complete lid part",
                 "evidence": "lid is dark graphite",
-                "material": {"transmission": "opaque"},
             },
         ]
         data["palette_reduction"] = {

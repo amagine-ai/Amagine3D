@@ -712,15 +712,10 @@ def _intent_materials(intent: Mapping[str, Any]) -> list[dict[str, Any]]:
     for region in intent.get("color_regions", []):
         if not isinstance(region, Mapping):
             continue
-        material = region.get("material")
         record: dict[str, Any] = {
             "id": region.get("name"),
             "color": str(region.get("hex", "")).upper(),
         }
-        if isinstance(material, Mapping):
-            for field in ("filament", "transmission"):
-                if field in material:
-                    record[field] = material[field]
         materials.append(record)
     return materials
 
