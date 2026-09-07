@@ -17,6 +17,7 @@ export interface ModelBuild {
   primaryPreviewPath: string;
   reportPath: string;
   sourcePath?: string;
+  topLevelArtifactPaths: string[];
 }
 
 function safeRelativePath(root: string, candidate: string): string | undefined {
@@ -108,14 +109,25 @@ export async function discoverModelBuilds(
     const sourcePath = validated.inputPaths.source
       ? safeRelativePath(canonicalRoot, validated.inputPaths.source)
       : undefined;
-    builds.push({
-      artifactPaths: [
-        ...new Set(
-          Object.values(validated.artifactPaths)
-            .map((path) => safeRelativePath(canonicalRoot, path))
-            .filter((path): path is string => Boolean(path)),
+    const artifactPaths = [
+      ...new Set(
+        Object.values(validated.artifactPaths)
+          .map((path) => safeRelativePath(canonicalRoot, path))
+          .filter((path): path is string => Boolean(path)),
+      ),
+    ];
+    const topLevelArtifactPaths = [
+      displayPreviewPath,
+      primaryPreviewPath,
+      ...['3mf', 'stl'].map((key) =>
+        safeRelativePath(
+          canonicalRoot,
+          validated.artifactPaths[key] ?? '',
         ),
-      ],
+      ),
+    ].filter((path): path is string => Boolean(path));
+    builds.push({
+      artifactPaths,
       displayPreviewPath,
       modelId:
         typeof report.part === 'string' && report.part.trim()
@@ -124,6 +136,7 @@ export async function discoverModelBuilds(
       primaryPreviewPath,
       reportPath: artifact.path,
       ...(sourcePath ? { sourcePath } : {}),
+      topLevelArtifactPaths: [...new Set(topLevelArtifactPaths)],
     });
   }
   return builds.sort((left, right) =>

@@ -32,6 +32,10 @@ test('uses the artifact matrix to choose the unified print root', async () => {
       byId.get('color-case')?.displayPreviewPath,
       'color-case-display.glb',
     );
+    assert.deepEqual(
+      byId.get('color-case')?.topLevelArtifactPaths.sort(),
+      ['color-case-display.glb', 'color-case.3mf'],
+    );
     assert.equal(byId.get('plain-case')?.sourcePath, 'plain-case.py');
   } finally {
     await rm(root, { force: true, recursive: true });

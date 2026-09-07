@@ -109,9 +109,18 @@ test('honors the explicit preview of a bundled project', () => {
 test('shows GLB, 3MF, and only the matching top-level STL in the file section', () => {
   const artifacts = [
     artifact('part.py', 'source'),
-    model('part-display.glb', 'glb', '2026-08-23T08:00:05.000Z'),
-    model('part.3mf', '3mf', '2026-08-23T08:00:04.500Z'),
-    model('part.stl', 'stl', '2026-08-23T08:00:04.250Z'),
+    {
+      ...model('part-display.glb', 'glb', '2026-08-23T08:00:05.000Z'),
+      primary: true,
+    },
+    {
+      ...model('part.3mf', '3mf', '2026-08-23T08:00:04.500Z'),
+      primary: true,
+    },
+    {
+      ...model('part.stl', 'stl', '2026-08-23T08:00:04.250Z'),
+      primary: true,
+    },
     model('part-shell.stl', 'stl', '2026-08-23T08:00:04.100Z'),
     model('part-assemble.step', undefined, '2026-08-23T08:00:04.000Z'),
     artifact('preview.PNG', 'image'),
@@ -128,9 +137,13 @@ test('pins the preferred visible model at the top of the file section', () => {
   const preferred = {
     ...model('shell_case-display.glb', 'glb', '2026-08-23T08:00:01.000Z'),
     featured: true,
+    primary: true,
   };
   const artifacts = [
-    model('shell_case.stl', 'stl', '2026-08-23T08:00:05.000Z'),
+    {
+      ...model('shell_case.stl', 'stl', '2026-08-23T08:00:05.000Z'),
+      primary: true,
+    },
     artifact('preview.png', 'image', '2026-08-23T08:00:04.000Z'),
     model('shell_case-top-lid.stl', 'stl', '2026-08-23T08:00:03.000Z'),
     preferred,
@@ -141,5 +154,30 @@ test('pins the preferred visible model at the top of the file section', () => {
       'shell_case-display.glb',
       'shell_case.stl',
     ],
+  );
+});
+
+test('uses valid-build primary metadata to hide orphaned model revisions', () => {
+  const artifacts = [
+    {
+      ...model('ninekey-display.glb', 'glb', '2026-08-23T09:00:00.000Z'),
+      featured: true,
+      primary: true,
+    },
+    {
+      ...model('ninekey.3mf', '3mf', '2026-08-23T09:00:00.000Z'),
+      primary: true,
+    },
+    {
+      ...model('ninekey.stl', 'stl', '2026-08-23T09:00:00.000Z'),
+      primary: true,
+    },
+    model('relocated/a.glb', 'glb', '2026-08-23T08:00:00.000Z'),
+    model('relocated/b.3mf', '3mf', '2026-08-23T08:00:00.000Z'),
+    model('relocated/c.stl', 'stl', '2026-08-23T08:00:00.000Z'),
+  ];
+  assert.deepEqual(
+    fileSectionArtifacts(artifacts).map(({ path }) => path),
+    ['ninekey-display.glb', 'ninekey.3mf', 'ninekey.stl'],
   );
 });

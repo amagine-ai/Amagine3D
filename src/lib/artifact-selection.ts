@@ -28,6 +28,7 @@ export function preferredDisplayPreviewArtifact(
     .sort(
       (left, right) =>
         Number(Boolean(right.featured)) - Number(Boolean(left.featured)) ||
+        Number(Boolean(right.primary)) - Number(Boolean(left.primary)) ||
         Number(right.path.endsWith('-display.glb')) -
           Number(left.path.endsWith('-display.glb')) ||
         modifiedTime(right) - modifiedTime(left) ||
@@ -49,6 +50,7 @@ export function preferredPrintPreviewArtifact(
     .sort(
       (left, right) =>
         Number(Boolean(right.featured)) - Number(Boolean(left.featured)) ||
+        Number(Boolean(right.primary)) - Number(Boolean(left.primary)) ||
         modifiedTime(right) - modifiedTime(left) ||
         Number(right.format === '3mf') - Number(left.format === '3mf') ||
         left.path.localeCompare(right.path),
@@ -72,33 +74,15 @@ function isPreviewModel(artifact: ArtifactSummary): boolean {
   );
 }
 
-function previewStem(artifact: ArtifactSummary): string {
-  const extension = `.${artifact.format ?? ''}`;
-  const stem = artifact.path.slice(0, -extension.length);
-  return artifact.format === 'glb'
-    ? stem.replace(/(?:-display|_display)$/u, '')
-    : stem;
-}
-
 export function fileSectionArtifacts(
   artifacts: readonly ArtifactSummary[],
 ): ArtifactSummary[] {
   const preferredPath = defaultPreviewArtifact(artifacts)?.path;
-  const topLevelStems = new Set(
-    artifacts
-      .filter(
-        (artifact) =>
-          isPreviewModel(artifact) &&
-          (artifact.format === 'glb' || artifact.format === '3mf'),
-      )
-      .map(previewStem),
-  );
   return artifacts
     .map((artifact, index) => ({ artifact, index }))
     .filter(
       ({ artifact }) =>
-        isPreviewModel(artifact) &&
-        (artifact.format !== 'stl' || topLevelStems.has(previewStem(artifact))),
+        isPreviewModel(artifact) && artifact.primary === true,
     )
     .sort(
       (left, right) =>

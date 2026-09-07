@@ -22,6 +22,7 @@ function asBundledArtifact(artifact: ArtifactSummary): ArtifactSummary {
   return {
     ...artifact,
     featured: artifact.name === BUNDLED_POMODORO_PREVIEW,
+    primary: artifact.name === BUNDLED_POMODORO_PREVIEW,
     readOnly: true,
     url: `/api/bundled-artifacts/file?path=${encodeURIComponent(artifact.path)}`,
   };

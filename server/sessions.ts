@@ -260,14 +260,17 @@ export async function userSessionArtifacts(
   const root = sessionWorkspaceRoot(workspaceRoot, sessionId);
   if (!root) return undefined;
   const scannedArtifacts = await scanArtifacts(root);
+  const builds = await discoverModelBuilds(root, scannedArtifacts);
   const featuredPaths = new Set(
-    (await discoverModelBuilds(root, scannedArtifacts)).map(
-      ({ displayPreviewPath }) => displayPreviewPath,
-    ),
+    builds.map(({ displayPreviewPath }) => displayPreviewPath),
+  );
+  const primaryPaths = new Set(
+    builds.flatMap(({ topLevelArtifactPaths }) => topLevelArtifactPaths),
   );
   const artifacts = scannedArtifacts.map((artifact) => ({
     ...artifact,
     ...(featuredPaths.has(artifact.path) ? { featured: true } : {}),
+    ...(primaryPaths.has(artifact.path) ? { primary: true } : {}),
     url: `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/file?path=${encodeURIComponent(artifact.path)}`,
   }));
   return {

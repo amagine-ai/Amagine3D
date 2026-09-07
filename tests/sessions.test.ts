@@ -99,6 +99,13 @@ test('discovers only artifacts from the selected session and features its displa
       collection?.artifacts.find(({ featured }) => featured)?.path,
       'part-display.glb',
     );
+    assert.deepEqual(
+      collection?.artifacts
+        .filter(({ primary }) => primary)
+        .map(({ path }) => path)
+        .sort(),
+      ['part-display.glb', 'part.stl'],
+    );
     assert.equal(sessionWorkspaceRoot(root, '../escape'), undefined);
   } finally {
     await rm(root, { force: true, recursive: true });

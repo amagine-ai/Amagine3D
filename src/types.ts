@@ -83,6 +83,7 @@ export interface ArtifactSummary {
   modifiedAt: string;
   name: string;
   path: string;
+  primary?: boolean;
   readOnly?: boolean;
   size: number;
   url: string;
