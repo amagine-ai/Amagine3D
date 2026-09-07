@@ -10,7 +10,7 @@ import { translator } from './types';
 interface LeftPanelProps {
   chat: ChatPanelProps;
   collapsed: boolean;
-  connectionStatus: string;
+  connectionStatus: string | undefined;
   files: FilesPanelProps;
   language: Language;
   menuOpen: boolean;
@@ -116,11 +116,13 @@ export function LeftPanel({
                 ))}
               </div>
             ) : null}
-            <small>
-              {sessionLoading
-                ? text('Loading session…', '正在载入会话…')
-                : connectionStatus}
-            </small>
+            {sessionLoading || connectionStatus ? (
+              <small>
+                {sessionLoading
+                  ? text('Loading session…', '正在载入会话…')
+                  : connectionStatus}
+              </small>
+            ) : null}
           </div>
         </div>
         <div className={styles.panelControls}>

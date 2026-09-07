@@ -573,7 +573,7 @@ export function CadWorkbench({
       }
       if (!health.python.ready) return text('Python unavailable', 'Python 未就绪');
       if (!health.configured) return text('API key required', '等待配置密钥');
-      return text('Ready for a new CAD request.', '可以开始新的 CAD 请求。');
+      return undefined;
     }, [health, healthError, language]);
 
     function updateDraft(
@@ -913,7 +913,6 @@ export function CadWorkbench({
             onSelect: selectArtifact,
             selectionScope: sessionId,
             selectedPath,
-            workspaceName: artifactWorkspaceName,
           }}
           language={language}
           menuOpen={sessionMenuOpen}

@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 
@@ -10,6 +11,7 @@ import type { ArtifactSummary } from '../../types';
 import type { Language, RuntimeEntry } from './types';
 import { translator } from './types';
 import { LoadingSpinner } from './WorkbenchPrimitives';
+import type { ViewerStatus } from '../CadViewer';
 
 const CadViewer = lazy(() =>
   import('../CadViewer').then((module) => ({ default: module.CadViewer })),
@@ -17,7 +19,7 @@ const CadViewer = lazy(() =>
 
 interface PreviewPanelProps {
   activity: string;
-  connectionStatus: string;
+  connectionStatus: string | undefined;
   language: Language;
   logCollapsed: boolean;
   onLogResize: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -51,6 +53,10 @@ export function PreviewPanel({
   selectedText,
 }: PreviewPanelProps) {
   const text = translator(language);
+  const [viewerStatus, setViewerStatus] = useState<ViewerStatus>({
+    state: 'empty',
+    text: 'Waiting for model data',
+  });
   const headingArtifact =
     selectedArtifact?.kind === 'image' || selectedText !== undefined
       ? selectedArtifact
@@ -65,19 +71,28 @@ export function PreviewPanel({
         <div className={styles.canvasHeading}>
           <div className={styles.canvasHeadingCopy}>
             <h2>{headingArtifact?.name ?? text('Model preview', '模型预览')}</h2>
-            <span className={styles.canvasLabel}>
-              {headingArtifact?.path ?? connectionStatus}
-            </span>
+            {headingArtifact?.path ?? connectionStatus ? (
+              <span className={styles.canvasLabel}>
+                {headingArtifact?.path ?? connectionStatus}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className={styles.canvasMeta}>
-          {running ? (
-            <span className={styles.buildingState}>
-              <LoadingSpinner />
-              {text('Building…', '构建中…')}
+          {selectedArtifact?.kind !== 'image' && selectedText === undefined ? (
+            <span
+              className={styles.viewerSummary}
+              data-status={viewerStatus.state}
+            >
+              <span aria-hidden="true" className={styles.statusMark} />
+              <span>{viewerStatus.text}</span>
             </span>
           ) : null}
-          <span className={styles.phase}>
+          <span
+            aria-live="polite"
+            className={styles.phase}
+            data-state={running ? 'running' : runtimeReady ? 'ready' : 'offline'}
+          >
             {running ? 'RUNNING' : runtimeReady ? 'READY' : 'OFFLINE'}
           </span>
           <button
@@ -123,7 +138,10 @@ export function PreviewPanel({
               </div>
             }
           >
-            <CadViewer artifact={previewArtifact} />
+            <CadViewer
+              artifact={previewArtifact}
+              onStatusChange={setViewerStatus}
+            />
           </Suspense>
         )}
       </div>
@@ -144,7 +162,9 @@ export function PreviewPanel({
         <header className={activityStyles.activityLogHeader}>
           <div>
             <strong>{text('Activity', '执行')}</strong>
-            <small>{activity || connectionStatus}</small>
+            {activity || connectionStatus ? (
+              <small>{activity || connectionStatus}</small>
+            ) : null}
           </div>
           <button
             aria-expanded={!logCollapsed}

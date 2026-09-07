@@ -27,7 +27,12 @@ import { formatBytes } from '../lib/format';
 import type { ArtifactSummary } from '../types';
 
 type ViewName = 'front' | 'isometric' | 'top';
-type ViewerState = 'empty' | 'error' | 'loading' | 'ready';
+export type ViewerState = 'empty' | 'error' | 'loading' | 'ready';
+
+export interface ViewerStatus {
+  state: ViewerState;
+  text: string;
+}
 
 interface ViewerController {
   fit: () => void;
@@ -36,7 +41,7 @@ interface ViewerController {
 
 interface CadViewerProps {
   artifact?: ArtifactSummary;
-  onStatusChange?: (status: string) => void;
+  onStatusChange?: (status: ViewerStatus) => void;
 }
 
 function disposeMaterial(material: Material): void {
@@ -168,8 +173,8 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
           : 'Waiting for model data';
 
   useEffect(() => {
-    onStatusChange?.(statusText);
-  }, [onStatusChange, statusText]);
+    onStatusChange?.({ state, text: statusText });
+  }, [onStatusChange, state, statusText]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -325,16 +330,6 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
       className={styles.shell}
       data-viewer-status={state}
     >
-      <header className={styles.header}>
-        <div className={styles.modelIdentity}>
-          <h2>{artifact?.name ?? 'Model preview'}</h2>
-        </div>
-        <div className={styles.viewerSummary} data-status={state}>
-          <span aria-hidden="true" className={styles.statusMark} />
-          <span>{statusText}</span>
-        </div>
-      </header>
-
       <div className={styles.stage} ref={hostRef}>
         <canvas
           aria-label="Interactive 3D preview. Drag to orbit, scroll to zoom."

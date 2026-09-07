@@ -17,7 +17,6 @@ export interface FilesPanelProps {
   onSelect: (artifact: ArtifactSummary) => void;
   selectionScope: string;
   selectedPath: string | undefined;
-  workspaceName: string;
 }
 
 export function FilesPanel({
@@ -29,7 +28,6 @@ export function FilesPanel({
   onSelect,
   selectionScope,
   selectedPath,
-  workspaceName,
 }: FilesPanelProps) {
   const text = translator(language);
   const [downloadError, setDownloadError] = useState(false);
@@ -95,7 +93,14 @@ export function FilesPanel({
     <div className={styles.fileWorkspace} role="tabpanel">
       <section className={styles.fileSection}>
         <div className={styles.sectionHeading}>
-          <h2>{workspaceName}</h2>
+          {hasPrintableArtifacts ? (
+            <p className={styles.fileHint}>
+              {text(
+                '3MF and STL files can be downloaded for printing.',
+                '3MF 和 STL 文件可下载用于打印。',
+              )}
+            </p>
+          ) : null}
           <div className={styles.fileHeadingActions}>
             <span>{visibleArtifacts.length}</span>
             <button
@@ -109,14 +114,6 @@ export function FilesPanel({
             </button>
           </div>
         </div>
-        {hasPrintableArtifacts ? (
-          <p className={styles.fileHint}>
-            {text(
-              '3MF and STL files can be downloaded for printing.',
-              '3MF 和 STL 文件可下载用于打印。',
-            )}
-          </p>
-        ) : null}
         {visibleArtifacts.length === 0 ? (
           <p className={styles.fileEmpty}>
             {text(

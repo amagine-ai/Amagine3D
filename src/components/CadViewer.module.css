@@ -30,94 +30,6 @@
   block-size: 100%;
 }
 
-.header {
-  display: flex;
-  min-height: 3.5rem;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm) var(--space-lg);
-  padding: 0.625rem 0.875rem;
-  border-block-end: var(--rule-thin) solid var(--color-rule);
-  background: var(--color-paper-raised);
-  box-shadow: none;
-}
-
-.modelIdentity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.modelIdentity h2,
-.modelIdentity p {
-  margin: 0;
-}
-
-.modelIdentity h2 {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-family: var(--font-display);
-  font-size: var(--text-sm);
-  font-style: normal;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.modelIdentity p {
-  color: var(--color-muted);
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.viewerSummary {
-  display: inline-flex;
-  min-width: max-content;
-  align-items: center;
-  gap: var(--space-xs);
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.statusMark {
-  width: var(--space-xs);
-  height: var(--space-xs);
-  flex: 0 0 auto;
-  border-radius: var(--radius-pill);
-  background: var(--color-rule-strong);
-}
-
-.shell[data-viewer-status='ready'] .statusMark {
-  background: var(--color-success);
-}
-
-.shell[data-viewer-status='loading'] .statusMark {
-  background: var(--color-loading);
-}
-
-.shell[data-viewer-status='error'] .statusMark,
-.shell[data-viewer-status='context-lost'] .statusMark {
-  background: var(--color-error);
-}
-
-.viewerSummary[data-status='ready'] .statusMark {
-  background: var(--color-success);
-}
-
-.viewerSummary[data-status='loading'] .statusMark {
-  background: var(--color-loading);
-}
-
-.viewerSummary[data-status='error'] .statusMark,
-.viewerSummary[data-status='context-lost'] .statusMark {
-  background: var(--color-error);
-}
-
 .viewTools,
 .selectionTools {
   display: flex;
@@ -339,10 +251,6 @@
 }
 
 @media (min-width: 40rem) {
-  .header {
-    padding-inline: var(--space-lg);
-  }
-
   .stage,
   .canvas {
     min-height: 36rem;

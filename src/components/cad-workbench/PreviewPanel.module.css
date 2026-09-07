@@ -72,8 +72,7 @@
   gap: var(--space-xs);
 }
 
-.phase,
-.buildingState {
+.phase {
   display: inline-flex;
   min-height: 1.75rem;
   align-items: center;
@@ -85,6 +84,48 @@
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.phase[data-state='running'] {
+  border-color: var(--color-loading);
+  background: var(--color-loading-soft);
+  color: var(--color-ink);
+}
+
+.phase[data-state='ready'] {
+  border-color: var(--color-success);
+}
+
+.viewerSummary {
+  display: inline-flex;
+  min-width: max-content;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.statusMark {
+  width: var(--space-xs);
+  height: var(--space-xs);
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: var(--color-rule-strong);
+}
+
+.viewerSummary[data-status='ready'] .statusMark {
+  background: var(--color-success);
+}
+
+.viewerSummary[data-status='loading'] .statusMark {
+  background: var(--color-loading);
+}
+
+.viewerSummary[data-status='error'] .statusMark {
+  background: var(--color-error);
 }
 
 .previewSwitch {
@@ -157,13 +198,6 @@
   .switchTrack > span {
     transition: none;
   }
-}
-
-.buildingState {
-  gap: var(--space-2xs);
-  border-color: var(--color-loading);
-  background: var(--color-loading-soft);
-  color: var(--color-ink);
 }
 
 .canvasBody {
