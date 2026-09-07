@@ -1,8 +1,8 @@
-# Multipart connection selection
+# Self-tapping service-enclosure connections
 
-Give every printed part a real assembly relationship before geometry. Choose
-the connection from how the object will be assembled and serviced; do not make
-parts separate merely because a visual seam exists.
+Read this reference only for direct fastening into printed plastic or when the
+serviceable-enclosure closure below applies. Use `a3d guide multipart` for
+general connection selection and clearance semantics.
 
 ## Positive default for serviceable enclosures
 
@@ -30,26 +30,6 @@ For a serviceable enclosure, start with this construction:
    while keeping every axis clear of ports, screen keepouts, thin walls, and
    internal components.
 
-Use a different connection when its assembly behavior is a better match:
-
-| Need | Preferred construction |
-|---|---|
-| frequent service cycles or higher clamp load | locating interface plus machine screw and threaded insert |
-| tool-free opening | snap-fit or dovetail with a deliberate release path |
-| rotation | `hinge_pin()` with shared coaxial bore and removable pin |
-| sliding control | `retained_slider()` |
-| fitted printable panel, lens, or bezel | `inset_pocket()` |
-| permanent cosmetic insert | fitted pocket plus explicitly declared adhesive |
-
-For a selected snap-fit or dovetail, still build a real male/female interface
-and derive the female dimensions from the male plus the declared clearance. A
-snap needs a printable flex arm, lead-in, retention shoulder, and deliberate
-release path; a dovetail needs a clear insertion direction and end stop. These
-are geometry requirements, even when no specialized helper recipe is used.
-
-`adhesive` and `loose` remain intentional exceptions. They are not substitutes
-for a missing connection on an enclosure part.
-
 ## M3 printable starting geometry example
 
 Use these as configurable starting dimensions for a common 3.0 mm plastic
@@ -71,7 +51,7 @@ typical pilot near 0.8 times nominal diameter and allows an increase toward
 0.88 for stronger or filled materials; TR Fastenings gives 2.4 mm as its ABS
 example for a 3.0 mm plastics screw. The 2.6 mm CAD default is therefore a
 conservative upper-end FDM starting point, not a substitute for a small hole
-coupon when screw family, filament, printer, or process changes. See the
+coupon when screw family, printer, or process changes. See the
 [EJOT DELTA PT design guidance](https://www.ejot.com/medias/sys_master/Industry_Flyer/Industry_Flyer/h11/hc7/9331662782494/EJOT-DELTA-PT-Flyer-08.23-en.pdf)
 and [TR Plas-Tech 30 installation guide](https://www.trfastenings.com/Knowledge-Base/Fasteners-for-Plastic/Plas-Tech-30-installation-guide).
 

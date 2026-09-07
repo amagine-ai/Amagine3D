@@ -359,8 +359,8 @@ def self_tapping_screw_pair(
     acquire independent centers or axes.
 
     The M3 defaults are printable starting dimensions, not a material-agnostic
-    standard.  Calibrate the pilot diameter for the selected screw, filament,
-    printer, and process when those are known.
+    standard.  Calibrate the pilot diameter for the selected screw, printer,
+    and process when those are known.
     """
 
     cover_thickness = _positive("cover_thickness_mm", cover_thickness_mm)

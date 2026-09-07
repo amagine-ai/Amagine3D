@@ -1,23 +1,7 @@
 # Construction strategies
 
-Choose a geometry strategy from evidence type instead of forcing every request
-through the same primitive stack.
-
-| Evidence | Preferred construction | Avoid |
-|---|---|---|
-| exact dimensions/drawing | datum-driven solids and explicit cuts | estimating what is already specified |
-| clean orthographic silhouette | traced profile, constrained extrusion, then depth features | many hand-placed boxes |
-| pixel/icon source | deterministic occupied-cell union or relief | manually copied cells |
-| single product photo | primary envelope, landmark solids, then restrained hidden-side inference | claiming unseen details are exact |
-| organic/sculptural subject | a canonical watertight SDF mesh master driven by semantic landmarks | a scaled sphere/ellipsoid or hundreds of primitives |
-| organic exterior plus precise features | a mesh-master body modified by directly bound BRep additions/cutters, with independent BRep parts only where assembly calls for them | maintaining separate lookalike geometry or claiming STEP after fusion |
-
-Treat the final geometry's controlling evidence as the default selector. If an
-appearance-controlled freeform outer skin and dimension-controlled mechanical
-features belong to one printed body, make that body mesh-master and bind the
-BRep features into it. If exact dimensions and analytic profiles control the
-whole body, keep it BRep-master. This decision is independent of product and
-component names.
+Select the high-level representation with `a3d guide strategy`. This reference
+owns the downstream feature graph and constructive geometry rules.
 
 ## Frame and feature graph
 
@@ -26,17 +10,8 @@ right, `+Y` is object back, `+Z` is object top, front is `Y-min`, and bottom is
 `Z-min`. Declare flat semantic feature fields before modeling: `kind`, `face`,
 `direction`, and `edge_crossing` for every port, hole, slot, cutout, window,
 cavity, or recess. Declare `manufacturing.mode` before modeling. Use
-`single-part` when the object can be one reliable manufacturing body. A
-printed prop or figure may still have semantic sub-parts, such as a handle and
-head, without becoming a multipart print if those volumes are fused with
-adequate section and fillets. Do not split solely to fit a default printer
-when the user did not fix the final size; revise the driving envelope dimensions
-before construction while preserving printable feature sizes. Use `multipart`
-only when separate printed parts create a real manufacturing benefit: cleaner
-support strategy, better
-strength orientation, post-installed components, functional movement, or
-separable covers, inserts, hinged joints, retained closures, or slides inferred
-from the object. Model in dependency order:
+`a3d guide multipart` when separate manufacture or assembly is relevant. Model
+in dependency order:
 
 1. primary envelope
 2. identity-bearing additive volumes
@@ -72,25 +47,18 @@ operations identify the caller-supplied feature and part instead of silently
 continuing with an unchanged or disconnected body.
 
 For multipart work, give each printed part its own envelope, features, and
-mating-interface parameters. Every interface must be a printable connector or
-locating surface, not a visual seam: tab-slot, peg-socket, pin-socket,
-dovetail, snap-fit, press-fit, self-tapping-screw, threaded-insert, or
-glue-face. Declare the
-connection, assembly axis, clearance, engagement depth, and feature IDs for
-the modeled connector geometry. If a printable connector cannot be made
-reliable, change strategy: keep the object single-part, move the split, alter
-orientation, use relief/engraving instead of a separate insert, or record a
-non-printed fastening choice. Keep the parts as separate valid solids and
-export with `export_assembly()`. It writes `NAME-PART.stl` for individual
+mating-interface parameters. Use `a3d guide multipart` for interface selection
+and clearance semantics. If a printable connector cannot be made reliable,
+change the split, orientation, or fastening strategy. Keep the parts as separate
+valid solids and export with `export_assembly()`. It writes `NAME-PART.stl` for individual
 print placement, `NAME-PART.step` for each BRep master, `NAME.stl` for
 print-bed layout, `NAME-assemble.step` for whole-assembly QA, and
-`NAME-display.glb` for user preview. Pass
+`NAME.3mf` plus `NAME-display.glb` for color-capable handoff and preview. Pass
 `part_name=` to every `observe()`, checked cut, and checked finish so per-part
 QA reads only its own evidence.
 
-Read `multipart-basics.md` for every multipart design. Load the detailed
-`multipart-connections.md` recipe only when the design uses direct fastening
-into printed plastic or the positive serviceable-enclosure default applies.
+Load `multipart-connections.md` only for direct fastening into printed plastic
+or the serviceable-enclosure closure described there.
 
 ## build123d guardrails
 

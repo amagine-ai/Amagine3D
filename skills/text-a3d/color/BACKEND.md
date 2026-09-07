@@ -1,31 +1,10 @@
 # Manufactured-color backend
 
-This directory is an internal backend of `text-a3d`. It is not a separate
-Agent workflow and does not own another intent contract. Use the root
-`evidence-cad-intent/v5`, semantic scene, profile, build report, repair loop,
-visual gate, and delivery rules.
-
-Read this file only when permanent printed color or material belongs to physical
-geometry. Lighting, reflection, background, and a transient LED/LCD image are
-display appearance, not manufactured color.
-
-## Region semantics
-
-Keep physical parts and color regions independent:
-
-- a part is separately printable and owns manufacturing interfaces;
-- a region is a permanent material assignment within one physical part;
-- several parts may share a color;
-- one part may contain several regions;
-- a display-only surface never enters STL or 3MF.
-
-Declare regions once in the root intent and bind them in the semantic scene.
-Each region records a globally unique stable ID, owning physical part,
-`#RRGGBB` appearance, purpose, boundary evidence, and acceptance. Optional
-intent material fields are authoritative: when `filament` or `transmission`
-(`opaque`, `translucent`, or `transparent`) is declared, the scene must match
-it or omit it so the compiler can propagate it. Do not invent a real filament;
-record every unspecified choice as proposed in the material plan.
+This is the internal backend for the root intent, semantic scene, and unified
+build report, not a separate workflow. Read it after `a3d guide color` only when
+one physical part has multiple permanent material regions or uncommon region
+topology. Lighting, background, and transient display content remain visual
+appearance.
 
 ## Internal backend selection
 
@@ -33,12 +12,23 @@ The semantic scene selects the implementation per part:
 
 | Physical representation | Manufactured color implementation |
 | --- | --- |
-| BRep part, colors follow whole-part boundaries | root `export_assembly(..., part_colors=...)` |
+| BRep part, colors follow whole-part boundaries | root `export_part()` / `export_assembly()` |
 | BRep part, several regions inside one body | `color.cad_helpers.export_regions()` |
 | Mesh part, several volumetric regions | `hybrid_compile.py` region assignments |
 | Display-only color | display GLB only; exclude from manufacturing |
 
 These are internal compilers, not alternative workflows.
+
+Root BRep exporters distinguish appearance from manufactured color. Every 3MF
+assignment owns a closed printable whole part or volumetric region; triangle
+paint alone never qualifies. A single unpartitioned part therefore has one
+whole-part material assignment and remains a single-material print—it is not
+reported as multicolor. Real internal multicolor uses `export_regions()` and
+meaningful volumetric boundaries. A multipart enclosure can use its existing
+physical part boundaries as manufacturing color assignments, so
+`export_assembly()` emits stable, distinct proposed whole-part materials when
+no palette was declared. Declared colors remain authoritative, and callers may
+pass `part_colors` to verify them.
 
 ## BRep internal regions
 
@@ -74,7 +64,7 @@ package of physical parts, not a one-region-per-part restriction. Reject:
 - overlapping volumetric regions;
 - a region assigned to another part;
 - a region ID set that differs from the IDs owned by that part in intent;
-- scene material color, filament, or transmission that conflicts with intent;
+- scene color that conflicts with intent;
 - display-only material used as manufacturing color;
 - 3MF readback that changes region or material assignment.
 
@@ -84,14 +74,12 @@ color from surface labels alone.
 
 ## Package and material plan
 
-The preferred manufactured-color deliverable is 3MF. Its objects and material
-properties come from the same compiled physical geometry as STL and display
-GLB. The material plan records:
+3MF objects and material properties come from the same compiled physical
+geometry as STL and display GLB. The material plan records:
 
 - part and region IDs;
-- display color;
-- optical transmission;
-- proposed or user-specified material;
+- RGB color;
+- whether the color was user-declared or proposed;
 - 3MF property/object mapping;
 - package mode and plate transform.
 
@@ -112,16 +100,11 @@ the stricter one-whole-color-region-per-part case.
 
 Run independent 3MF readback and verify object count, build items, region
 coverage, property IDs, colors, and unit millimetres. RGB readback proves stored
-metadata, not the user's real spool selection.
+color metadata and its binding to printable geometry.
 
 ## QA and visual evidence
 
-Color QA is an internal adapter over the unified
-`evidence-a3d-build/v1` report. It checks region topology, clean-body mesh,
-profile fit, material mapping, and 3MF readback. It does not introduce a second
-build-manifest schema or a second intent.
-
-Render the final semantic display GLB after the manufacturing package is final,
-then read the new preview. Review material boundaries as geometry evidence:
-missing, shifted, floating, or visually merged regions fail even when the 3MF
-archive is syntactically valid.
+Color QA extends the unified `evidence-a3d-build/v1` report with region topology,
+clean-body mesh, material mapping, and 3MF readback. During the main workflow's
+visual gate, treat missing, shifted, floating, or visually merged material
+boundaries as failures even when the 3MF archive is syntactically valid.

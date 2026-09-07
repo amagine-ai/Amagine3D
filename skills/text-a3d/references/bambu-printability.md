@@ -45,7 +45,7 @@ Use `organic_shell.build_organic_shell(...)` so these are inputs to the solid,
 not repairs applied after tessellation.
 
 - Prefer `open-cavity` for housings: make the service opening intersect the
-  inner offset and the exterior so supports, powder, and loose filament can be
+  inner offset and the exterior so supports, powder, and loose debris can be
   removed. A separately printed cover can remain a BRep master; precise bosses,
   seats, and cutters fused into the shell are bound BRep features of the final
   mesh-master body.
@@ -66,11 +66,10 @@ not repairs applied after tessellation.
 
 ## Support-free construction
 
-The profile's support angle is measured up from the horizontal plane: 0
-degrees is a horizontal underside, and 90 degrees is a vertical wall. Prefer a
-support-free result only after the requested shape is preserved; STL and STEP do
-not carry a Bambu Studio support plan, but printability cannot redefine the
-object.
+The profile's support angle is measured up from the horizontal plane: 0 degrees
+is a horizontal underside, and 90 degrees is a vertical wall. This section owns
+print-pose and support-risk decisions; choose the semantic geometry separately
+with `a3d guide strategy`.
 
 - Reorient the build without changing required dimensions.
 - Evaluate all six bed-facing orientations, including a top-down 180-degree
@@ -87,8 +86,6 @@ object.
   hiding unavoidable overhangs in a one-piece body.
 - When geometry cannot be made support-free, set `support_policy` to
   `supports-required` and disclose the reported regions.
-- Never make a full-3D replica flat-backed, remove underside detail, or alter a
-  handle/head cross-section solely to clear overhang checks.
 
 ## Repair QA evidence
 

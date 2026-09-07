@@ -44,8 +44,7 @@
       "purpose": "primary structural color",
       "boundary": "the parent body excluding the shallow top accent",
       "evidence": "The example specifies a warm neutral body.",
-      "continuity": "continuous-core",
-      "material": {"transmission": "opaque"}
+      "continuity": "continuous-core"
     },
     {
       "name": "top-accent",
@@ -54,8 +53,7 @@
       "purpose": "contrasting orientation accent",
       "boundary": "a shallow inset region on the top face",
       "evidence": "The example specifies a dark top accent.",
-      "continuity": "surface-detail",
-      "material": {"transmission": "opaque"}
+      "continuity": "surface-detail"
     }
   ],
   "palette_reduction": {

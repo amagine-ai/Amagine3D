@@ -60,18 +60,8 @@ class SharedSkillFileTests(unittest.TestCase):
 
     def test_specialist_guidance_is_routed_without_loading_it_for_every_task(self):
         skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
-        construction = (
-            SINGLE / "references" / "construction-strategies.md"
-        ).read_text(encoding="utf-8")
-        connections = (
-            SINGLE / "references" / "multipart-connections.md"
-        ).read_text(encoding="utf-8")
-        evidence = (SINGLE / "references" / "evidence-contract.md").read_text(
-            encoding="utf-8"
-        )
 
         for relative in (
-            "references/multipart-basics.md",
             "references/multipart-connections.md",
             "references/installed-displays.md",
         ):
@@ -79,12 +69,7 @@ class SharedSkillFileTests(unittest.TestCase):
                 self.assertTrue((SINGLE / relative).is_file())
                 self.assertIn(relative, skill)
 
-        self.assertNotIn("two symmetric M3", construction)
-        self.assertNotIn('"id": "screen-active-surface"', evidence)
-        self.assertIn("rather than a fixed list of", connections)
-        self.assertIn("observing the cutter alone does not create", construction)
-        self.assertIn("continuous path from the declared exterior face", construction)
-        self.assertIn("through the full wall thickness", construction)
+        self.assertFalse((SINGLE / "references" / "multipart-basics.md").exists())
 
 
 if __name__ == "__main__":

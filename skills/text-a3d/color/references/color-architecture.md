@@ -3,13 +3,11 @@
 Color is a geometry and assembly decision, not a renderer decoration.
 
 The root `evidence-cad-intent/v5` document is the authority for region IDs,
-owners, colors, and any explicitly selected filament or optical transmission.
+owners, and colors.
 Region IDs are globally unique. `part` names the owning physical part; it does
 not imply that a multipart model has only one region per part. Hybrid scenes
-must reproduce the exact region-ID set for every mesh part and may omit intent
-material metadata only so the compiler can propagate it. Conflicting scene
-metadata is an error. Unspecified intent material fields remain explicitly
-`proposed` in the material plan.
+must reproduce the exact region-ID set for every mesh part. Conflicting scene
+colors are an error.
 
 Every material assignment is traceable through exactly one `sourceBindings[]`
 record. Declared manufactured color uses `intent-color-region` and the exact
@@ -104,8 +102,7 @@ require the package mode explicitly; use `package_mode=...` in Python or
 `--package-mode co_print_body|separate_parts` on the CLI. Inspection and QA do
 not infer a missing mode from archive structure or a build-report fallback.
 `assembly_check.py` compares the expected region names/colors against what is
-actually stored in the 3MF. Optical transmission remains region metadata
-because RGB readback cannot prove real material behavior.
+actually stored in the 3MF.
 
 The clean `NAME.stl` fallback drops color assignments. If the visible feature
 must survive single-material slicing, encode it as real parent geometry:

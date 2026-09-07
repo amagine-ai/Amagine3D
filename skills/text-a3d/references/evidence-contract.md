@@ -91,14 +91,9 @@ If no reference evidence is supplied, choose `reference-inspired` or
 `recognizable-form`, record inferred landmarks and dimensions, and report that
 the result is inspired by the named object rather than an exact replica.
 
-The printability profile must come from this skill's `bambu_profile.py`. Its
-hash locks the machine, selected tool, nozzle, standard process, printable
-polygon, wall targets, and support threshold used for the run. The minimum
-wall target must meet the resolved process wall target. Use `support-free`
-only when it does not change the requested geometry; otherwise preserve the
-object and set `supports-required` or disclose support warnings. Support
-avoidance must not flatten an underside, remove back-side details, or turn a
-full-3D object into a relief.
+The printability profile must come from this skill's `bambu_profile.py`; its hash
+binds the process assumptions used by the contract. Apply profile-driven design
+and repair rules from `bambu-printability.md` rather than duplicating them here.
 
 Matched visual views may be `front`, `side`, `top`, `bottom`, or `isometric`;
 use `bottom` when the appearance-bearing face is intentionally printed at Z0.
@@ -136,15 +131,9 @@ feature is intentionally on an edge or corner.
 
 ## Manufacturing structure
 
-Always declare `manufacturing`. Use `single-part` for one reliable printed
-body. A model may have semantic sub-parts without becoming multipart when they
-can be fused as one printable body. Do not split only because the default
-printer profile is small; if the user did not fix the final size, revise the
-intent dimensions and rebuild the source at unit scale before geometry exists.
-Use `multipart` only when separate printed parts create a
-real manufacturing benefit such as cleaner support strategy, better strength
-orientation, post-installed components, functional movement, or separable
-covers, inserts, hinged joints, retained closures, or slides inferred from the object.
+Always declare `manufacturing`. `single-part` owns one printed body; `multipart`
+must enumerate printed parts and interfaces. Use `a3d guide multipart` for the
+design decision and connection semantics.
 
 Multipart contracts must declare every printed part and assembly interface:
 
@@ -196,10 +185,9 @@ two parts named by that interface's `between` field. In a single-part intent,
 
 ## Color regions
 
-The same v5 intent owns color and material evidence. Do not create a separate
+The same v5 intent owns manufactured-color evidence. Do not create a separate
 color-intent document. Every `color_regions[]` record requires `name`, owning
-`part`, `hex`, `purpose`, `boundary`, and `evidence`; optional material data may
-declare `transmission` and a user-selected `filament`. Also record the
+`part`, `hex`, `purpose`, `boundary`, and `evidence`. Also record the
 `palette_reduction` decision.
 
 - For `single-part`, two or more regions may share the top-level physical part;
@@ -222,8 +210,7 @@ mode, archive topology, or a build report.
     "purpose": "continuous structural body",
     "boundary": "parent volume excluding the shallow accent inset",
     "evidence": "the requested body is warm ivory",
-    "continuity": "continuous-core",
-    "material": {"transmission": "opaque"}
+    "continuity": "continuous-core"
   },
   {
     "name": "accent",
@@ -279,50 +266,9 @@ the resolved intent feature owner. A display component's
 same part as the display node. Build input binding repeats these checks and
 also requires the exported part set to match both documents exactly.
 
-For a BRep multipart assembly whose colors follow physical part boundaries,
-keep color in the same `evidence-cad-intent/v5` document. This exporter is the
-deliberately narrower whole-part case: add exactly one `color_regions` record
-per `manufacturing.parts[].name`, with both `name` and `part` equal to the
-physical part name, plus `hex` and optional `material.filament` /
-`material.transmission`. Set `printability.print_package_mode` explicitly to
-`separate_parts`, then bind the same values at export:
-
-```python
-export_assembly(
-    {"lower-shell": lower_shell, "top-lid": top_lid},
-    NAME,
-    intent_path=INTENT,
-    scene_path=SCENE,
-    source_path=__file__,
-    part_colors={"lower-shell": "#E8E0D4", "top-lid": "#20242A"},
-)
-```
-
-This emits one STL and one STEP per physical part, the required assembly STEP,
-the plate STL, semantic display GLB, colored separate-parts 3MF, material plan,
-and one `evidence-a3d-build/v1` manifest. The 3MF is derived from the same
-plate-aligned BRep shapes; STEP and GLB stay in semantic coordinates. All
-reported transforms are raw rigid 4x4 matrices with `scale: 1.0`. Do not create
-a second color-only intent or import color helpers through a second `sys.path`
-entry.
-
-The material plan uses `sourceBindings`, with exactly one binding for every
-assignment target. Each binding repeats the assignment and resolved material
-fields, then identifies its authority with `sourceKind` and `sourceId`:
-
-- `intent-color-region`: `sourceId` is the exact immutable
-  `color_regions[].name`; owner, region, color, and declared material fields
-  must agree.
-- `scene-part-material`: only for a proposed whole-part color without an intent
-  region; `sourceId` is the explicit `scene.parts[].materialId` and must resolve
-  in `scene.materials[]`.
-- `scene-part-appearance`: only when the scene part has no `materialId`;
-  `sourceId` is the exact scene part ID and the proposed color is derived from
-  its appearance or the deterministic fallback palette.
-
-The hash-bound intent and scene are re-read when validating these sources.
-Missing, duplicate, unknown, or semantically mismatched bindings invalidate the
-build; a material-plan record cannot make itself authoritative.
+Color intent fields remain in this contract. Export selection, material-plan
+bindings, region topology, and 3MF readback belong to `a3d guide color` and,
+when routed there, `color/BACKEND.md`.
 
 ## Evidence rules
 
@@ -343,37 +289,8 @@ build; a material-plan record cannot make itself authoritative.
 - If a required target remains unknowable and changes function or identity,
   ask. Otherwise choose a reversible assumption and record it.
 
-## Printability acceptance
+## Visual acceptance
 
-- Empty or zero-volume geometry is a hard failure; dependent checks remain
-  `not_evaluated` rather than crashing or passing.
-- Overflow of the selected tool's printable polygon or height is a hard
-  failure. Bed exclusions and a 90-degree XY placement are considered.
-- For multipart assemblies, every `NAME-PART.stl` is audited as an individual
-  printable body and `NAME.stl` is audited as the print-bed layout.
-- Every `NAME-PART.step` and the required `NAME-assemble.step` are audited with
-  OCCT for CAD readability, solid count,
-  and dimensions. STEP checks do not replace mesh printability checks.
-- `NAME-display.glb` is the user-visible assembly model. Its named physical
-  nodes must match manufacturing geometry; explicitly tagged display-only
-  installed components may also appear for assembly context. GLB checks can
-  prove loadability and appearance, but not B-rep topology or printability.
-- A sub-line-width named feature is a warning tied to its feature ID.
-- Local wall thickness below the process wall target is a warning with sampled
-  risk bounds. It does not prove mechanical strength.
-- A downward surface below the Bambu process support threshold is a warning.
-  The Z0 bed face is excluded, and bridges are never assumed safe automatically.
-- A missing profile, build report, or thickness result is `not_evaluated`, not
-  a printability pass.
-
-## Visual decision
-
-The five-view render detects unintended depth, hidden-side placement, bottom
-features, and topology; the matched view tests silhouette and landmark
-placement. Visual review uses semantic orientation; print orientation evidence
-is for manufacturing fit, contact, support burden, and Z0 placement. For
-`full-3d`, a plain planar underside is acceptable only when the object itself
-has one or the user requested a relief/flat-backed prop.
 `compare_silhouette.py` is valid only
 for a flat or genuinely corresponding orthographic reference. Its IoU cannot
 prove depth, semantic identity, or printability.
