@@ -8,6 +8,12 @@ description: Create or modify printable 3D models and their editable sources.
 Use editable source only from the current session workspace; never inspect
 sibling sessions. Use public `a3d` commands and keep source beside artifacts.
 
+Develop the primary form from the requested product character and use. For
+consumer enclosures and other appearance-led objects, read
+`references/surface-design.md` for shaping volumes, choosing surface controls,
+and integrating details. Choose the construction that gives this design useful
+freedom to evolve.
+
 ## Build contract
 
 Separate user requirements, functional necessities, and your proposed construction
@@ -94,9 +100,6 @@ Choose one geometry master, then add applicable assembly, control, and
 manufactured-color concerns. Route by meaning, not keywords.
 
 - Unclear representation choice from the available evidence: `a3d guide strategy`.
-- Smoothly varying freeform shell sections with a mesh master:
-  `references/surface-shell.md` and its small public authoring example; use its
-  construction only when it fits the intended silhouette and function.
 - Pressable or sliding mechanism: `a3d guide pressable-control`.
 - Separately manufactured or assembled parts: `a3d guide multipart`; additionally
   read `references/multipart-connections.md` for direct fastening into printed

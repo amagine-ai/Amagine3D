@@ -1,5 +1,7 @@
 # Continuous-section shell example
 
+This example implements one of the constructions described in `surface-design.md`.
+
 Use `examples/surface_shell_intent.py` and `examples/surface_shell_build.py` when
 the intended silhouette needs smoothly changing sections and a mesh master is
 appropriate. This is one surface construction example, not the default shape or
