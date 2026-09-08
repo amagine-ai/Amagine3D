@@ -49,6 +49,7 @@ MAX_ISSUES = 40
 MAX_MESSAGE_CHARS = 700
 MAX_SUMMARY_CHARS = 12_000
 MAX_SUMMARY_ISSUES = 5
+THICKNESS_CHECKS = {"printability_wall_thickness", "printability_local_thin_region"}
 MAX_LOG_TAIL_BYTES = 32_000
 DEFAULT_COMPILE_TIMEOUT_SECONDS = 5_400.0
 AGENT_ARTIFACT_KEYS = {
@@ -327,6 +328,28 @@ def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
     detail_order = ("featureId", "nodeId", "interfaceId", "ownerPartId", "field", "blockedBy",
                     "repairHint", "observed", "expected", "actual")
     for issue, item in shown:
+        witness = _thickness_witness(issue)
+        if witness:
+            projected, cut = _project_summary_value(witness)
+            added = add(item, "witness", projected)
+            item["summaryTruncated"] |= cut or not added
+    comparisons = result.get("warningComparisons", [])
+    if comparisons:
+        add(summary, "warningComparisons", [])
+        for comparison in comparisons[:MAX_SUMMARY_ISSUES]:
+            if "warningComparisons" not in summary:
+                break
+            projected, cut = _project_summary_value(comparison)
+            summary["warningComparisons"].append(projected)
+            if len(_summary_json(summary)) > MAX_SUMMARY_CHARS:
+                summary["warningComparisons"].pop()
+                diagnostics["truncated"] = True
+                break
+            diagnostics["truncated"] |= cut
+        diagnostics["truncated"] |= len(summary.get("warningComparisons", [])) < len(comparisons)
+
+    # Reserve actionable locations and comparisons before bulky observation trees.
+    for issue, item in shown:
         for key in dict.fromkeys((*detail_order, *issue.keys())):
             if key in item or key not in issue:
                 continue
@@ -353,6 +376,27 @@ def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
             add(summary, key, projected)
             diagnostics["truncated"] |= cut
     return summary
+
+
+def _thickness_witness(issue: dict[str, Any]) -> dict[str, Any]:
+    observed = issue.get("observed", {})
+    if issue.get("check") not in THICKNESS_CHECKS or not isinstance(observed, dict):
+        return {}
+    sample = (observed.get("sampling") or {}).get("minimum_sample") or {}
+    context = observed.get("measurement_context") or {}
+    frame = context.get("coordinate_frame", {})
+    if not isinstance(sample.get("point_mm"), list):
+        return {}
+    return {
+        "pointMm": sample["point_mm"], "semanticPointMm": sample.get("semantic_point_mm"),
+        "coordinateFrame": frame.get("name", "mesh-local"),
+        "frameStatus": frame.get("status", "unbound"),
+        "artifactKey": frame.get("artifact_key"),
+        "method": context.get("method", "unknown"),
+        "minimumMm": observed.get("minimum_mm"),
+        "featureCandidates": {"ids": observed.get("affected_feature_ids", []),
+                              "basis": "bbox intersection candidates; not root causes"},
+    }
 
 
 def _report_agent_facts(report: dict[str, Any]) -> dict[str, Any]:
@@ -1197,6 +1241,7 @@ def _run_json_check(
             staged_path.replace(output_path)
     if payload is not None:
         result["artifacts"][artifact_name] = _artifact(output_path)
+        _capture_thickness_measurements(result, payload, stage=name, part=part)
         recorded, structured_errors = _record_structured_issues(
             result,
             payload,
@@ -1625,6 +1670,104 @@ def _repair_issue_record(issue: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _capture_thickness_measurements(
+    result: dict[str, Any], payload: dict[str, Any], *, stage: str, part: str | None,
+) -> None:
+    """Keep actual check observations, including passes; missing warnings prove nothing."""
+    if payload.get("schema") != "evidence-mesh-audit/v3":
+        return
+    mesh_path = Path(payload["stl"]) if isinstance(payload.get("stl"), str) else None
+    mesh_hash = _digest(mesh_path) if mesh_path and mesh_path.is_file() else None
+    for check in payload.get("checks", []):
+        if not isinstance(check, dict) or check.get("name") not in THICKNESS_CHECKS:
+            continue
+        observed = check.get("observed")
+        if check.get("status") not in {"pass", "warning"} or not isinstance(observed, dict):
+            continue
+        identity = {"code": "QA.WARNING", "stage": stage, "part": part, "check": check["name"]}
+        sampling = observed.get("sampling", {})
+        result.setdefault("warningMeasurements", []).append({
+            **identity, "id": _issue_identity(identity), "status": check["status"],
+            "context": observed.get("measurement_context"),
+            "expected": check.get("expected"),
+            "profileHash": (payload.get("printer_profile") or {}).get("sha256"),
+            "measurements": {
+                key: observed[key] for key in
+                ("minimum_mm", "p05_mm", "violating_area_ratio", "violating_count", "sample_count")
+                if isinstance(observed.get(key), (int, float))
+                and not isinstance(observed[key], bool) and math.isfinite(observed[key])
+            },
+            "sampling": {key: value for key, value in sampling.items() if key != "minimum_sample"},
+            "minimumSample": sampling.get("minimum_sample"),
+            "riskBoundsMm": observed.get("risk_bounds_mm"),
+            "meshHash": mesh_hash, "runId": result.get("runId"),
+        })
+
+
+def _warning_measurement_history(
+    result: dict[str, Any], previous: dict[str, Any] | None, *,
+    intent_hash: str | None, workspace: str,
+) -> list[dict[str, Any]]:
+    """Compare independently sampled observations, never infer a repair's cause."""
+    same_scope = bool(previous and intent_hash and result.get("model")
+                      and previous.get("intentHash") == intent_hash
+                      and previous.get("model") == result.get("model")
+                      and previous.get("workspace") == workspace)
+    prior = {item["id"]: item for item in (previous or {}).get("warningMeasurements", [])
+             if same_scope and isinstance(item, dict) and isinstance(item.get("id"), str)}
+    current = {item["id"]: item for item in result.get("warningMeasurements", [])}
+    comparisons = []
+    for identity in sorted(prior.keys() | current.keys()):
+        old, new = prior.get(identity), current.get(identity)
+        if not any(item and item.get("status") == "warning" for item in (old, new)):
+            continue
+        record = new or old
+        assert record is not None
+        old_context = (old or {}).get("context") or {}
+        context = (new or {}).get("context") or {}
+        frame = context.get("coordinate_frame", {})
+        reasons = []
+        if old and new:
+            if not context or context != old_context:
+                reasons.append("measurement context changed or missing")
+            if frame.get("status") != "bound":
+                reasons.append("coordinate frame is unbound")
+            if (not new.get("part") or frame.get("part") != new.get("part")
+                    or not new.get("profileHash") or new.get("expected") is None):
+                reasons.append("part, profile or target binding is missing")
+            if old.get("expected") != new.get("expected") or old.get("profileHash") != new.get("profileHash"):
+                reasons.append("target or profile changed")
+        comparable = bool(old and new and not reasons)
+        status = ("not_remeasured" if new is None else "first_measurement" if old is None
+                  else "measured" if comparable else "not_comparable")
+        before = (old or {}).get("measurements", {})
+        after = (new or {}).get("measurements", {})
+        comparisons.append({
+            "id": identity, "part": record.get("part"), "check": record["check"],
+            "status": status, "previousRunId": (old or {}).get("runId"),
+            "measurements": {
+                key: [before.get(key), after.get(key),
+                      round(after[key] - before[key], 8) if comparable and key in before and key in after else None]
+                for key in ("minimum_mm", "p05_mm", "violating_area_ratio") if key in before or key in after
+            },
+            "changes": {
+                "samplingChanged": old.get("sampling") != new.get("sampling") if old and new else None,
+                "riskLocationChanged": ((old.get("minimumSample") or {}).get("point_mm") != (new.get("minimumSample") or {}).get("point_mm")
+                                        or old.get("riskBoundsMm") != new.get("riskBoundsMm")) if old and new else None,
+                "meshChanged": old["meshHash"] != new["meshHash"] if old and new and old.get("meshHash") and new.get("meshHash") else None,
+                "coordinateFrameChanged": old_context.get("coordinate_frame") != frame if old and new else None,
+                "measurementBasisChanged": ({key: value for key, value in old_context.items() if key != "coordinate_frame"}
+                                            != {key: value for key, value in context.items() if key != "coordinate_frame"}) if old and new else None,
+                "currentCheckStatus": (new or {}).get("status", "not_remeasured"),
+                "notComparableReasons": reasons,
+            },
+            "basis": "values=[previous,current,delta]; independent samples, not causal evidence",
+        })
+    result["warningComparisons"] = comparisons
+    # A source/QA failure must not erase the last measured warning or mark it resolved.
+    return list({**prior, **current}.values())
+
+
 def _read_previous_repair_state(
     path: Path,
     *,
@@ -1775,6 +1918,9 @@ def _write_repair_state(
         "sourceHash": source_hash,
         "updatedAt": result.get("finishedAt"),
     }
+    state["warningMeasurements"] = _warning_measurement_history(
+        result, previous, intent_hash=intent_hash, workspace=state["workspace"],
+    )
     _write_json(state_path, state)
     result["repairDelta"] = delta
     return state_path
@@ -1848,6 +1994,7 @@ def _finish(
         "omittedIssueCount": result["omittedIssueCount"],
         "pass": result["pass"],
         "repairDelta": result.get("repairDelta", {}),
+        "warningComparisons": result.get("warningComparisons", []),
         "result": {"path": str(result_path)},
         "runId": result.get("runId"),
         "schema": RESULT_SCHEMA,

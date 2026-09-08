@@ -782,7 +782,11 @@ def _affected_features(
         for feature_id, feature_bounds in transformed_records
         if bounds_overlap(bounds, feature_bounds)
     })
-    return {"feature_ids": identifiers, "status": "evaluated"}
+    return {
+        "feature_ids": identifiers,
+        "status": "evaluated",
+        "basis": "risk-bounds/feature-bounds intersection; candidates, not root causes",
+    }
 
 
 def thickness_observation(
@@ -882,7 +886,30 @@ def thickness_observation(
         artifact_key=artifact_key,
         part_name=part_name,
     )
+    frame = {"name": "mesh-local", "status": "unbound", "part": part_name,
+             "artifact_key": artifact_key}
+    semantic_point = None
+    if isinstance(report, dict):
+        transform, reason = _feature_print_transform(
+            report, artifact_key=artifact_key, part_name=part_name, owner=part_name
+        )
+        matrix, error = validated_rigid_matrix(transform)
+        if reason is None and error is None and matrix is not None:
+            frame.update(
+                name=report["artifacts"][artifact_key]["coordinateFrame"],
+                status="bound", semantic_to_mesh=matrix.tolist(),
+            )
+            semantic_point = (matrix[:3, :3].T @ (points[order[0]] - matrix[:3, 3])).round(8).tolist()
     return {
+        "measurement_context": {
+            "method": "max-sphere-at-triangle-surface-points/v1",
+            "engine": f"trimesh/{trimesh.__version__}",
+            "coordinate_frame": frame,
+            "region_policy": "one on-surface point per facet or ungrouped face",
+            "selection": "smallest-quarter-and-largest-remaining-regions",
+            "area_ratio_scope": "sampled-region-area",
+            "sample_limit": sample_limit,
+        },
         "affected_feature_attribution": attribution,
         "affected_feature_ids": attribution["feature_ids"],
         "minimum_mm": round(float(values.min()), 5),
@@ -912,6 +939,7 @@ def thickness_observation(
             "minimum_sample": {
                 "face_index": int(face_ids[order[0]]),
                 "point_mm": points[order[0]].round(8).tolist(),
+                "semantic_point_mm": semantic_point,
             },
         },
     }
@@ -1364,11 +1392,13 @@ def main() -> int:
                     "printability_local_thin_region",
                     thickness["violating_count"] == 0,
                     {
+                        "measurement_context": thickness["measurement_context"],
                         "affected_feature_attribution": thickness[
                             "affected_feature_attribution"
                         ],
                         "affected_feature_ids": thickness["affected_feature_ids"],
                         "minimum_mm": thickness["minimum_mm"],
+                        "p05_mm": thickness["p05_mm"],
                         "risk_bounds_mm": thickness["risk_bounds_mm"],
                         "sample_count": thickness["sample_count"],
                         "sampling": thickness["sampling"],

@@ -2349,5 +2349,157 @@ class CadCompileTests(unittest.TestCase):
             )
 
 
+class WarningFeedbackTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.intent = self.root / "intent.json"
+        self.source = self.root / "build.py"
+        self.intent.write_text('{"part":"cup"}')
+        self.source.write_text("# test source")
+        self.run_number = 0
+
+    def payload(self, minimum=0.5, *, status="warning"):
+        return {
+            "schema": "evidence-mesh-audit/v3", "printer_profile": {"sha256": "profile"},
+            "checks": [{
+                "name": "printability_local_thin_region", "status": status,
+                "expected": {"minimum_local_wall_mm": 2.0},
+                "observed": {
+                    "minimum_mm": minimum, "p05_mm": 2.5,
+                    "violating_area_ratio": 0.02, "sample_count": 2048,
+                    "affected_feature_ids": ["body", "cavity", "rim"],
+                    "risk_bounds_mm": [[0, 0, 0], [82, 62, 95]],
+                    "measurement_context": {
+                        "method": "max-sphere-at-triangle-surface-points/v1",
+                        "sample_limit": 2048,
+                        "coordinate_frame": {
+                            "name": "part-print", "status": "bound", "part": "cup",
+                            "artifact_key": "stl:cup", "semantic_to_mesh": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+                        },
+                    },
+                    "sampling": {
+                        **{f"large-field-{i}": i for i in range(15)},
+                        "method": "max-sphere-at-triangle-surface-points",
+                        "minimum_sample": {"face_index": 21, "point_mm": [17.2, 33.5, 94.6],
+                                           "semantic_point_mm": [17.2, 33.5, 94.6]},
+                    },
+                },
+            }],
+        }
+
+    def run_measurement(self, payload, *, model="cup", part="cup", workspace=None):
+        self.run_number += 1
+        result = {
+            "model": model, "runId": f"run-{self.run_number}", "issues": [],
+            "inputs": {"intent": str(self.intent), "source": str(self.source),
+                       "workspace": str(workspace or self.root)},
+            "stages": [{"name": f"mesh-qa:{part}", "status": "pass"}],
+        }
+        if payload is not None:
+            cad_compile._capture_thickness_measurements(result, payload, stage=f"mesh-qa:{part}", part=part)
+        state_path = cad_compile._write_repair_state(result, result_path=self.root / "result.json")
+        return result, json.loads(state_path.read_text())
+
+    def test_compact_keeps_minimum_point_instead_of_losing_it_among_sampling_counts(self):
+        observed = self.payload()["checks"][0]["observed"]
+        issue = {"check": "printability_local_thin_region", "severity": "warning",
+                 "code": "QA.WARNING", "part": "cup", "observed": observed,
+                 "message": "thin region"}
+        original = json.dumps(issue)
+        summary = cad_compile._agent_summary({"issues": [issue]})
+        witness = summary["issues"][0]["witness"]
+        self.assertEqual(witness["pointMm"], [17.2, 33.5, 94.6])
+        self.assertEqual(witness["coordinateFrame"], "part-print")
+        self.assertEqual(witness["frameStatus"], "bound")
+        self.assertEqual(witness["semanticPointMm"], [17.2, 33.5, 94.6])
+        self.assertEqual(witness["minimumMm"], 0.5)
+        self.assertEqual(witness["featureCandidates"]["ids"], ["body", "cavity", "rim"])
+        self.assertIn("not root causes", witness["featureCandidates"]["basis"])
+        self.assertLessEqual(len(cad_compile._summary_json(summary)), 12000)
+        self.assertEqual(json.dumps(issue), original)
+        observed["affected_feature_ids"] = [f"candidate-{i}" for i in range(20)]
+        limited = cad_compile._agent_summary({"issues": [issue]})
+        self.assertEqual(limited["issues"][0]["witness"]["pointMm"], [17.2, 33.5, 94.6])
+        self.assertTrue(limited["diagnostics"]["truncated"])
+
+    def test_measured_delta_labels_changed_samples_without_claiming_cause(self):
+        self.run_measurement(self.payload(0.02))
+        changed = self.payload(0.004)
+        changed["checks"][0]["observed"]["sampling"]["large-field-0"] = 99
+        changed["checks"][0]["observed"]["sampling"]["minimum_sample"]["point_mm"] = [17.2, 33.5, 94.7]
+        result, state = self.run_measurement(changed)
+        comparison = result["warningComparisons"][0]
+        self.assertEqual(comparison["status"], "measured")
+        self.assertEqual(comparison["measurements"]["minimum_mm"], [0.02, 0.004, -0.016])
+        self.assertTrue(comparison["changes"]["samplingChanged"])
+        self.assertTrue(comparison["changes"]["riskLocationChanged"])
+        self.assertIn("not causal", comparison["basis"])
+        self.assertEqual(state["failed"], [])
+        self.assertEqual(result["repairDelta"]["new"], [])
+        result["issues"] = [{
+            "code": "QA.WARNING", "severity": "warning", "part": "cup",
+            "check": "printability_local_thin_region", "message": "thin region",
+            "observed": {**changed["checks"][0]["observed"],
+                         "bulkyEvidence": {str(i): "x" * 5000 for i in range(30)}},
+        }]
+        result["artifacts"] = {"preview": {"path": "/tmp/" + "p" * 20000}}
+        compact = cad_compile._agent_summary(result)
+        self.assertEqual(compact["warningComparisons"][0]["measurements"]["minimum_mm"], [0.02, 0.004, -0.016])
+        self.assertEqual(compact["issues"][0]["witness"]["pointMm"], [17.2, 33.5, 94.7])
+        self.assertLessEqual(len(cad_compile._summary_json(compact)), 12000)
+
+    def test_unmeasured_warning_survives_until_an_actual_check_pass(self):
+        self.run_measurement(self.payload())
+        skipped = self.payload(status="not_evaluated")
+        result, state = self.run_measurement(skipped)
+        self.assertEqual(result["warningComparisons"][0]["status"], "not_remeasured")
+        self.assertEqual(state["warningMeasurements"][0]["runId"], "run-1")
+        self.assertEqual(result["repairDelta"]["resolved"], [])
+        result, _ = self.run_measurement(self.payload(2.5, status="pass"))
+        comparison = result["warningComparisons"][0]
+        self.assertEqual(comparison["status"], "measured")
+        self.assertEqual(comparison["previousRunId"], "run-1")
+        self.assertEqual(comparison["changes"]["currentCheckStatus"], "pass")
+        self.assertEqual(comparison["measurements"]["minimum_mm"], [0.5, 2.5, 2.0])
+
+    def test_changed_frame_method_target_profile_or_sampling_policy_is_not_comparable(self):
+        for field in ("frame", "method", "sample_limit", "target", "profile", "unbound"):
+            with self.subTest(field=field):
+                self.run_measurement(self.payload())
+                changed = self.payload(0.1)
+                context = changed["checks"][0]["observed"]["measurement_context"]
+                if field == "frame":
+                    context["coordinate_frame"]["semantic_to_mesh"][0][3] = 5
+                elif field == "unbound":
+                    context["coordinate_frame"]["status"] = "unbound"
+                elif field in {"method", "sample_limit"}:
+                    context[field] = "different"
+                elif field == "target":
+                    changed["checks"][0]["expected"]["minimum_local_wall_mm"] = 1.0
+                else:
+                    changed["printer_profile"]["sha256"] = "other-profile"
+                result, _ = self.run_measurement(changed)
+                comparison = result["warningComparisons"][0]
+                self.assertEqual(comparison["status"], "not_comparable")
+                self.assertIsNone(comparison["measurements"]["minimum_mm"][2])
+                self.assertTrue(comparison["changes"]["notComparableReasons"])
+
+    def test_no_cross_model_intent_part_or_workspace_comparison(self):
+        self.run_measurement(self.payload())
+        result, _ = self.run_measurement(self.payload(), model="other")
+        self.assertEqual(result["warningComparisons"][0]["status"], "first_measurement")
+        self.intent.write_text('{"part":"cup","target":"changed"}')
+        result, _ = self.run_measurement(self.payload())
+        self.assertEqual(result["warningComparisons"][0]["status"], "first_measurement")
+        result, _ = self.run_measurement(self.payload(), part="other")
+        self.assertTrue(all(item["status"] != "measured" for item in result["warningComparisons"]))
+        other = self.root / "other-workspace"
+        other.mkdir()
+        result, _ = self.run_measurement(self.payload(), workspace=other)
+        self.assertEqual(result["warningComparisons"][0]["status"], "first_measurement")
+
+
 if __name__ == "__main__":
     unittest.main()

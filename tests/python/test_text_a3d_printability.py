@@ -360,6 +360,42 @@ class PrintabilityGeometryTests(unittest.TestCase):
         )
         self.assertLess(observed["p05_mm"], 0.87)
         self.assertAlmostEqual(observed["minimum_mm"], 0.5, places=4)
+        self.assertEqual(observed["measurement_context"]["coordinate_frame"]["status"], "unbound")
+
+    def test_thin_point_is_on_measured_triangle_and_labels_print_frame(self):
+        mesh = trimesh.creation.box(extents=[10, 6, 0.5])
+        transform = np.eye(4)
+        transform[:3, :3] = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+        transform[:3, 3] = [12, 4, 0.25]
+        mesh.apply_transform(transform)
+        report = {
+            "part": "plate", "artifacts": {"stl:plate": {"coordinateFrame": "part-print"}},
+            "coordinateFrames": {"part-print": {"partTransforms": {"plate": transform.tolist()}}},
+            "features": {"plate-body": {"part": "plate", "bbox_mm": {
+                "min": [-5, -3, -0.25], "max": [5, 3, 0.25],
+            }}},
+        }
+        observed = qa_check.thickness_observation(
+            mesh, target_mm=2.0, sample_limit=128, report=report,
+            artifact_key="stl:plate", part_name="plate",
+        )
+        frame = observed["measurement_context"]["coordinate_frame"]
+        self.assertEqual(frame["name"], "part-print")
+        self.assertEqual(frame["status"], "bound")
+        self.assertEqual(frame["semantic_to_mesh"], transform.tolist())
+        sample = observed["sampling"]["minimum_sample"]
+        point = np.asarray(sample["point_mm"])
+        semantic = np.asarray(sample["semantic_point_mm"])
+        np.testing.assert_allclose(transform[:3, :3] @ semantic + transform[:3, 3], point, atol=1e-7)
+        self.assertTrue(np.all(semantic >= [-5.000001, -3.000001, -0.250001]))
+        self.assertTrue(np.all(semantic <= [5.000001, 3.000001, 0.250001]))
+        closest = trimesh.triangles.closest_point(
+            mesh.triangles[[sample["face_index"]]], point[None, :],
+        )[0]
+        self.assertLess(np.linalg.norm(point - closest), 1e-7)
+        self.assertAlmostEqual(observed["minimum_mm"], 0.5, places=4)
+        self.assertEqual(observed["affected_feature_ids"], ["plate-body"])
+        self.assertIn("not root causes", observed["affected_feature_attribution"]["basis"])
 
     def test_wall_thickness_sampling_keeps_nearly_planar_box_stable(self):
         mesh = trimesh.creation.box(extents=[20, 20, 10])
@@ -551,6 +587,7 @@ class PrintabilityGeometryTests(unittest.TestCase):
         self.assertEqual(observed, {
             "feature_ids": ["rotated-feature"],
             "status": "evaluated",
+            "basis": "risk-bounds/feature-bounds intersection; candidates, not root causes",
         })
 
         report["coordinateFrames"]["plate-print"]["partTransforms"]["body"][0][0] = 2
