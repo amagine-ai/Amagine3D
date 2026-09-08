@@ -11,8 +11,8 @@ sibling sessions. Use public `a3d` commands and keep source beside artifacts.
 Author manufactured geometry as build123d BRep solids and retain genuine STEP
 masters. STL, GLB and 3MF meshes are derived export and review artifacts.
 
-Develop the primary form from the requested product character and use. For
-consumer enclosures and other appearance-led objects, read
+Develop the primary form from the requested product character and use. When the
+request prioritizes exterior form, styling, or reference reproduction, read
 `references/surface-design.md` for shaping volumes, choosing surface controls,
 and integrating details. Describe the defining contours, surface transitions and
 functional datums in the existing landmarks and acceptance fields. Choose the
