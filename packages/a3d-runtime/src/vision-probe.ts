@@ -74,19 +74,43 @@ export interface VisionProbeResult {
 
 async function imageReturned(codexHome: string): Promise<boolean> {
   // SDK JSON events omit native image calls; inspect only this diagnostic's log.
-  const files = await readdir(codexHome, { recursive: true });
+  let files: string[];
+  try {
+    files = await readdir(codexHome, { recursive: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
   for (const file of files.filter((name) => name.endsWith('.jsonl'))) {
     const imageCalls = new Set<string>();
     const lines = (await readFile(join(codexHome, file), 'utf8')).split('\n');
     for (const line of lines.filter(Boolean)) {
-      const record = JSON.parse(line);
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        // A partially written final log line is not evidence of image delivery.
+        continue;
+      }
+      if (record?.type !== 'response_item') continue;
       const item = record.payload;
-      if (record.type !== 'response_item') continue;
-      if (item?.type === 'function_call' && item.name?.split('.').at(-1) === 'view_image') {
+      const nativeCall = item?.type === 'function_call'
+        && typeof item.name === 'string' && item.name.split('.').at(-1) === 'view_image';
+      // Code-mode hosts expose the same native tool through exec. Ignore mentions
+      // in comments and strings; require its matching output to carry image data.
+      const wrappedCall = item?.type === 'custom_tool_call'
+        && typeof item.name === 'string' && item.name.split('.').at(-1) === 'exec'
+        && typeof item.input === 'string'
+        && /\btools\s*\.\s*view_image\s*\(/u.test(item.input.replace(
+          /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//gu,
+          ' ',
+        ));
+      if ((nativeCall || wrappedCall) && typeof item.call_id === 'string') {
         imageCalls.add(item.call_id);
       }
       if (
-        item?.type === 'function_call_output' && imageCalls.has(item.call_id)
+        (item?.type === 'function_call_output' || item?.type === 'custom_tool_call_output')
+        && imageCalls.has(item.call_id)
         && Array.isArray(item.output)
         && item.output.some((content: { type?: string; image_url?: unknown }) =>
           content?.type === 'input_image' && typeof content.image_url === 'string'
@@ -115,7 +139,6 @@ export async function probeVision(
       const result = await runtime.runTurn({
         sessionId,
         taskType: 'chat',
-        webSearchEnabled: false,
         imagePaths: mode === 'attachment' ? [path] : [],
         message: [
           'This is a visual capability diagnostic, not a CAD task. Do not edit files.',

@@ -16,45 +16,34 @@ their own purpose and scale within that main volume.
 
 ## Choose controls that express the form
 
-Choose geometry by the freedom the shape needs. Analytic profiles, revolutions,
-sweeps and BRep lofts make dimensioned curves and planar regions easy to edit.
-Guided sections, surface patches or a distance field can give a freeform body
-more local control. `a3d guide strategy` connects these constructions to the
-available BRep and mesh authoring paths.
+Use build123d BRep throughout the manufactured body. For a product enclosure,
+start with a small set of key sections and loft between them. Extrusions,
+revolutions and sweeps remain useful when they express the intended shape more
+directly. `a3d guide strategy` helps choose the construction.
 
-For one physical part combining a freeform mesh surface with precise interfaces,
-use a mesh master with directly bound BRep additions and cutters. Separate
-dimension-controlled parts can retain their own BRep masters.
-
-For a section-driven surface, let width, depth and section shape develop
+For a lofted surface, let width, depth and section shape develop
 independently along its path. Section centers and orientations can follow a lean,
 an asymmetric grip or a curved spine. Choose the path direction to suit the
 object: its long axis, a handle path or a vertical body profile. Give front and
 rear profiles separate controls where they need different behavior, connecting
-them through shared boundary curves.
+them through compatible section boundaries. Keep section winding, seam positions
+and edge correspondence consistent to avoid twists.
 
-When this construction fits, `surface-shell.md` provides a small working example
-of varying sections with a real cavity. Adapt the section, end treatment and
-opening arrangement to the new design. For an SDF-defined hollow body,
-`organic_shell.build_organic_shell(...)` accepts an arbitrary signed-distance
-field in millimetres, positive inside; use a distance-valued field so its wall
-inset retains its physical meaning. Model near the local origin and use named
-transforms for assembly placement.
+`surface-shell.md` provides a working BRep loft example with a real cavity.
+Adapt its key sections, end treatment and opening arrangement to the design.
+Model near the local origin and use named transforms for assembly placement.
 
 ## Shape the transitions
 
-Give adjoining smooth surfaces shared boundaries and compatible tangents. For a
-broad flowing transition, shape how curvature changes across the shoulder as well
-as where the shoulder starts and ends. Profile handles, guide curves and local
-blend dimensions make these decisions editable. Give intentional planes, shallow
-facets and crisp boundaries their own clear geometry. Let related edge treatments
-share a visual rhythm while allowing different transitions to serve different uses.
+Use section spacing, profile shape and local blend dimensions to shape the
+shoulders and transitions. Smooth lofts, `ruled=True` lofts and several joined
+BRep volumes are all useful; a readable silhouette may use visible facets or
+coarser transitions. G2 continuity is not a default requirement.
 
-For a mesh master, develop the controlling surface and sample it finely where
-curvature changes, openings turn or narrow details need support. Keep broad quiet
-regions economical. Use consistent vertex correspondence between connected
-sections and matched boundaries between patches. Surface shape controls the
-silhouette; display normals help its intended smoothness read in the lighting.
+If a loft twists or fails, first simplify profiles, align their correspondence,
+adjust spacing or divide the volume into simpler BRep constructions. Add sections
+only where they control a specific landmark. Preserve the intended dimensions
+and validation checks as the construction changes.
 
 ## Integrate the functional details
 
@@ -67,9 +56,11 @@ relationships for installed screens.
 
 Where the design includes an interior, develop it from the chosen outer form.
 Give the cavity, rim, floor and local supports dimensions tied to that form and
-the parts they serve. A surface offset, a distance-field inset or separately
-controlled inner profiles offer different ways to shape it; measure thickness in
-the direction the construction actually controls.
+the parts they serve. Subtract a separately controlled inner loft from the outer
+solid, or use a BRep offset when it remains valid. An inset in each section does
+not establish constant 3D normal thickness: inspect measured wall thickness,
+especially at shoulders and end transitions. Extend the cavity cutter through
+the service opening and preserve the intended floor and rim.
 
 ## Let the preview inform the next edit
 
@@ -77,7 +68,7 @@ Use the current geometry's preview to continue designing. Look at the contour an
 the way light moves across the broad surfaces, then tune the source controls that
 create those effects. Use available views of that same geometry to understand
 the relevant grip, underside or rear detail. If a construction becomes
-awkward to adjust, revisit its profiles, surface boundaries or representation
+awkward to adjust, revisit its profiles, section spacing or BRep construction
 with the intended form in mind. After a failed operation or change of construction,
 use the original landmarks to develop another way to express the requested form
 and function.

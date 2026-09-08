@@ -1,39 +1,93 @@
-# Installed-component geometry checks
+# Installed-component geometry evidence
 
-Use `a3d capabilities --symbol check_installation` for the callable signature.
-This optional helper accepts build123d solids/compounds and closed trimesh meshes
-in semantic assembly coordinates. It chooses no dimensions, mounting method or
-part split. Call it on the finished receiving geometry before export.
+Use parameterized envelopes for installed items whose functional relationships
+belong in the request. Choose the needed checks by behavior: clearance, insertion,
+support, retention and passage. None implies a particular component, enclosure
+split, fastening method or bottom cover. A purchased item remains excluded from
+manufacturing exports whether or not a preview reference is shown.
+
+## Bind required checks into compile
+
+On the receiving intent feature, declare only the applicable requirements:
 
 ```python
-from installation_check import check_installation
-
-check_installation(
-    pcb_envelope, {"tray": tray},
-    insertion_envelope=pcb_insertion_sweep,
-    supports={"seat": tray},
-    retainers={"lid": lid},
-    withdrawal_axis=(0, 0, 1),
-    free_travel_mm=0.29, stop_travel_mm=0.35,
-    out_path=OUT / "pcb-installation.json",
-)
+{
+    "id": "module-mount", "kind": "mount",
+    "evidence": "The replaceable module must remain supported in use",
+    "acceptance": "Proposed module envelope fits, enters from the service side and rests on its seat",
+    "installation_checks": ["clearance", "insertion", "support"],
+}
 ```
 
-The example's travel values are illustrative, not PCB defaults. The support
-probe moves the component slightly opposite withdrawal; each named support must
-make contact. Retainers must leave the declared free travel clear and stop the
-component at the declared stop travel. The helper records measured overlap and
-raises on failure after saving the optional report. Omit support or retention
-checks when that relationship is not needed; omitted checks are not claimed.
+The immutable intent records what must be proved; the scene binds current
+witness geometry and final part IDs. Use the actual component outline and shared
+installation datums. Query signatures together when useful:
 
-Author the swept envelope from the actual installation path. For a rectangular
-component moving along Z, a box spanning its seated bottom to its entry top is
-an exact envelope; a bounding-box sweep of a nonrectangular component is only a
-conservative approximation. Use a shaped or segmented swept volume when that
-approximation collides but the real part can pass. Check USB cable approach with
-its own plug/swept envelope. Clearance alone proves neither support nor a path.
+```bash
+a3d capabilities --symbol bind_installation_check --symbol check_installation
+```
 
-Contact probes establish geometry, not clamping force, compliant behavior or
-strength. Keep the supplied envelope dimensions and their assumptions in the
-existing intent evidence. Purchased components remain excluded from manufacturing
-exports. No new intent/scene schema or mandatory checklist is required.
+```python
+from installation_check import bind_installation_check
+
+installation = bind_installation_check(
+    feature_id="module-mount", envelope=module_envelope,
+    out_dir=OUT / ".installation",
+    obstacle_parts=["housing"], support_parts=["housing"],
+    insertion_envelope=module_insertion_sweep,
+    withdrawal_axis=(1, 0, 0), support_direction=(0, 0, -1),
+)
+write_scene(..., installation_checks=[installation])
+```
+
+No support surrogate is exported: the compiler imports the final semantic STEP
+parts and evaluates them against hash-bound witness meshes. Omitting a declared
+check, removing its record, using an unknown part, changing a witness after
+binding, or failing the geometry blocks successful compilation. The compile
+result includes `installationAudit`. With no declared installation requirements,
+ordinary CAD work has no additional installation stage.
+
+| Requirement | Supplied evidence | What is measured |
+|---|---|---|
+| `clearance` | component `envelope`; receiving part in obstacle/support/retainer groups | No material overlap at the installed position |
+| `insertion` | `insertion_envelope` and `obstacle_parts` present during insertion | The witness contains the installed envelope and is clear of those obstacles |
+| `support` | `support_parts`; optional `support_direction` | A small displacement toward each named support makes contact |
+| `retention` | `retainer_parts`, withdrawal axis, free and stop travel | The free interval is unobstructed and the specified stop position contacts each retainer |
+| `passage` | connected `passage_envelope` and `passage_parts` | The witness reaches into the component envelope and contains no material from the specified parts |
+
+`support_direction` points toward the support and is independent of insertion
+or withdrawal. If omitted, it defaults to the opposite withdrawal direction for
+an axial seat. Retainers installed after component insertion should be excluded
+from the insertion obstacle group, but included in installed clearance and
+retention checks. Select `free_travel_mm` and `stop_travel_mm` from the intended
+movement and clearances, not from universal example values.
+
+Author the complete insertion sweep from the actual path. An axis-aligned box
+can be exact for a rectangular component translating on that axis; a bounding-box
+sweep of a shaped component can be overly conservative. Use the shaped or
+segmented sweep when needed rather than simplifying the component to pass.
+
+For a functional aperture, construct the required optical, cable or other
+passage volume using its effective cross-section. Extend it from the actual
+exterior entry into the component envelope, crossing any intervening walls in full. A
+point or centerline does not establish the full needed opening. The checker
+proves the supplied connected volume is clear and reaches the component; it
+does not infer the correct exterior endpoint or required optical footprint from
+a feature name. Record those endpoints and dimensions in feature acceptance
+and inspect the exposed structure with preview references hidden.
+
+## Direct construction checks
+
+`check_installation` also accepts in-memory BRep or mesh geometry for feedback
+before export. It returns measured overlaps and raises `InstallationCheckError`
+on failure. Use this for early checks; bind requirements above when the evidence
+must participate in the final compile decision. Early results alone do not prove
+that later edits preserved the installation.
+
+Contact checks prove geometric seating and stops, not force, clamping strength,
+elasticity, service life or electrical operation. Friction or adhesive retention is
+not a geometric withdrawal stop; use the relevant fit and process evidence
+instead of inventing a stop solely to satisfy `retention`. Unspecified requirements are
+not automatically inferred by the compiler. `installed_module_intent.py` and
+`installed_module_build.py` under `examples/` show a complete installation using
+proposed dimensions, separately manufactured parts and an optional preview item.

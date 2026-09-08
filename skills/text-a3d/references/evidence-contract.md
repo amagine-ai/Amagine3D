@@ -76,19 +76,34 @@ part union as `backendData.semanticAssembly.boundsMm`; they must never copy the
 intent target into that evidence. Each `parts[part].semantic.boundsMm` records
 only that physical part. Intent-to-semantic envelope comparison uses a
 0.5 mm tolerance, while representation readback of an exported STEP/STL uses a
-separate 0.05 mm tolerance.
+separate 0.05 mm tolerance. `source: "inferred"` describes confidence; it does
+not grant permission to resize. An axis can explicitly declare
+`"constraint": {"kind":"range","min_mm":100,"max_mm":125}` beside its `value`,
+`source`, and `confidence`. Both the selected value and final measured envelope
+must satisfy that declared range (the final audit retains its 0.5 mm tolerance).
+Without a range, the value remains fixed.
 
 The parameter panel does not amend or regenerate this immutable intent. Direct
 parameter rebuilds are valid only while the complete semantic X/Y/Z envelope
 continues to satisfy `dimensions_mm`. For a user-requested change to the target
 envelope or required features, write a revised intent under a new filename in
 the same workspace. `write_intent` accepts identical existing content and
-requires a new filename for changed content. Keep the same model name
+requires a new filename for changed content. Include a `revision` with
+`parent: {path, sha256}`, `kind`, and a concrete `reason`. Use
+`parameter-adjustment` for values within existing allowed ranges;
+`target-change` requires evidence `{kind:"user-request", text:"..."}`, while
+`evidence-correction` requires `{kind:"external-evidence", text:"..."}` and can
+include a reference. Evidence is an author-declared record, not independent
+proof of authorization. Never fabricate it to pass a checker. Keep the same model name
 and editable build source, pass the revised file through `a3d compile --intent`,
 and let `write_scene` refresh its intent binding. This is a requirement revision
 of the current model; it does not require a separate conversation or new
 manufacturing output set. Within each revision, repair geometry against that
-target rather than changing the target to match a failing artifact.
+target rather than changing the target to match a failing artifact. The compiler
+stores a workspace/model revision lineage and requires each changed intent to
+descend from the last verified parent. Changing the intent filename or output
+directory does not start a fresh requirement baseline. Removed requirements are
+reported as scope changes, not repaired geometry.
 
 When the user asks to replicate, reproduce, or exactly match a named real,
 catalog, branded, or fictional object, preserve that identity as the target.
@@ -140,6 +155,13 @@ feature is intentionally on an edge or corner. `edge_crossing` describes the
 boundary between exterior faces, not whether a cutter passes through the skin.
 A top cavity contained inside its surrounding rim uses `forbidden`, even though
 it is open. A notch that reaches across the top/front edge uses `required`.
+
+For applicable installed-component relationships, a receiving feature can
+declare `installation_checks`: a nonempty list of `clearance`, `insertion`,
+`support`, `retention`, or `passage`. These targets require corresponding
+hash-bound scene evidence and final-part checks; `installation-checks.md`
+describes the API and geometric scope. They are independent of preview nodes
+and do not prescribe a mounting method.
 
 ## Manufacturing structure
 
@@ -205,8 +227,8 @@ color-intent document. Every `color_regions[]` record requires `name`, owning
 - For `single-part`, two or more regions may share the top-level physical part;
   use `print_package_mode: "co_print_body"`.
 - For `multipart`, every region name is globally unique and `part` identifies
-  its owning physical part. A mesh-master part may own several volumetric
-  regions while another part owns one whole-part region. Use
+  its owning physical part. `export_assembly()` binds one whole-part material
+  assignment per BRep part. Use
   `print_package_mode: "separate_parts"` for the physical-part package.
 
 Raw intent JSON with `color_regions` must include `print_package_mode`.
@@ -297,8 +319,8 @@ when routed there, `color/BACKEND.md`.
 - Landmarks describe identity-bearing relationships. “Looks similar” is not
   an acceptance criterion.
 - Bind critical functional features to their actual geometry: use named
-  `observe()`/checked-operation evidence in the BRep helper path, or bound
-  feature nodes and compiler-produced evidence in the hybrid path.
+  `observe()`/checked-operation evidence and bind those same BRep objects as
+  scene feature nodes.
 - For pixel art, run `a3d reference IMAGE --out REPORT.json`. When the report
   supplies `pixel_grid`, use its cells and colors directly with the recorded
   source-image hash. A `general-image` result calls for image-based interpretation

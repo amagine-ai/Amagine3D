@@ -1,62 +1,50 @@
-# Installed display components
+# Installed components and optional preview references
 
-Use this reference when a screen or other non-manufactured visible component is
-represented alongside the enclosure geometry. Match the engineering detail to
-the requested design.
+Use this reference when an installed screen or other purchased component affects
+the manufactured geometry or assembly preview. `display.glb` names the assembly
+preview, not an electronic screen or a requirement to manufacture one.
 
-A visual concept can define its visible outline and a real shallow seat or recess
-in the host surface, with proposed dimensions exposed as parameters. For a module
-whose installation matters to the request, derive the necessary aperture,
-keepout, support and retention from its component envelope. Develop insertion
-and service access when that assembly needs them; `design-review.md` covers those
-relationships and `a3d guide multipart` covers separately manufactured parts.
+For a functional installation, derive the necessary aperture, keepout, support
+and retention from a parameterized component envelope. Share installation datums
+and dimensions across the receiving geometry, opening and optional visible
+reference. A screen needs an unobstructed viewing region; an opaque printed
+surrogate does not implement that function. Develop insertion and service access
+as needed. `design-review.md` covers these relationships; `a3d guide multipart`
+covers separately manufactured parts. Only a request limited to appearance can
+use a shallow visual seat alone. Unspecified component dimensions do not imply
+that scope.
 
-Declare the modeled aperture, seat or cavity as a physical intent feature of the
-receiving part and apply its actual cutter. Represent the glass, active pixels or
-transient content as a `display-only` `displayComponent`, linked through
-`physicalFeatureRef` to that feature. The display node appears in GLB and stays
-out of STEP, STL, 3MF, manufacturing part counts and booleans. Any requested
-printable dummy, lens or bezel remains physical geometry.
+Declare actual receiving features in physical intent and construct them in the
+part. Purchased modules, glass and transient pixels may be represented by
+optional `display-only` nodes. They appear in GLB and stay out of STEP, STL, 3MF,
+manufacturing part counts and booleans. A printable bezel, cover or dummy is a
+manufactured part only when its manufacture is part of the design; preview
+appearance alone is not that decision.
 
-Share the host-surface frame, outline and placement controls between the physical
-feature and visible surface. A flat module can use a tangent plane; a conforming
-surface can follow the host profile. Keep the component keepout distinct from
-the visible opening. Both the BRep helper and hybrid compile paths consume the
-scene's display-only nodes for GLB. This minimal binding uses a seat cutter;
-add a separate module keepout or retainer when the intended installation calls
-for one:
+Use `bind_display_component` to bind a BRep solid/face or a mesh without manually
+writing source meshes and scene JSON. `physical_feature_ref` names the relevant
+intent-backed aperture, seat, support or other receiving feature on the same
+owning part. This is a semantic association; it does not prove installation.
 
 ```python
-from geometry_binding import bind_brep_feature
+from geometry_binding import bind_display_component
 
-nodes = [
-  bind_brep_feature(
-    node_id="screen-seat-cutter",
-    feature_id="screen/seat",
-    role="cutter",
-    shape=seat_cutter,
-    path="screen-seat-tool.stl",
-  ),
-  {
-    "id": "screen-active-surface",
-    "featureId": "display/screen-active-surface",
-    "role": "display-only",
-    "physicalFeatureRef": "screen/seat",
-    "recipe": {
-      "kind": "displayComponent",
-      "parameters": {
-        "sourceMesh": "screen-active-surface.ply",
-        "appearance": {"baseColor": "#111417", "roughness": 0.18}
-      }
-    }
-  }
-]
+reference = bind_display_component(
+    node_id="module-reference", feature_id="reference/module",
+    physical_feature_ref="module-mount", shape=module_envelope,
+    path=OUT / ".references" / "module.ply",
+    appearance={"baseColor": "#111417", "roughness": 0.18},
+)
 ```
 
-Nest these nodes under the receiving part passed to `write_scene(...)`; it
-derives `partId` and `operation`.
+Nest the reference under its receiving part in `write_scene(...)`; never put it
+in `export_part`, `export_assembly` or `export_regions` manufacturing inputs.
+Omitting the reference leaves the manufactured geometry and installation checks
+unchanged. The assembly viewer can hide marked references without changing pose;
+inspect the exposed structure as well as the assembled appearance.
 
-Scene validation requires each display component's `physicalFeatureRef` to name
-an intent-backed physical feature on the same owning part. Build input binding
-repeats that check and ensures display-only nodes do not broaden the immutable
-manufacturing request.
+`examples/installed_module_intent.py` and `installed_module_build.py` demonstrate
+a complete configurable module installation, including a real window, shared
+datums, support, removal access and independent installation evidence. Use the
+structure as an API example, not a default product shape or component size.
+`installation-checks.md` explains the applicable geometric proofs and their limits.

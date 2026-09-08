@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from build123d import Box, fillet
 import numpy as np
@@ -149,18 +150,16 @@ class MeshNormalizationTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 geometry_binding.GeometryBindingError, "after STL float32 quantization"
             ):
-                geometry_binding.bind_mesh_feature(
-                    node_id="thin-body", feature_id="body/thin", role="solid",
-                    mesh=authored, path=destination,
-                )
+                with patch.object(geometry_binding, "shape_to_mesh", return_value=authored):
+                    geometry_binding.export_shape_stl(Box(10.0, 10.0, 1.0), destination)
             self.assertEqual(destination.read_bytes(), b"previous successful artifact")
 
-    def test_bound_mesh_digest_identifies_the_normalized_file(self):
+    def test_bound_brep_digest_identifies_the_normalized_file(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "body.stl"
-            node = geometry_binding.bind_mesh_feature(
+            node = geometry_binding.bind_brep_feature(
                 node_id="body", feature_id="body/outer", role="solid",
-                mesh=_subdivided_box(), path=destination,
+                shape=Box(10.0, 10.0, 10.0), path=destination,
             )
             payload = destination.read_bytes()
             self.assertEqual(node["recipe"]["parameters"]["geometry"]["sha256"], sha256(payload).hexdigest())

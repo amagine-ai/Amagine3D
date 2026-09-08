@@ -1,4 +1,4 @@
-"""Bind authored Mesh or BRep geometry to one semantic-scene feature.
+"""Bind authored BRep geometry to one semantic-scene feature.
 
 The build source owns the geometry object.  This module writes its canonical
 triangle artifact and returns the matching scene node from that same object, so
@@ -7,7 +7,9 @@ the modeler never has to repeat dimensions or invent an intermediate STEP.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from hashlib import sha256
+from io import BytesIO
 import math
 import os
 from pathlib import Path
@@ -15,6 +17,7 @@ import tempfile
 from typing import Any
 
 import trimesh
+import numpy as np
 
 from mesh_normalization import (
     MeshNormalizationError,
@@ -23,7 +26,9 @@ from mesh_normalization import (
 )
 from scene_contract import (
     BREP_GEOMETRY_RECIPE_KIND,
-    MESH_GEOMETRY_RECIPE_KIND,
+    DISPLAY_COMPONENT_KIND,
+    FEATURE_ID_PATTERN,
+    ID_PATTERN,
 )
 
 
@@ -32,6 +37,52 @@ PHYSICAL_ROLES = {"cutter", "separate", "solid"}
 
 class GeometryBindingError(ValueError):
     """Raised when authored geometry cannot become a canonical feature mesh."""
+
+
+@dataclass(frozen=True)
+class BrepFeature:
+    """One owned geometry object reused by a boolean, observation, and scene node.
+
+    The handle carries geometry, not acceptance values. A bound cutter is still
+    only a witness; final geometry checks independently verify its effect.
+    """
+
+    id: str
+    part: str
+    role: str
+    shape: Any
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not FEATURE_ID_PATTERN.fullmatch(self.id):
+            raise GeometryBindingError("feature id must be a valid semantic feature ID")
+        if not isinstance(self.part, str) or not ID_PATTERN.fullmatch(self.part):
+            raise GeometryBindingError("feature part must be a valid part ID")
+        if not isinstance(self.role, str) or self.role not in PHYSICAL_ROLES:
+            raise GeometryBindingError(f"role must be one of {sorted(PHYSICAL_ROLES)}")
+
+    def cut_from(self, body: Any, *, min_removed_mm3: float = 0.001) -> Any:
+        """Return the checked subtraction using this exact cutter and identity."""
+        if self.role != "cutter":
+            raise GeometryBindingError("cut_from requires a feature with role 'cutter'")
+        from cad_helpers import checked_cut
+
+        return checked_cut(body, self.shape, self.id, min_removed_mm3,
+                           part_name=self.part)
+
+    def bind(self, path: str | Path, *, node_id: str | None = None,
+             linear_tolerance_mm: float = 0.02,
+             angular_tolerance_rad: float = 0.1) -> dict[str, Any]:
+        """Record and tessellate the same object without repeating its owner or ID."""
+        from cad_helpers import observe
+
+        node = bind_brep_feature(
+            node_id=node_id or f"{self.part}-{self.id.replace('/', '-')}-node",
+            feature_id=self.id, role=self.role, shape=self.shape, path=path,
+            linear_tolerance_mm=linear_tolerance_mm,
+            angular_tolerance_rad=angular_tolerance_rad,
+        )
+        observe(self.shape, self.id, role=self.role, part_name=self.part)
+        return {**node, "partId": self.part}
 
 
 def _positive_finite(value: float, name: str) -> float:
@@ -97,6 +148,11 @@ def _write_stl(mesh: trimesh.Trimesh, path: Path) -> str:
         payload = normalized_stl_bytes(mesh, f"bound geometry {path.name}")
     except MeshNormalizationError as error:
         raise GeometryBindingError(str(error)) from error
+    return _write_payload(payload, path)
+
+
+def _write_payload(payload: bytes, path: Path) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -172,26 +228,6 @@ def _feature_node(
     }
 
 
-def bind_mesh_feature(
-    *,
-    node_id: str,
-    feature_id: str,
-    role: str,
-    mesh: trimesh.Trimesh,
-    path: str | Path,
-) -> dict[str, Any]:
-    """Persist one already-canonical Mesh and return its physical scene node."""
-
-    return _feature_node(
-        node_id=node_id,
-        feature_id=feature_id,
-        role=role,
-        mesh=_canonical_mesh(mesh, f"feature {feature_id}"),
-        path=path,
-        recipe_kind=MESH_GEOMETRY_RECIPE_KIND,
-    )
-
-
 def bind_brep_feature(
     *,
     node_id: str,
@@ -223,3 +259,102 @@ def bind_brep_feature(
             "linearToleranceMm": linear,
         },
     )
+
+
+def _display_triangle_mesh(mesh: Any, context: str) -> trimesh.Trimesh:
+    """Validate a visual surface without imposing manufacturing volume rules."""
+    if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty or not len(mesh.faces):
+        raise GeometryBindingError(f"{context} must contain triangle faces")
+    if not np.isfinite(mesh.vertices).all():
+        raise GeometryBindingError(f"{context} contains non-finite vertices")
+    if not np.all(np.any(trimesh.triangles.cross(mesh.triangles) != 0.0, axis=1)):
+        raise GeometryBindingError(f"{context} contains zero-area triangles")
+    return mesh.copy()
+
+
+def bind_display_component(
+    *,
+    node_id: str,
+    feature_id: str,
+    physical_feature_ref: str,
+    shape: Any,
+    path: str | Path,
+    appearance: dict[str, Any],
+    linear_tolerance_mm: float = 0.02,
+    angular_tolerance_rad: float = 0.1,
+) -> dict[str, Any]:
+    """Bind a BRep or triangle surface as a non-manufactured scene component.
+
+    The receiving part and its physical feature remain the scene's source of
+    ownership. The source mesh uses assembly coordinates and unit scale. PLY is
+    recommended for visual surfaces; STL sources are also supported. Neither
+    a closed volume nor a printable dummy is required for a display component.
+    """
+    from display_glb import DisplayGlbError, appearance as normalize_appearance
+
+    for value, pattern, label in (
+        (node_id, ID_PATTERN, "node_id"),
+        (feature_id, FEATURE_ID_PATTERN, "feature_id"),
+        (physical_feature_ref, FEATURE_ID_PATTERN, "physical_feature_ref"),
+    ):
+        if not isinstance(value, str) or pattern.fullmatch(value) is None:
+            raise GeometryBindingError(f"{label} is invalid")
+    if feature_id == physical_feature_ref:
+        raise GeometryBindingError("display feature must differ from its physical reference")
+    if not isinstance(appearance, dict):
+        raise GeometryBindingError("appearance must be an object")
+    try:
+        visual = normalize_appearance(
+            appearance.get("baseColor"),
+            metallic=appearance.get("metallic", 0.0),
+            roughness=appearance.get("roughness", 0.58),
+        )
+    except DisplayGlbError as error:
+        raise GeometryBindingError(str(error)) from error
+    linear = _positive_finite(linear_tolerance_mm, "linear_tolerance_mm")
+    angular = _positive_finite(angular_tolerance_rad, "angular_tolerance_rad")
+    destination = Path(path).expanduser().resolve()
+    file_type = destination.suffix.lower().lstrip(".")
+    if file_type not in {"ply", "stl"}:
+        raise GeometryBindingError("display source path must end in .ply or .stl")
+    if isinstance(shape, trimesh.Trimesh):
+        mesh = _display_triangle_mesh(shape, f"display component {feature_id}")
+    else:
+        try:
+            valid_value = shape.is_valid
+            if not bool(valid_value() if callable(valid_value) else valid_value):
+                raise ValueError("invalid BRep")
+            vertices, faces = shape.tessellate(linear, angular)
+            mesh = trimesh.Trimesh(
+                vertices=[[vertex.X, vertex.Y, vertex.Z] for vertex in vertices],
+                faces=faces,
+                process=False,
+            )
+        except Exception as error:
+            raise GeometryBindingError(
+                f"display component {feature_id} could not be tessellated: {error}"
+            ) from error
+        mesh = _display_triangle_mesh(mesh, f"display component {feature_id}")
+    try:
+        payload = mesh.export(file_type=file_type)
+        if not isinstance(payload, bytes):
+            raise ValueError("exporter did not return binary mesh data")
+        readback = trimesh.load(BytesIO(payload), file_type=file_type, process=False)
+        _display_triangle_mesh(readback, f"display component {feature_id} readback")
+    except (ValueError, TypeError, OSError) as error:
+        raise GeometryBindingError(f"cannot export display component {feature_id}: {error}") from error
+    digest = _write_payload(payload, destination)
+    return {
+        "id": node_id,
+        "featureId": feature_id,
+        "role": "display-only",
+        "operation": "none",
+        "physicalFeatureRef": physical_feature_ref,
+        "recipe": {
+            "kind": DISPLAY_COMPONENT_KIND,
+            "parameters": {
+                "sourceMesh": {"path": str(destination), "scale": 1.0, "sha256": digest},
+                "appearance": visual,
+            },
+        },
+    }

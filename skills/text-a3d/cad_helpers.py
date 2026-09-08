@@ -25,6 +25,7 @@ from cad_diagnostics import (
     SOURCE_DIAGNOSTICS_SCHEMA,
     CadDiagnosticError,
     source_diagnostics_payload,
+    write_source_diagnostics,
 )
 from display_glb import (
     DisplayGlbError,
@@ -146,6 +147,7 @@ def _raise_deferred_source_issues() -> None:
         return
     issues = list(_DEFERRED_ISSUES)
     _DEFERRED_ISSUES.clear()
+    write_source_diagnostics(source_diagnostics_payload(issues))
     print(
         json.dumps(
             {
@@ -167,6 +169,7 @@ def _raise_source_diagnostics(
 ) -> None:
     items = list(diagnostics)
     if _collect_source_diagnostics():
+        write_source_diagnostics(source_diagnostics_payload(items))
         print(json.dumps(source_diagnostics_payload(items), indent=2))
     raise BuildInvariantError(message)
 
@@ -683,18 +686,16 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
         )
         mesh = trimesh.load(mesh_path, force="mesh", process=False)
     if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
-        return {
-            "center_inside_contact_bounds": False,
-            "contact_area_mm2": 0.0,
-            "contact_area_ratio": 0.0,
-            "contact_bounds_mm": None,
-            "overhang_area_mm2": float("inf"),
-            "stability_offset_ratio": float("inf"),
-        }
+        raise BuildInvariantError("print orientation tessellation is empty or invalid")
     normals = np.asarray(mesh.face_normals, dtype=float)
     triangles = np.asarray(mesh.triangles, dtype=float)
     areas = np.asarray(mesh.area_faces, dtype=float)
     bounds = np.asarray(mesh.bounds, dtype=float)
+    if (
+        not all(np.isfinite(values).all() for values in (normals, triangles, areas, bounds))
+        or not (areas > 0).all()
+    ):
+        raise BuildInvariantError("print orientation tessellation is empty or invalid")
     minimum_z = float(bounds[0, 2])
     contact_mask = (
         (triangles[:, :, 2].max(axis=1) <= minimum_z + 0.08)
@@ -707,7 +708,7 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
     )
     contact_bounds = None
     center_inside = False
-    stability_offset = float("inf")
+    stability_offset = None
     if contact_mask.any():
         contact_points = triangles[contact_mask][:, :, :2].reshape((-1, 2))
         lower = contact_points.min(axis=0)
@@ -740,7 +741,9 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
             else None
         ),
         "overhang_area_mm2": round(overhang_area, 5),
-        "stability_offset_ratio": round(stability_offset, 8),
+        "stability_offset_ratio": (
+            round(stability_offset, 8) if stability_offset is not None else None
+        ),
     }
 
 
@@ -801,6 +804,13 @@ def _orientation_candidates(
         protected_penalty = 1 if bed_face in protected else 0
         no_contact_penalty = 1 if metrics["contact_area_mm2"] <= 1e-9 else 0
         center_penalty = 0 if metrics["center_inside_contact_bounds"] else 1
+        # Contact penalties sort first. Missing stability only ties candidates
+        # that both lack measurable contact; it never describes a stable base.
+        stability_score = (
+            round(float(metrics["stability_offset_ratio"]), 8)
+            if metrics["stability_offset_ratio"] is not None
+            else 0.0
+        )
         results.append({
             "bed_contact_semantic_face": bed_face,
             "bed_fit": bed,
@@ -817,7 +827,7 @@ def _orientation_candidates(
                 round(float(metrics["overhang_area_mm2"]), 5),
                 no_contact_penalty,
                 center_penalty,
-                round(float(metrics["stability_offset_ratio"]), 8),
+                stability_score,
                 round(-float(metrics["contact_area_mm2"]), 5),
                 protected_penalty,
                 round(dimensions[2], 5),
@@ -873,7 +883,7 @@ def _print_plate(
     *,
     profile: dict,
 ):
-    """Arrange parts using rigid translations and a profile-bound shelf pack."""
+    """Arrange parts using rigid bed-plane turns and translations at scale one."""
     bboxes = {}
     for part_name, shape in parts.items():
         box = shape.bounding_box()
@@ -886,6 +896,7 @@ def _print_plate(
             bboxes,
             profile,
             spacing_mm=spacing_mm,
+            allow_rotation=True,
         )
     except PlateLayoutError as error:
         raise BuildInvariantError(str(error)) from error
@@ -894,10 +905,12 @@ def _print_plate(
     transforms = {}
     for part_name, shape in parts.items():
         translate = layout["transforms"][part_name]
-        placed[part_name] = _translate(shape, *translate)
+        rotation = layout["rotations"][part_name]
+        placed[part_name] = _translate(_rotate(shape, *rotation), *translate)
         transforms[part_name] = rigid_transform(
             "assembly-semantic",
             "plate-print",
+            rotate_degrees_xyz=rotation,
             translate_mm=translate,
         )
     return Compound(children=list(placed.values())), placed, transforms, layout
@@ -1533,6 +1546,35 @@ def export_part(
     return report
 
 
+def _packing_diagnostic_candidate(normalized, name, output, colors, inputs, scene_data, scene_path):
+    """Preserve semantic geometry when manufacturing layout cannot be completed.
+
+    This deliberately emits no successful build manifest or print package. The
+    compiler verifies these current-run bindings before exposing a diagnostic.
+    """
+    from cpu_z_buffer import render_contact_sheet
+    from render_preview import _render_inputs, DEFAULT_MATERIAL
+
+    run_id = new_run_id()
+    prefix = f"{name}-{run_id}-diagnostic"
+    step_path = output / f"{prefix}.step"
+    glb_path = output / f"{prefix}.glb"
+    preview_path = output / f"{prefix}.png"
+    assembly = Compound(children=[shape for shape, _ in normalized.values()])
+    export_step(assembly, str(step_path), unit=Unit.MM)
+    export_display_glb(
+        ((part, _display_mesh(shape, part), _display_style(_rgb_color(colors[part])))
+         for part, (shape, _) in normalized.items()),
+        glb_path, display_items=load_display_components(scene_data, scene_path),
+    )
+    rendered = render_contact_sheet(_render_inputs(glb_path, DEFAULT_MATERIAL), 640,
+                                    title="Diagnostic geometry — print layout incomplete")
+    rendered.image.save(preview_path, format="PNG")
+    return {"runId": run_id, "inputBindings": inputs, "manufacturingValidated": False,
+            "artifacts": {kind: {"path": str(path.resolve()), "sha256": _digest(path)}
+                          for kind, path in (("step", step_path), ("glb", glb_path), ("preview", preview_path))}}
+
+
 def export_assembly(
     parts: dict,
     name: str,
@@ -1646,11 +1688,29 @@ def export_assembly(
         part_name: _apply_print_orientation(shape, print_orientations[part_name])
         for part_name, (shape, _) in normalized.items()
     }
-    # Prove the profile-bound plate layout before writing export artifacts.
-    print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
-        oriented_parts,
-        profile=plate_profile,
-    )
+    # Failed packing must not erase otherwise inspectable semantic geometry.
+    try:
+        print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
+            oriented_parts, profile=plate_profile,
+        )
+    except BuildInvariantError as error:
+        if not isinstance(error.__cause__, PlateLayoutError):
+            raise
+        issue = {"code": "SOURCE.PLATE_LAYOUT_FAILED", "check": "print-layout",
+                 "severity": "error", "message": str(error),
+                 "observed": {"kind": error.__cause__.kind, "scale": 1.0},
+                 "repairHint": "Review orientation, packing, or a3d layout plate grouping within the bound printer; do not change design targets to silence packing failure."}
+        payload = source_diagnostics_payload([*_DEFERRED_ISSUES, issue])
+        try:
+            payload["diagnosticCandidate"] = _packing_diagnostic_candidate(
+                normalized, name, output, normalized_colors, inputs, scene_data, scene_path)
+        except Exception as diagnostic_error:
+            payload["issues"].append({"code": "SOURCE.DIAGNOSTIC_EXPORT_FAILED", "severity": "warning",
+                                      "message": str(diagnostic_error), "check": "diagnostic-export"})
+        write_source_diagnostics(payload)
+        if _collect_source_diagnostics():
+            print(json.dumps(payload, indent=2))
+        raise
     for part_name, transform in plate_transforms.items():
         semantic_to_part = _orientation_transform(print_orientations[part_name])
         transform["matrix"] = (

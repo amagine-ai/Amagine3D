@@ -1,14 +1,16 @@
 """Deterministic, scale-free print-plate layout for multipart CAD exports.
 
-The packer deliberately operates on axis-aligned bounding boxes.  It never
-rotates or scales geometry: its only output per part is a rigid translation.
-This makes the layout safe to apply to the BRep objects which are later used
-for both the combined STL and the multipart 3MF package.
+The packer operates on bounding boxes in an already selected print orientation.
+Optional quarter turns around the build axis preserve that orientation. Geometry
+is never scaled. Planning can use proposed bounds before detailed modeling.
 """
 
 from __future__ import annotations
 
 import math
+import argparse
+import json
+from pathlib import Path
 from typing import Mapping
 
 
@@ -17,6 +19,10 @@ _EPSILON = 1e-9
 
 class PlateLayoutError(ValueError):
     """Raised when a profile-bound single-plate layout cannot be proven."""
+
+    def __init__(self, message: str, *, kind: str = "invalid-input"):
+        super().__init__(message)
+        self.kind = kind
 
 
 def _finite(value, label: str) -> float:
@@ -291,11 +297,12 @@ def _subtract_rectangle(free: list[list[float]], occupied: list[float]) -> list[
     ]
 
 
-def _pack_free_rectangles(order: list[str], parts: dict, limits: dict, spacing: float) -> dict | None:
+def _pack_free_rectangles(order: list[str], parts: dict, limits: dict, spacing: float, *, allow_rotation: bool = False) -> dict | None:
     """Reuse gaps above short parts that a shelf cursor cannot revisit.
 
     Reserve spacing on each footprint's +X/+Y edges, extending the bed by that
-    same amount so touching a bed edge remains legal. Never rotate or scale.
+    same amount so touching a bed edge remains legal. Optional Z quarter turns
+    preserve build contact and never alter the part's scale.
     """
     x0, y0, x1, y1 = limits["bounds_mm"]
     free = [[x0, y0, x1 + spacing, y1 + spacing]]
@@ -304,18 +311,25 @@ def _pack_free_rectangles(order: list[str], parts: dict, limits: dict, spacing: 
     placements = {}
     for name in order:
         width, depth, _ = parts[name]["size"]
+        poses = [(width, depth, 0)]
+        if allow_rotation and abs(width - depth) > _EPSILON:
+            poses.append((depth, width, 90))
         choices = [
-            rect for rect in free
-            if width + spacing <= rect[2] - rect[0] + _EPSILON
-            and depth + spacing <= rect[3] - rect[1] + _EPSILON
+            (rect, w, d, rotation) for rect in free for w, d, rotation in poses
+            if w + spacing <= rect[2] - rect[0] + _EPSILON
+            and d + spacing <= rect[3] - rect[1] + _EPSILON
         ]
         if not choices:
             return None
-        rect = min(choices, key=lambda r: (r[1], r[0], r[2], r[3]))
+        rect, width, depth, rotation = min(choices, key=lambda c: (
+            c[0][1], c[0][0],
+            min(c[0][2] - c[0][0] - c[1], c[0][3] - c[0][1] - c[2]), c[3],
+        ))
         x, y = rect[:2]
         placements[name] = {
             "plate_bbox_xy_mm": [x, y, x + width, y + depth],
             "shelf": None,
+            "rotation_z_degrees": rotation,
         }
         free = _subtract_rectangle(free, [x, y, x + width + spacing, y + depth + spacing])
     return {
@@ -336,8 +350,9 @@ def pack_bboxes(
     profile: dict,
     *,
     spacing_mm: float = 5.0,
+    allow_rotation: bool = False,
 ) -> dict:
-    """Pack bbox footprints on one profile-bound plate using translations only."""
+    """Prove one plate layout; optionally allow 90-degree build-axis rotations."""
     spacing = _finite(spacing_mm, "plate spacing_mm")
     if spacing < 0:
         raise PlateLayoutError("plate spacing_mm must be non-negative")
@@ -349,9 +364,10 @@ def pack_bboxes(
     for name, part in sorted(parts.items()):
         width, depth, height = part["size"]
         failures = []
-        if width > bed_width + _EPSILON:
+        rotated_fits = allow_rotation and depth <= bed_width + _EPSILON and width <= bed_depth + _EPSILON
+        if width > bed_width + _EPSILON and not rotated_fits:
             failures.append(f"width {width:.5g}>{bed_width:.5g}")
-        if depth > bed_depth + _EPSILON:
+        if depth > bed_depth + _EPSILON and not rotated_fits:
             failures.append(f"depth {depth:.5g}>{bed_depth:.5g}")
         if height > height_limit + _EPSILON:
             failures.append(f"height {height:.5g}>{height_limit:.5g}")
@@ -360,7 +376,8 @@ def pack_bboxes(
     if oversized:
         raise PlateLayoutError(
             "single-plate layout failed at scale=1; part exceeds the bound "
-            f"printer volume ({'; '.join(oversized)}); scaling is disabled"
+            f"printer volume ({'; '.join(oversized)}); scaling is disabled",
+            kind="part-exceeds-volume",
         )
 
     candidates = []
@@ -388,7 +405,7 @@ def pack_bboxes(
             for name, part in sorted(parts.items())
         )
         for order in _orderings(parts):
-            candidate = _pack_free_rectangles(order, parts, limits, spacing)
+            candidate = _pack_free_rectangles(order, parts, limits, spacing, allow_rotation=allow_rotation)
             if candidate is not None:
                 candidates.append(candidate)
         if not candidates:
@@ -397,26 +414,31 @@ def pack_bboxes(
                 f"for parts [{sizes}] on usable bed {bed_width:.5g}x"
                 f"{bed_depth:.5g} mm with {spacing:.5g} mm spacing; scaling is disabled. "
                 "This is not proof of infeasibility. Review packing or plate grouping "
-                "without changing the design dimensions."
+                "without changing the design dimensions.",
+                kind="layout-not-found",
             )
 
     selected = min(candidates, key=lambda item: item["score"])
     transforms = {}
+    rotations = {}
     part_records = {}
     for part_name, source in parts.items():
         placement = selected["placements"][part_name]
         x0, y0, x1, y1 = placement["plate_bbox_xy_mm"]
+        rotation = placement.get("rotation_z_degrees", 0)
+        rotated_min = [-source["max"][1], source["min"][0]] if rotation else source["min"][:2]
         translate = [
-            x0 - source["min"][0],
-            y0 - source["min"][1],
+            x0 - rotated_min[0],
+            y0 - rotated_min[1],
             -source["min"][2],
         ]
         transforms[part_name] = [round(value, 5) for value in translate]
+        rotations[part_name] = [0.0, 0.0, float(rotation)]
         part_records[part_name] = {
             "plate_bbox_mm": {
                 "max": [round(x1, 5), round(y1, 5), round(source["size"][2], 5)],
                 "min": [round(x0, 5), round(y0, 5), 0.0],
-                "size": [round(value, 5) for value in source["size"]],
+                "size": [round(x1-x0, 5), round(y1-y0, 5), round(source["size"][2], 5)],
             },
             "shelf": placement["shelf"],
             "source_bbox_mm": {
@@ -425,6 +447,7 @@ def pack_bboxes(
                 "size": [round(value, 5) for value in source["size"]],
             },
             "translate_mm": transforms[part_name],
+            **({"rotate_degrees_xyz": rotations[part_name]} if rotation else {}),
         }
 
     names = sorted(part_records)
@@ -466,4 +489,96 @@ def pack_bboxes(
         "spacing_mm": round(spacing, 5),
         "strategy": selected.get("strategy", "deterministic-bbox-shelf"),
         "transforms": transforms,
+        "rotations": rotations,
     }
+
+
+def plan_plates(bboxes: Mapping[str, Mapping], profile: dict, *, spacing_mm: float = 5.0,
+                edge_margin_mm: float = 0.0, max_plates: int = 1) -> dict:
+    """Plan proposed or measured part bounds without changing design dimensions.
+
+    A proven layout is a geometric plan, not an export or manufacturing audit.
+    max_plates is an explicit manufacturing constraint; failure to find a layout
+    is reported separately from a part exceeding the selected printer volume.
+    """
+    from copy import deepcopy
+    if isinstance(max_plates, bool) or not isinstance(max_plates, int) or max_plates < 1:
+        raise PlateLayoutError("max_plates must be a positive integer")
+    margin = _finite(edge_margin_mm, "edge margin")
+    if margin < 0:
+        raise PlateLayoutError("edge_margin_mm must be non-negative")
+    parts = _normalize_bboxes(bboxes)
+    selected_profile = deepcopy(profile)
+    limits = _profile_limits(profile)
+    x0, y0, x1, y1 = limits["bounds_mm"]
+    if x0 + margin >= x1 - margin or y0 + margin >= y1 - margin:
+        raise PlateLayoutError("edge margin consumes the usable bed")
+    selected_profile["machine"]["selected_tool"]["polygon_mm"] = [
+        [x0+margin, y0+margin], [x1-margin, y0+margin],
+        [x1-margin, y1-margin], [x0+margin, y1-margin],
+    ]
+    result = {"schema": "evidence-print-layout-plan/v1", "profileId": profile.get("id"),
+              "maxPlates": max_plates, "edgeMarginMm": margin, "scale": 1.0,
+              "manufacturingValidated": False, "plates": [], "issues": []}
+    # Check individuals first so one oversized part is not mislabeled a packing failure.
+    for name in sorted(parts):
+        try:
+            pack_bboxes({name: bboxes[name]}, selected_profile, spacing_mm=spacing_mm, allow_rotation=True)
+        except PlateLayoutError as error:
+            result["issues"].append({"kind": error.kind, "part": name, "message": str(error)})
+    if result["issues"]:
+        return {**result, "pass": False, "status": "part-layout-failed"}
+    groups: list[dict] = []
+    for name in _orderings(parts)[0]:
+        for group in groups:
+            try:
+                pack_bboxes({**group, name: bboxes[name]}, selected_profile, spacing_mm=spacing_mm, allow_rotation=True)
+            except PlateLayoutError:
+                continue
+            group[name] = bboxes[name]
+            break
+        else:
+            groups.append({name: bboxes[name]})
+    # Also try the whole set: different orderings can beat incremental grouping.
+    try:
+        whole = pack_bboxes(bboxes, selected_profile, spacing_mm=spacing_mm, allow_rotation=True)
+    except PlateLayoutError:
+        pass
+    else:
+        result["plates"] = [{"index": 1, "parts": sorted(bboxes), "layout": whole}]
+        return {**result, "pass": True, "status": "layout-found"}
+    result["plates"] = [
+        {"index": index, "parts": sorted(group),
+         "layout": pack_bboxes(group, selected_profile, spacing_mm=spacing_mm, allow_rotation=True)}
+        for index, group in enumerate(groups, 1)
+    ]
+    fits = len(groups) <= max_plates
+    if not fits:
+        result["issues"].append({"kind": "layout-not-found",
+            "message": f"Heuristic found a {len(groups)}-plate plan, exceeding max_plates={max_plates}; this is not proof that a better layout is impossible."})
+    return {**result, "pass": fits, "status": "layout-found" if fits else "layout-not-found"}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Plan print footprints before detailed construction; recheck measured bounds at export.")
+    parser.add_argument("bounds", type=Path, help="JSON object mapping part IDs to min/max XYZ bounds")
+    parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--max-plates", type=int, default=1)
+    parser.add_argument("--spacing-mm", type=float, default=5.0)
+    parser.add_argument("--edge-margin-mm", type=float, default=0.0)
+    parser.add_argument("--out", type=Path)
+    args = parser.parse_args()
+    try:
+        result = plan_plates(json.loads(args.bounds.read_text()), json.loads(args.profile.read_text()),
+                             max_plates=args.max_plates, spacing_mm=args.spacing_mm, edge_margin_mm=args.edge_margin_mm)
+    except (ValueError, OSError) as error:
+        result = {"schema": "evidence-print-layout-plan/v1", "pass": False, "status": "invalid-input", "issues": [{"message": str(error)}]}
+    payload = json.dumps(result, indent=2) + "\n"
+    if args.out:
+        args.out.write_text(payload)
+    print(payload, end="")
+    return 0 if result["pass"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

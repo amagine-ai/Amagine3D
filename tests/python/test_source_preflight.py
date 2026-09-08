@@ -16,6 +16,60 @@ import source_preflight  # noqa: E402
 
 
 class SourcePreflightTests(unittest.TestCase):
+    def test_reports_unbound_build_reference_before_geometry_execution(self) -> None:
+        errors = source_preflight.validate_source_text(
+            "from build123d import Box\nbody = Box(20, 20, 5)\nparts = {'body': body, 'fixture': missing_fixture}\n"
+        )
+        self.assertEqual([(e["check"], e["name"], e["line"]) for e in errors],
+                         [("source-binding", "missing_fixture", 3)])
+
+    def test_module_builtins_and_file_context_are_valid(self) -> None:
+        self.assertEqual(source_preflight.validate_source_text(
+            "from build123d import Box\nfrom pathlib import Path\nroot = Path(__file__).parent\nbody = Box(20, 20, max(1, 5))\n"
+        ), [])
+
+    def test_rejects_silent_finish_loss_but_allows_real_alternatives(self) -> None:
+        source = """from build123d import Box, Pos
+def finish(shape):
+    try:
+        return shape.fillet(8, shape.edges())
+    except Exception:
+        return Pos(0, 0, 2) * shape
+"""
+        errors = source_preflight.validate_source_text(source)
+        self.assertEqual([e["check"] for e in errors], ["construction-fallback"])
+        self.assertIn("unchanged input", errors[0]["message"])
+        self.assertEqual(source_preflight.validate_source_text(source.replace(
+            "return Pos(0, 0, 2) * shape", "return shape.fillet(2, shape.edges())"
+        )), [])
+        self.assertEqual(source_preflight.validate_source_text(source.replace(
+            "return Pos(0, 0, 2) * shape", "raise"
+        )), [])
+        for alternative in ("return shape.cut(cutter)", "return rebuild(shape)"):
+            self.assertEqual(source_preflight.validate_source_text(source.replace(
+                "return Pos(0, 0, 2) * shape", alternative
+            )), [])
+        swallowed = """from build123d import Box
+def finish(shape):
+    try:
+        shape = shape.fillet(8, shape.edges())
+    except Exception:
+        pass
+    return shape
+"""
+        self.assertEqual([e["check"] for e in source_preflight.validate_source_text(swallowed)], ["construction-fallback"])
+
+    def test_module_missing_name_guard_is_not_a_definite_failure(self) -> None:
+        guarded = """from build123d import Box
+try:
+    body = optional_shape
+except NameError:
+    body = Box(20, 20, 5)
+"""
+        self.assertEqual(source_preflight.validate_source_text(guarded), [])
+        errors = source_preflight.validate_source_text(guarded + "other = optional_shape\n")
+        self.assertEqual([(item["check"], item["line"]) for item in errors], [("source-binding", 6)])
+
     def test_rejects_intent_writer_import_but_allows_scene_writer(self) -> None:
         errors = source_preflight.validate_source_text(
             "from authoring import write_intent, write_scene\nwrite_scene(...)\n"

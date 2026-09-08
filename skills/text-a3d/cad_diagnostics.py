@@ -3,10 +3,47 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import json
+import os
+from pathlib import Path
+from uuid import uuid4
 from typing import Any
 
 
 SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
+
+
+def write_source_diagnostics(payload: Mapping[str, Any]) -> None:
+    """Keep diagnostics outside truncated tool output, bound to one compile run."""
+    destination = os.environ.get("AMAGINE3D_SOURCE_DIAGNOSTICS_PATH")
+    run_id = os.environ.get("AMAGINE3D_COMPILE_RUN_ID")
+    if os.environ.get("AMAGINE3D_SOURCE_PHASE") != "compile" or not destination or not run_id:
+        return
+    path = Path(destination)
+    prior = {}
+    if path.is_file():
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(value, dict) and value.get("runId") == run_id:
+                prior = value
+        except (ValueError, OSError):
+            pass
+    issues = []
+    seen = set()
+    for issue in [*prior.get("issues", []), *payload.get("issues", [])]:
+        key = json.dumps(issue, sort_keys=True, allow_nan=False)
+        if key not in seen:
+            issues.append(issue)
+            seen.add(key)
+    merged = {**prior, **payload, "schema": SOURCE_DIAGNOSTICS_SCHEMA,
+              "runId": run_id, "issues": issues}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4()}.tmp")
+    try:
+        temporary.write_text(json.dumps(merged, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class CadDiagnosticError(RuntimeError):

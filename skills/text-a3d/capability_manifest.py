@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from copy import deepcopy
 from difflib import get_close_matches
 from hashlib import sha256
 from importlib import metadata, util
@@ -87,6 +88,45 @@ def _function_signatures(path: Path, public_names: set[str]) -> list[dict[str, A
     tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
     signatures: list[dict[str, Any]] = []
     for statement in tree.body:
+        if isinstance(statement, ast.ClassDef) and statement.name in public_names:
+            constructor = next((node for node in statement.body
+                                if isinstance(node, ast.FunctionDef) and node.name == "__init__"), None)
+            dataclass_decorator = next((node for node in statement.decorator_list
+                                       if ast.unparse(node).split("(")[0] == "dataclass"), None)
+            if constructor is not None:
+                args = deepcopy(constructor.args)
+                receiver = args.posonlyargs if args.posonlyargs else args.args
+                if receiver:
+                    receiver.pop(0)
+            elif dataclass_decorator is not None:
+                # Dataclass fields define its generated constructor; never import
+                # the geometry module merely to discover this lightweight API.
+                fields = [node for node in statement.body
+                          if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)]
+                args = ast.arguments(
+                    posonlyargs=[], args=[ast.arg(arg=node.target.id, annotation=node.annotation) for node in fields],
+                    vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None,
+                    defaults=[node.value for node in fields if node.value is not None],
+                )
+            else:
+                args = None
+            if args is not None:
+                signatures.append({
+                    "name": statement.name,
+                    "parameters": [argument.arg for argument in [*args.posonlyargs, *args.args, *args.kwonlyargs]],
+                    "signature": f"{statement.name}({ast.unparse(args)})",
+                    "description": (ast.get_docstring(statement) or "").split("\n\n")[0],
+                })
+            for method in statement.body:
+                if isinstance(method, ast.FunctionDef) and not method.name.startswith("_"):
+                    name = f"{statement.name}.{method.name}"
+                    signatures.append({
+                        "name": name,
+                        "parameters": [argument.arg for argument in [*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs]],
+                        "signature": f"{name}({ast.unparse(method.args)})",
+                        "description": (ast.get_docstring(method) or "").split("\n\n")[0],
+                    })
+            continue
         if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if statement.name.startswith("_") or statement.name not in public_names:
@@ -103,6 +143,151 @@ def _function_signatures(path: Path, public_names: set[str]) -> list[dict[str, A
             }
         )
     return sorted(signatures, key=lambda item: item["name"])
+
+
+class _ManagedSignatures:
+    """Resolve installed Python exports without importing build123d or OCCT.
+
+    Only source inside the managed package is inspected. Dynamic exports and
+    external constructors are left unknown rather than assigned guessed APIs.
+    """
+
+    def __init__(self) -> None:
+        spec = util.find_spec(MANAGED_MODULE)
+        if spec is None or not isinstance(spec.origin, str):
+            raise ValueError(f"managed module {MANAGED_MODULE!r} is not installed")
+        self.root = Path(spec.origin).parent
+        self.modules: dict[str, tuple[ast.Module, bool] | None] = {}
+
+    def _module(self, name: str) -> tuple[ast.Module, bool] | None:
+        if name not in self.modules:
+            if name != MANAGED_MODULE and not name.startswith(MANAGED_MODULE + "."):
+                return None
+            relative = name.split(".")[1:]
+            path = self.root.joinpath(*relative)
+            is_package = path.is_dir()
+            path = path / "__init__.py" if is_package else path.with_suffix(".py")
+            try:
+                self.modules[name] = (
+                    ast.parse(path.read_text(encoding="utf-8"), str(path)),
+                    is_package,
+                )
+            except (OSError, SyntaxError):
+                self.modules[name] = None
+        return self.modules[name]
+
+    def _resolve(
+        self, module: str, name: str, seen: frozenset[tuple[str, str]] = frozenset()
+    ) -> tuple[str, ast.ClassDef | list[ast.FunctionDef | ast.AsyncFunctionDef]] | None:
+        if (module, name) in seen:
+            return None
+        source = self._module(module)
+        if source is None:
+            return None
+        tree, is_package = source
+        seen = seen | {(module, name)}
+        for statement in reversed(tree.body):
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)) and statement.name == name:
+                return module, [
+                    node for node in tree.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+                ]
+            if isinstance(statement, ast.ClassDef) and statement.name == name:
+                return module, statement
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                if any(isinstance(target, ast.Name) and target.id == name for target in targets):
+                    if isinstance(statement.value, ast.Name):
+                        return self._resolve(module, statement.value.id, seen)
+                    return None
+            if not isinstance(statement, ast.ImportFrom):
+                continue
+            package = module if is_package else module.rpartition(".")[0]
+            imported = (
+                util.resolve_name("." * statement.level + (statement.module or ""), package)
+                if statement.level else statement.module or ""
+            )
+            for alias in statement.names:
+                if alias.name == "*":
+                    target = self._module(imported)
+                    if target is None:
+                        continue
+                    # Respect literal export lists, so an imported implementation
+                    # detail cannot shadow the actual public definition.
+                    exports = None
+                    for node in target[0].body:
+                        if isinstance(node, ast.Assign) and any(
+                            isinstance(item, ast.Name) and item.id == "__all__"
+                            for item in node.targets
+                        ):
+                            try:
+                                exports = ast.literal_eval(node.value)
+                            except (ValueError, TypeError):
+                                pass
+                    if exports is not None and name not in exports:
+                        continue
+                    resolved = self._resolve(imported, name, seen)
+                    if resolved is not None or exports is not None:
+                        return resolved
+                elif (alias.asname or alias.name) == name:
+                    return self._resolve(imported, alias.name, seen)
+        return None
+
+    def _constructor(
+        self, module: str, node: ast.ClassDef, seen: frozenset[tuple[str, str]] = frozenset()
+    ) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+        if (module, node.name) in seen:
+            return []
+        methods = [
+            item for item in node.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__"
+        ]
+        if methods:
+            return methods
+        # A single Python base has an unambiguous inherited constructor. Do not
+        # pretend to resolve metaclass or multiple-inheritance call semantics.
+        if len(node.bases) == 1:
+            base = node.bases[0]
+            if isinstance(base, ast.Subscript):
+                base = base.value
+            if isinstance(base, ast.Name):
+                resolved = self._resolve(module, base.id)
+                if resolved is not None and isinstance(resolved[1], ast.ClassDef):
+                    return self._constructor(*resolved, seen | {(module, node.name)})
+        return []
+
+    def query(self, name: str) -> dict[str, Any]:
+        resolved = self._resolve(MANAGED_MODULE, name)
+        if resolved is None:
+            return {"signatureUnavailable": "No statically inspectable Python callable."}
+        module, node = resolved
+        is_class = isinstance(node, ast.ClassDef)
+        methods = self._constructor(module, node) if is_class else node
+        if not methods:
+            return {"signatureUnavailable": "No source-defined constructor; this may be a constant, enum, or dynamic callable."}
+        signatures = []
+        parameters = []
+        for method in methods:
+            args = deepcopy(method.args)
+            if is_class:
+                receiver = args.posonlyargs if args.posonlyargs else args.args
+                if receiver:
+                    receiver.pop(0)
+            signatures.append(f"{name}({ast.unparse(args)})")
+            parameters.append([
+                argument.arg for argument in [*args.posonlyargs, *args.args, *args.kwonlyargs]
+            ])
+        result = {
+            "name": name,
+            "signature": signatures[-1],
+            "parameters": parameters[-1],
+            "description": (ast.get_docstring(node if is_class else methods[-1]) or "").split("\n\n")[0],
+            "definedIn": module,
+            "signatureSource": "installed-python-source",
+        }
+        if len(signatures) > 1:
+            result["overloadSignatures"] = signatures[:-1]
+        return result
 
 
 MODE_CAPABILITIES = [
@@ -129,20 +314,8 @@ MODE_CAPABILITIES = [
         ],
     },
     {
-        "id": "hybrid",
-        "physicalAuthority": "one BRep or watertight mesh master per manufactured part",
-        "outputs": ["eligible part STEP", "part STL", "3MF", "display GLB"],
-        "requirements": [
-            "one representation master per part",
-            "BRep features bind their direct tessellation without an intermediate STEP",
-            "precise BRep features may modify a mesh-master body",
-            "independent BRep-master parts retain genuine STEP",
-            "a fused mesh-master part never claims editable STEP authority",
-        ],
-    },
-    {
         "id": "manufactured-color-regions",
-        "physicalAuthority": "exclusive volumetric regions of physical parts",
+        "physicalAuthority": "exclusive BRep volumetric regions of physical parts",
         "outputs": ["region or part STL", "colored 3MF", "display GLB"],
         "requirements": [
             "build the complete physical part before partitioning",
@@ -156,22 +329,22 @@ MODE_CAPABILITIES = [
 
 MODELING_RECIPES = [
     {
+        "id": "owned-brep-features",
+        "provider": "geometry_binding",
+        "requires": ["BrepFeature", "BrepFeature.cut_from", "BrepFeature.bind"],
+        "useWhen": "one owned feature should drive a checked cut, measured observation and scene binding without repeating its identity",
+    },
+    {
         "id": "checked-brep-features",
         "provider": "cad_helpers",
         "requires": ["checked_cut", "checked_union"],
         "useWhen": "additive or subtractive BRep features must prove material effect and connected topology",
     },
     {
-        "id": "bound-hybrid-features",
-        "provider": "geometry_binding",
-        "requires": ["bind_brep_feature", "bind_mesh_feature"],
-        "useWhen": "one mesh-master part combines freeform Mesh surfaces with precise BRep additions or cutters",
-    },
-    {
-        "id": "sdf-organic-shell",
-        "provider": "organic_shell",
-        "requires": ["build_organic_shell", "self_supporting_cavity"],
-        "useWhen": "user landmarks require a watertight irregular shell with a constructive cavity and print plan",
+        "id": "section-loft-shell",
+        "provider": "build123d",
+        "requires": ["loft", "Plane", "RectangleRounded"],
+        "useWhen": "product envelopes need independently controlled sections; cut a BRep cavity and validate wall thickness",
     },
     {
         "id": "axisymmetric-profile",
@@ -219,10 +392,6 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
         root / "authoring.py",
         {"write_intent", "write_scene", "paired_dimensions", "paired_interface"},
     )
-    organic_shell_helpers = _function_signatures(
-        root / "organic_shell.py",
-        {"build_organic_shell", "self_supporting_cavity"},
-    )
     geometry_helpers = _function_signatures(
         root / "cad_helpers.py",
         {
@@ -237,12 +406,12 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
     )
     binding_helpers = _function_signatures(
         root / "geometry_binding.py",
-        {"bind_brep_feature", "bind_mesh_feature", "shape_to_mesh"},
+        {"BrepFeature", "bind_brep_feature", "bind_display_component"},
     )
+    planning_helpers = _function_signatures(root / "plate_layout.py", {"plan_plates"})
     installation_helpers = _function_signatures(
-        root / "installation_check.py", {"check_installation"},
+        root / "installation_check.py", {"check_installation", "bind_installation_check"},
     )
-    organic_shell_names = {item["name"] for item in organic_shell_helpers}
     geometry_helper_names = {item["name"] for item in geometry_helpers}
     binding_helper_names = {item["name"] for item in binding_helpers}
     helper_symbols = {
@@ -253,18 +422,19 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             ("geometry_binding", binding_helpers),
             ("installation_check", installation_helpers),
             ("interface_recipes", interface_helpers),
-            ("organic_shell", organic_shell_helpers),
+            ("plate_layout", planning_helpers),
         )
         for item in helpers
     }
     all_names = available | helper_symbols.keys()
+    managed_signatures = _ManagedSignatures() if set(requested) & available else None
     query = {
         name: {
             "available": name in all_names,
             **(
                 helper_symbols[name]
                 if name in helper_symbols
-                else {"provider": "build123d"}
+                else {"provider": "build123d", **managed_signatures.query(name)}
                 if name in available
                 else {"suggestions": get_close_matches(name, sorted(all_names), n=5)}
             ),
@@ -279,7 +449,6 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
                     "build123d": available,
                     "cad_helpers": geometry_helper_names,
                     "geometry_binding": binding_helper_names,
-                    "organic_shell": organic_shell_names,
                 }[recipe["provider"]]
             ),
         }
@@ -307,22 +476,26 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             "authoringHelpers": authoring_helpers,
             "geometryHelpers": geometry_helpers,
             "geometryBindingHelpers": binding_helpers,
+            "manufacturingPlanningHelpers": planning_helpers,
             "installationHelpers": installation_helpers,
             "interfaceRecipes": interface_helpers,
             "interfaceProofs": proof_capabilities(),
             "modelingRecipes": recipes,
-            "organicShellHelpers": organic_shell_helpers,
             "principles": [
                 "choose construction from controlling dimensions and evidence",
+                "author every manufactured part as a valid BRep solid",
+                "use key-section lofts for product envelopes; ruled transitions are acceptable when the form permits",
                 "use named parameters and source-authored coordinate frames",
                 "derive mating geometry from one clearance recipe",
-                "bind Mesh and BRep feature artifacts from the same authored geometry objects",
-                "retain STEP only when the final physical part is BRep-master",
+                "derive bound feature meshes and final STEP, STL, 3MF and GLB from the authored BRep geometry",
                 "build the complete physical part before manufactured-color partitioning",
                 "keep display-only decoration outside manufacturing geometry",
             ],
         },
-        "policies": {"geometryToleranceMm": GEOMETRY_TOLERANCE_MM},
+        "policies": {
+            "geometryToleranceMm": GEOMETRY_TOLERANCE_MM,
+            "representationMasters": ["brep"],
+        },
     }
     fingerprint_payload = json.dumps(
         manifest,

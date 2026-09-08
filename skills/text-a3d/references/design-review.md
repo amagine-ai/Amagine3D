@@ -1,7 +1,7 @@
 # Design reasoning and review
 
-Use this reference when an assembly, moving part, installed component, or failed
-QA needs engineering judgment. Scale the depth of review to the task; these are
+Use this reference when appearance, an assembly, a moving part, an installed
+component, or failed QA needs design judgment. Scale the depth of review to the task; these are
 questions to resolve, not a prescribed sequence or a requirement to add mechanisms.
 
 ## Preserve the purpose while improving the construction
@@ -48,6 +48,15 @@ retention and access. Relate its supported position to the surfaces that carry
 the load. A visual concept can keep unspecified hardware as proposed dimensions
 and focus on its modeled relationship to the enclosure.
 
+Resolve the installed condition as well as entry: what supports the component,
+what prevents unintended movement, and what closure or protection its use needs.
+Check these relationships on the first functional construction, before adding
+detail that depends on them. Declare applicable `installation_checks` on the
+receiving intent feature and bind the corresponding witness geometry using
+`installation-checks.md`; a reference node or an empty cavity alone proves none
+of these relationships. Choose requirements by function, without a universal
+fastener, cover or sealed-bottom rule.
+
 Keep purchased items out of manufactured part counts. `installed-displays.md`
 shows how to bind a visible component to its actual physical aperture, seat or
 cavity and how to extend that construction for an installed module.
@@ -73,6 +82,19 @@ explicit manufacturing/package alternative supported by the tools. Do not resize
 the product or weaken QA merely to satisfy the current packing implementation.
 
 ## Visual review
+
+For appearance-led work, use the main skill's reference-image guidance to establish
+a direction before detailing. Prefer supplied references; otherwise, when network
+access is enabled, actually view a few relevant images and retain their sources.
+Extract the relationships that shape the result: relative volume, silhouette,
+surface transitions, spacing and integration of secondary forms. Perspective
+references suggest proportions but do not establish exact dimensions.
+
+Inspect the primary-form preview as soon as it can be rendered. Compare it with
+those relationships and the brief, then change the responsible source parameters
+before adding dependent detail. A list of present components does not establish
+that the form matches. Keep visual discrepancies visible through engineering
+repairs; a successful compile does not resolve them.
 
 The standard preview has five views: isometric, front, side, top, and bottom.
 Use them for silhouette, count, proportions, spacing, seams, and exposed openings.

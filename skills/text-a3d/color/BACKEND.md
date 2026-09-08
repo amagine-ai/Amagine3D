@@ -14,7 +14,6 @@ The semantic scene selects the implementation per part:
 | --- | --- |
 | BRep part, colors follow whole-part boundaries | root `export_part()` / `export_assembly()` |
 | BRep part, several regions inside one body | `color.cad_helpers.export_regions()` |
-| Mesh part, several volumetric regions | `hybrid_compile.py` region assignments |
 | Display-only color | display GLB only; exclude from manufacturing |
 
 These are internal compilers, not alternative workflows.
@@ -50,28 +49,6 @@ and one parent ComponentsObject as the only build item. Every child has an
 object-level material assignment; triangle-only surface coloring is invalid.
 Hidden per-region STLs are topology evidence, not separate user parts.
 
-## Mesh internal regions
-
-A mesh-master part declares `colorRegions` in the semantic scene. The complete
-physical body must be partitioned into validated, closed material volumes, and
-each volume belongs to exactly one intent region. A multipart scene may
-therefore contain several material regions inside one mesh part while another
-physical part has a single whole-part material. `separate_parts` describes the
-package of physical parts, not a one-region-per-part restriction. Reject:
-
-- unknown or duplicate region IDs;
-- gaps in the physical volume;
-- overlapping volumetric regions;
-- a region assigned to another part;
-- a region ID set that differs from the IDs owned by that part in intent;
-- scene color that conflicts with intent;
-- display-only material used as manufacturing color;
-- 3MF readback that changes region or material assignment.
-
-Per-triangle surface paint describes appearance only. Volumetric regions
-describe actual co-printed material bodies. Do not claim manufactured internal
-color from surface labels alone.
-
 ## Package and material plan
 
 3MF objects and material properties come from the same compiled physical
@@ -91,12 +68,10 @@ binding. The latter two are whole-part proposed sources. Validate all three
 against the hash-bound intent and scene; never accept an unbound or duplicated
 source ID.
 
-Hybrid compilation binds intent to scene before geometry compilation. For a
-part with `colorRegions`, IDs and implicit owners must match intent exactly. A
-part without `colorRegions` may bind only one whole-part intent region to its
-part material. Multiple internal regions on a BRep master are rejected by the
-Hybrid backend and must use `export_regions()`; a root BRep assembly remains
-the stricter one-whole-color-region-per-part case.
+Use `export_regions()` for multiple internal regions in one BRep body and
+`export_assembly()` for separate BRep parts with whole-part color assignments.
+Region IDs, owners and colors must match intent exactly. Tessellated 3MF region
+objects remain derivatives of the BRep material volumes.
 
 Run independent 3MF readback and verify object count, build items, region
 coverage, property IDs, colors, and unit millimetres. RGB readback proves stored

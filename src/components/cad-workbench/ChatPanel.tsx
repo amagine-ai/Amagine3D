@@ -188,14 +188,11 @@ export interface ChatPanelProps {
   onSelectImages: (event: ChangeEvent<HTMLInputElement>) => void;
   onStop: () => void;
   onSubmit: (event: FormEvent) => void;
-  onWebSearchEnabledChange: (enabled: boolean) => void;
   pendingImages: PendingImage[];
   prompt: string;
   running: boolean;
   sessionLoading: boolean;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
-  webSearchConfigured: boolean;
-  webSearchEnabled: boolean;
 }
 
 export function ChatPanel({
@@ -210,14 +207,11 @@ export function ChatPanel({
   onSelectImages,
   onStop,
   onSubmit,
-  onWebSearchEnabledChange,
   pendingImages,
   prompt,
   running,
   sessionLoading,
   textareaRef,
-  webSearchConfigured,
-  webSearchEnabled,
 }: ChatPanelProps) {
   const text = translator(language);
   return (
@@ -360,40 +354,6 @@ export function ChatPanel({
                   >
                     ⌄
                   </span>
-                </button>
-                <button
-                  aria-label={
-                    webSearchConfigured
-                      ? text('Toggle web references', '切换联网参考')
-                      : text(
-                          'A3D web search is unavailable',
-                          'A3D 联网搜索不可用',
-                        )
-                  }
-                  aria-pressed={webSearchEnabled}
-                  className={`${composerStyles.composerTool} ${composerStyles.webSearchToggle}`}
-                  data-active={webSearchEnabled}
-                  data-tooltip={
-                    webSearchConfigured
-                      ? text(
-                          'Allow A3D web search for this turn',
-                          '本轮允许 A3D 联网搜索',
-                        )
-                      : text(
-                          'A3D web search is unavailable',
-                          'A3D 联网搜索不可用',
-                        )
-                  }
-                  disabled={
-                    running || busy || sessionLoading || !webSearchConfigured
-                  }
-                  onClick={() =>
-                    onWebSearchEnabledChange(!webSearchEnabled)
-                  }
-                  type="button"
-                >
-                  <ToolbarIcon name="search" />
-                  <span>{text('Web refs', '联网参考')}</span>
                 </button>
               </div>
               <button

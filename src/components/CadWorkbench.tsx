@@ -54,6 +54,7 @@ import {
   completeChatTurn,
   startChatStep,
 } from '../lib/chat-turn';
+import { createSessionScope } from '../lib/session-scope';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import {
   ACCEPTED_IMAGE_TYPES,
@@ -115,7 +116,7 @@ export function CadWorkbench({
     const [sessions, setSessions] = useState<SessionSummary[]>([]);
     const [storageGroups, setStorageGroups] = useState<StorageSessionGroup[]>([]);
     const [storageLoading, setStorageLoading] = useState(false);
-    const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+    const sessionScopeRef = useRef(createSessionScope(BUNDLED_POMODORO_SESSION_ID));
     const abortRef = useRef<AbortController | undefined>(undefined);
     const artifactSnapshotRef = useRef<ArtifactSummary[]>([]);
     const conversationRef = useRef<HTMLElement>(null);
@@ -195,6 +196,11 @@ export function CadWorkbench({
     const showingPrintPreview =
       previewArtifact?.format === '3mf' || previewArtifact?.format === 'stl';
 
+    function activateSession(nextSessionId: string) {
+      sessionScopeRef.current.activate(nextSessionId);
+      setSessionId(nextSessionId);
+    }
+
     function updateDraftTurn(
       draftId: string,
       update: (turn: ChatTurn) => ChatTurn,
@@ -258,10 +264,12 @@ export function CadWorkbench({
 
     async function deleteArtifacts(selectedArtifacts: ArtifactSummary[]) {
       if (artifactWorkspace.readOnly || selectedArtifacts.length === 0) return;
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
       await trashArtifacts(
         sessionId,
         selectedArtifacts.map(({ path }) => path),
       );
+      if (!isCurrentSession()) return;
       await refreshArtifacts().catch(() => undefined);
     }
 
@@ -279,6 +287,7 @@ export function CadWorkbench({
 
     async function deleteStorageSelection(selection: StorageDeleteSelection) {
       if (running || parameterBuilding) return;
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
       const selectedSessionIds = new Set(selection.sessionIds);
       const artifactGroups = selection.artifactGroups.filter(
         ({ paths, sessionId: targetSessionId }) =>
@@ -297,8 +306,10 @@ export function CadWorkbench({
         fetchSessionCatalog(),
         fetchWorkspaceStorage(),
       ]);
-      setSessions(catalog.sessions);
       setStorageGroups(storage.groups);
+
+      if (!isCurrentSession()) return;
+      setSessions(catalog.sessions);
 
       const activeSessionDeleted =
         selectedSessionIds.has(sessionId) ||
@@ -332,6 +343,8 @@ export function CadWorkbench({
         setSessionMenuOpen(false);
         return;
       }
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
+      if (!isCurrentSession()) return;
       setSessionMenuOpen(false);
       setSessionLoading(true);
       setPrompt('');
@@ -339,7 +352,7 @@ export function CadWorkbench({
       setLeftView('chat');
       try {
         if (!target.persisted) {
-          setSessionId(target.id);
+          activateSession(target.id);
           setMessages([]);
           setArtifacts([]);
           setArtifactWorkspace(draftWorkspace(target.id));
@@ -347,13 +360,15 @@ export function CadWorkbench({
           setParameterIssue(undefined);
           setSelectedPath(undefined);
           setSelectedText(undefined);
+          setPrintPreview(false);
           return;
         }
         const [detail, parameterCollection] = await Promise.all([
           fetchSessionDetail(target.id),
           fetchModelParameters(target.id),
         ]);
-        setSessionId(detail.session.id);
+        if (!isCurrentSession()) return;
+        activateSession(detail.session.id);
         setMessages(detail.messages);
         setArtifacts(detail.artifacts);
         setArtifactWorkspace(detail.artifactWorkspace);
@@ -381,12 +396,15 @@ export function CadWorkbench({
     }
 
     async function refreshArtifacts() {
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
+      if (!isCurrentSession()) return;
       setStorageLoading(true);
       try {
         const [next, parameterCollection] = await Promise.all([
           fetchArtifacts(sessionId),
           fetchModelParameters(sessionId),
         ]);
+        if (!isCurrentSession()) return;
         setArtifacts(next.artifacts);
         setArtifactWorkspace(next.artifactWorkspace);
         setParameterModels(parameterCollection.models);
@@ -475,7 +493,7 @@ export function CadWorkbench({
             fetchModelParameters(catalog.initialSessionId),
           ]);
           if (!live) return;
-          setSessionId(detail.session.id);
+          activateSession(detail.session.id);
           setMessages(detail.messages);
           setArtifacts(detail.artifacts);
           setArtifactWorkspace(detail.artifactWorkspace);
@@ -497,20 +515,29 @@ export function CadWorkbench({
         return;
       }
       const controller = new AbortController();
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
       setSelectedText(undefined);
       void fetch(selectedArtifact.url, { signal: controller.signal })
         .then((response) => {
           if (!response.ok) throw new Error(String(response.status));
           return response.text();
         })
-        .then(setSelectedText)
+        .then((content) => {
+          if (!controller.signal.aborted && isCurrentSession()) {
+            setSelectedText(content);
+          }
+        })
         .catch((error: unknown) => {
-          if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          if (
+            !controller.signal.aborted &&
+            isCurrentSession() &&
+            !(error instanceof DOMException && error.name === 'AbortError')
+          ) {
             setSelectedText(text('Unable to read this file.', '无法读取该文件。'));
           }
         });
       return () => controller.abort();
-    }, [selectedArtifact, language]);
+    }, [selectedArtifact, language, sessionId]);
 
     useEffect(() => {
       const frame = requestAnimationFrame(() => {
@@ -535,7 +562,9 @@ export function CadWorkbench({
       event: AgentEvent,
       draftId: string,
       runSessionId: string,
+      isCurrentSession: () => boolean,
     ) {
+      if (!isCurrentSession()) return;
       if (event.type === 'step') {
         updateDraftTurn(draftId, (turn) => startChatStep(turn, event.step));
         return;
@@ -569,9 +598,11 @@ export function CadWorkbench({
         setPrintPreview(false);
         if (currentPreview) setSelectedPath(currentPreview.path);
         void fetchModelParameters(event.sessionId)
-          .then((collection) => setParameterModels(collection.models))
+          .then((collection) => {
+            if (isCurrentSession()) setParameterModels(collection.models);
+          })
           .catch((error: unknown) => {
-            setParameterIssue(errorText(error, language));
+            if (isCurrentSession()) setParameterIssue(errorText(error, language));
           });
         return;
       }
@@ -585,7 +616,9 @@ export function CadWorkbench({
           }),
         );
         void fetchSessionCatalog()
-          .then((catalog) => setSessions(catalog.sessions))
+          .then((catalog) => {
+            if (isCurrentSession()) setSessions(catalog.sessions);
+          })
           .catch(() => undefined);
         if (storageOpen) void refreshWorkspaceStorage();
         return;
@@ -615,18 +648,21 @@ export function CadWorkbench({
         return;
       }
       parameterBuildingRef.current = true;
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
       setParameterBuilding(true);
       setParameterIssue(undefined);
       try {
         const next = await rebuildModelParameters(sessionId, model, {
           [parameterId]: value,
         });
+        if (!isCurrentSession()) return;
         setArtifacts(next.artifacts);
         setArtifactWorkspace(next.artifactWorkspace);
         setParameterModels(next.models);
         setSelectedPath(model.displayPreviewPath);
         setPrintPreview(false);
       } catch (error) {
+        if (!isCurrentSession()) return;
         setParameterIssue(errorText(error, language));
         setParameterValues(
           Object.fromEntries(
@@ -669,6 +705,7 @@ export function CadWorkbench({
         sessionId === BUNDLED_POMODORO_SESSION_ID
           ? beginUserDraft(true)
           : sessionId;
+      const isCurrentSession = sessionScopeRef.current.capture(requestSessionId);
       abortRef.current = controller;
       artifactSnapshotRef.current =
         requestSessionId === sessionId ? artifacts : [];
@@ -692,13 +729,13 @@ export function CadWorkbench({
           images,
           message: messageText,
           onEvent: (agentEvent) =>
-            updateDraft(agentEvent, draftId, requestSessionId),
+            updateDraft(agentEvent, draftId, requestSessionId, isCurrentSession),
           sessionId: requestSessionId,
           signal: controller.signal,
           taskType: 'cad',
-          webSearchEnabled,
         });
       } catch (error) {
+        if (!isCurrentSession()) return;
         const message = errorText(error, language);
         const status =
           error instanceof DOMException && error.name === 'AbortError'
@@ -737,8 +774,10 @@ export function CadWorkbench({
       if (totalSize > MAX_TOTAL_IMAGE_BYTES) {
         return;
       }
+      const isCurrentSession = sessionScopeRef.current.capture(sessionId);
       try {
         const next = await Promise.all(files.map(readImage));
+        if (!isCurrentSession()) return;
         setPendingImages((current) => [...current, ...next]);
       } catch {
         // Invalid image data is ignored before it reaches the composer.
@@ -759,7 +798,7 @@ export function CadWorkbench({
         nextSession,
         ...current.filter((session) => session.persisted),
       ]);
-      setSessionId(nextSessionId);
+      activateSession(nextSessionId);
       setMessages([]);
       setArtifacts([]);
       setArtifactWorkspace(draftWorkspace(nextSessionId));
@@ -800,14 +839,11 @@ export function CadWorkbench({
             onSelectImages: (event) => void selectImages(event),
             onStop: () => abortRef.current?.abort(),
             onSubmit: (event) => void submit(event),
-            onWebSearchEnabledChange: setWebSearchEnabled,
             pendingImages,
             prompt,
             running,
             sessionLoading,
             textareaRef,
-            webSearchConfigured: Boolean(health?.webSearchConfigured),
-            webSearchEnabled,
           }}
           collapsed={leftCollapsed}
           connectionStatus={connectionStatus}

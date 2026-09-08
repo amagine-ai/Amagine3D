@@ -2,12 +2,18 @@
 
 Color is a geometry and assembly decision, not a renderer decoration.
 
+First decide whether a visible item is manufactured. Purchased components and
+transient display content may appear as optional preview references; they do
+not need printable color regions or dummy inserts. The patterns below apply
+only to geometry whose manufacture belongs in the design.
+
 The root `evidence-cad-intent/v5` document is the authority for region IDs,
 owners, and colors.
 Region IDs are globally unique. `part` names the owning physical part; it does
-not imply that a multipart model has only one region per part. Hybrid scenes
-must reproduce the exact region-ID set for every mesh part. Conflicting scene
-colors are an error.
+not turn a color region into a separately manufactured component. Use BRep
+regions with `export_regions()` for one co-printed body, or whole-part color
+assignments with `export_assembly()` for separate parts. Conflicting scene colors
+are an error.
 
 Every material assignment is traceable through exactly one `sourceBindings[]`
 record. Declared manufactured color uses `intent-color-region` and the exact

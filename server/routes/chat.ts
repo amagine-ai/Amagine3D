@@ -222,7 +222,6 @@ export function registerChatRoute(
       message,
       sessionId,
       taskType,
-      webSearchEnabled = false,
     } = request.body;
     if (taskType === 'cad' && !python.ready) {
       response.status(503).json({
@@ -420,7 +419,6 @@ export function registerChatRoute(
           signal,
           taskType,
           threadId,
-          webSearchEnabled,
         }),
       );
 

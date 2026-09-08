@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useLayoutEffect,
   useState,
 } from 'react';
 
@@ -45,16 +46,39 @@ export function PreviewPanel({
     state: 'empty',
     text: 'Waiting for model data',
   });
+  const [hideReferences, setHideReferences] = useState(false);
+  useLayoutEffect(() => {
+    setHideReferences(false);
+  }, [previewArtifact]);
   const headingArtifact =
     selectedArtifact?.kind === 'image' || selectedText !== undefined
       ? selectedArtifact
       : previewArtifact;
+  const assemblyPreview = selectedArtifact?.kind !== 'image'
+    && selectedText === undefined && previewArtifact?.format === 'glb';
+  const referenceInfo = viewerStatus.referenceComponents;
+  const canHideReferences = assemblyPreview && viewerStatus.state === 'ready'
+    && (referenceInfo?.referenceMeshes ?? 0) > 0;
+  const referenceTitle = canHideReferences
+    ? (referenceInfo?.unclassifiedMeshes ?? 0) > 0
+      ? text(
+        'Hide labeled reference components; unlabeled geometry stays visible.',
+        '隐藏已标记的参考元件；未分类的几何仍会显示。',
+      )
+      : text(
+        'Hide reference components while keeping the assembly position and camera.',
+        '隐藏参考元件，保留装配位置与当前视角。',
+      )
+    : text(
+      'This model has no labeled reference components to hide.',
+      '此模型没有可单独隐藏的已标记参考元件。',
+    );
   return (
     <section className={styles.centerPanel} aria-label={text('Model preview', '模型预览')}>
       <header className={styles.canvasToolbar}>
         <div className={styles.canvasHeading}>
           <div className={styles.canvasHeadingCopy}>
-            <h2>{headingArtifact?.name ?? text('Model preview', '模型预览')}</h2>
+            <h2>{assemblyPreview ? text('Assembly preview', '整机预览') : headingArtifact?.name ?? text('Model preview', '模型预览')}</h2>
             {headingArtifact?.path ?? connectionStatus ? (
               <span className={styles.canvasLabel}>
                 {headingArtifact?.path ?? connectionStatus}
@@ -79,20 +103,35 @@ export function PreviewPanel({
           >
             {running ? 'RUNNING' : runtimeReady ? 'READY' : 'OFFLINE'}
           </span>
+          {assemblyPreview ? (
+            <button
+              aria-checked={canHideReferences && hideReferences}
+              aria-label={text('Hide reference components', '隐藏参考元件')}
+              className={styles.previewSwitch}
+              disabled={!canHideReferences}
+              onClick={() => setHideReferences((hidden) => !hidden)}
+              role="switch"
+              title={referenceTitle}
+              type="button"
+            >
+              <span>{text('Hide reference components', '隐藏参考元件')}</span>
+              <span aria-hidden="true" className={styles.switchTrack}><span /></span>
+            </button>
+          ) : null}
           <button
             aria-checked={printPreview}
-            aria-label={text('Toggle print preview', '切换打印预览')}
+            aria-label={text('Toggle print layout', '切换打印排盘')}
             className={styles.previewSwitch}
             disabled={!printPreviewAvailable}
             onClick={onTogglePrintPreview}
             role="switch"
             title={text(
-              'Show the 3MF or STL print package',
-              '显示 3MF 或 STL 打印文件',
+              'Show the separate 3MF or STL print layout',
+              '查看单独的 3MF 或 STL 打印排盘文件',
             )}
             type="button"
           >
-            <span>{text('Print preview', '打印预览')}</span>
+            <span>{text('Print layout', '打印排盘')}</span>
             <span aria-hidden="true" className={styles.switchTrack}>
               <span />
             </span>
@@ -124,6 +163,7 @@ export function PreviewPanel({
           >
             <CadViewer
               artifact={previewArtifact}
+              hideReferenceComponents={hideReferences}
               onStatusChange={setViewerStatus}
             />
           </Suspense>

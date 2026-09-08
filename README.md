@@ -37,9 +37,15 @@ Amagine3D currently focuses on printable intelligent-hardware enclosures and rel
 
 The design process starts with internal components, arranging mounts and interfaces before creating the enclosure, controls, and thermal-management structures. When a design needs multiple parts, covers, hinges, or latches are developed together with assembly clearances and printing tolerances. For rigid mechanisms such as hinged or sliding covers, the system can also check collisions and operating clearances along a defined motion path.
 
-Every generation records one semantic scene containing its parts, features, interfaces, materials, and representation masters. Dimension-driven parts retain editable Python and build123d source and export genuine STEP; freeform mesh-master parts retain their canonical mesh instead of pretending to be parametric CAD. A mesh-master part can bind precise build123d cutters and additions directly into its mesh booleans without creating an intermediate STEP. The same workflow emits STL, display GLB, and a profile-bound 3MF package when required, including permanent color regions inside a physical part.
+Every generation records one semantic scene containing its parts, features, interfaces, materials, and BRep masters. Manufactured geometry retains editable Python and build123d source and exports genuine STEP. Product envelopes start from a few key sections joined by lofts; extrusions, revolutions, sweeps, and BRep features shape the rest of the design. Ruled or segmented surfaces are useful when they preserve the intended form. The same geometry produces STL, display GLB, and a profile-bound 3MF package when required, including permanent color regions inside a physical part.
 
-Behind the scenes, the 3D-native Agent turns the request into an immutable intent and one mutable semantic scene. Internal BRep, mesh, mixed-geometry, and color backends compile that scene into one evidence contract. The Agent sees measured dimensions and checks for feature ownership, print orientation, plate fit, connectivity, interference, and exported-file readback, then renders and reads the latest result before accepting it.
+Behind the scenes, the 3D-native Agent turns the request into an immutable intent and one mutable semantic scene. BRep and color exporters compile that scene into one evidence contract. The Agent sees measured dimensions and checks for feature ownership, wall thickness, print orientation, plate fit, connectivity, interference, and exported-file readback, then renders and reads the latest result before accepting it. A cavity formed by subtracting an inner loft is checked for actual wall thickness; section insets alone do not guarantee constant normal thickness.
+
+For appearance-led requests without a supplied visual reference, the workflow
+asks the Agent to find and actually view a few relevant images when network access
+is enabled, record their sources and useful form relationships, and compare an
+early primary-form preview before developing detail. Engineering dimensions still
+come from component drawings or explicit assumptions.
 
 Visual review uses the generated five-view preview (isometric, front, side, top,
 bottom) and requires image perception in the configured model/provider. A rendered
@@ -106,7 +112,7 @@ Each iteration of the autonomous inner loop starts from the current design state
 
 Once a candidate design meets the checks for the current task, it enters the commit stage. The system compares the candidate with the user constraints and the previous design version. If the checks pass, the candidate is saved as the new baseline, together with its source code and manufacturing files. If the change introduces a new problem, the system preserves the previous result and lets the Agent continue correcting the candidate. All candidate changes stay inside the isolated session workspace.
 
-The current release uses a semantic scene as that design state. It records physical parts, feature ownership, interfaces, materials, representation masters, and artifact bindings while keeping the original intent immutable. A part can be BRep-master, mesh-master, or participate in a mixed assembly; these are internal compiler choices rather than separate Agent workflows. Every backend publishes the same build-report schema and explicit semantic-to-print coordinate transforms.
+The current release uses a semantic scene as that design state. It records physical parts, feature ownership, interfaces, materials, BRep masters, and artifact bindings while keeping the original intent immutable. Each manufactured part remains a valid BRep solid, including lofted enclosures and mechanical structures. The exporters publish the same build-report schema and explicit semantic-to-print coordinate transforms; display and print meshes are derived from the manufactured geometry.
 
 ## Beyond CAD
 
@@ -114,7 +120,7 @@ CAD is the starting point for Amagine3D. Complete hardware creation also require
 
 Amagine3D will continue enriching this shared 3D context with component semantics. The system should know whether a model represents a screen, battery, PCB, or connector, how it is mounted, which spaces must remain clear, and which openings and enclosure dimensions it affects, then update related structures when the component changes.
 
-The paths into 3D will also expand from natural-language generation to meshes, images, scans, and point clouds. Precise structures can continue to use parametric CAD, exterior forms can come from generative meshes, and physical objects can enter the project through 3D reconstruction. The Agent will choose the representation that fits the task while sharing parts, scale, position, and design intent across them.
+Future inputs may include meshes, scans, and point clouds alongside reference images and component geometry. They can supply scale, landmarks, and spatial context for editable CAD. The current generation workflow focuses on BRep construction and verified manufacturing outputs.
 
 This 3D state will extend into manufacturing as well. Geometry repair, wall thickness, scale, print orientation, supports, and manufacturing files will become part of how the Agent advances a hardware project, rather than separate steps that begin after design is complete.
 
@@ -158,6 +164,7 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
+CODEX_WEB_SEARCH_ENABLED=true
 
 PORT=6161
 WEB_PORT=6160
@@ -167,10 +174,15 @@ AGENT_RUN_HARD_TIMEOUT_MS=7200000
 
 These values are read only by the local Express server. Existing
 `CODEX_API_KEY`/`OPENAI_API_KEY` and `OPENAI_BASE_URL` values are accepted when
-the corresponding `LLM_*` value is absent. The **Web refs** control enables
-native Codex web search and workspace network access only for that turn; it does
-not require a separate search-service key. Do not expose API keys through client-side environment
-variables or commit `.env`.
+the corresponding `LLM_*` value is absent. Native Codex live web search and
+workspace network access default to enabled, with no separate search-service key.
+Only `CODEX_WEB_SEARCH_ENABLED=false` in the server environment disables them;
+there is no browser toggle, and chat-request fields cannot override this setting.
+Restart the server after changing it. Configuration does not verify that a
+particular provider supports search, image retrieval, or image perception: health
+reports search configuration and an `untested` verification status without making
+provider calls. Do not expose API keys through client-side environment variables
+or commit `.env`.
 
 Each turn runs with `workspace-write` and `approvalPolicy: never`: Codex can
 work freely inside that session's execution directory without UI approval, but
@@ -223,7 +235,7 @@ browser renders generated models with Three.js. For more detail, see the
 
 ## Project Status
 
-Amagine3D is under active development. The current public release focuses on single- and multi-color printable geometry that combines parametric mechanical structure with freeform mesh surfaces. The complete workflow has been tested in desktop Chrome and Edge.
+Amagine3D is under active development. The current public release focuses on single- and multi-color printable BRep geometry, combining section-controlled lofted envelopes with parametric mechanical structures. Surface continuity can remain coarse while the design keeps valid solids, editable source, genuine STEP, and manufacturing checks. The complete workflow has been tested in desktop Chrome and Edge.
 
 ## Contributing
 
@@ -247,7 +259,7 @@ Amagine3D is built on the following open-source projects:
 | [Open CASCADE Technology](https://dev.opencascade.org/) and [CadQuery OCP](https://github.com/CadQuery/OCP) | Exact geometry kernel and Python bindings |
 | [Three.js](https://github.com/mrdoob/three.js)                                                             | 3D preview, selection, and measurement |
 | [trimesh](https://github.com/mikedh/trimesh)                                                               | Mesh processing and checks             |
-| [Manifold](https://github.com/elalish/manifold)                                                           | Watertight level-set meshes and booleans |
+| [Manifold](https://github.com/elalish/manifold)                                                           | Derived-mesh boolean checks            |
 | [lib3mf](https://github.com/3MFConsortium/lib3mf)                                                          | 3MF writing and readback               |
 | [OpenAI Codex](https://github.com/openai/codex)                                                            | Agent threads, workspace execution, and streaming |
 

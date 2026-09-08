@@ -49,27 +49,11 @@ def _localize_profile(intent_path: Path, root: Path) -> None:
     intent_path.write_text(json.dumps(intent) + "\n", encoding="utf-8")
 
 
-def _write_scene(root: Path, intent_path: Path, *, master: str = "brep") -> Path:
-    geometry = root / "part-source.stl"
-    if master == "mesh" and not geometry.exists():
-        geometry.write_bytes(b"solid part\nendsolid part\n")
-    recipe = (
-        {
-            "kind": "meshGeometry",
-            "parameters": {
-                "geometry": {
-                    "path": geometry.name,
-                    "scale": 1.0,
-                    "sha256": sha256(geometry.read_bytes()).hexdigest(),
-                }
-            },
-        }
-        if master == "mesh"
-        else {
-            "kind": "roundedBox",
-            "parameters": {"sizeMm": [40, 30, 20], "radiusMm": 1},
-        }
-    )
+def _write_scene(root: Path, intent_path: Path) -> Path:
+    recipe = {
+        "kind": "roundedBox",
+        "parameters": {"sizeMm": [40, 30, 20], "radiusMm": 1},
+    }
     scene_path = root / "part_scene.json"
     scene_path.write_text(
         json.dumps(
@@ -80,7 +64,7 @@ def _write_scene(root: Path, intent_path: Path, *, master: str = "brep") -> Path
                 "units": "mm",
                 "coordinateSystem": {"handedness": "right", "up": "Z"},
                 "materials": [],
-                "parts": [{"id": "part", "representationMaster": master}],
+                "parts": [{"id": "part", "representationMaster": "brep"}],
                 "nodes": [
                     {
                         "id": "part-body-node",
@@ -211,14 +195,11 @@ class _PassingRunner:
         log_path: Path,
         report_path: Path,
         report: dict,
-        *,
-        report_stage: str = "source",
     ):
         self.log_path = log_path
         self.log_path.write_text("fake runner\n", encoding="utf-8")
         self.report_path = report_path
         self.report = report
-        self.report_stage = report_stage
         self.calls: list[str] = []
         scene_reference = report.get("inputs", {}).get("scene", {})
         self.scene_path = Path(scene_reference["path"])
@@ -230,7 +211,7 @@ class _PassingRunner:
             log.write(f"{stage}\n")
         if stage == "source":
             self.scene_path.write_bytes(self.scene_bytes)
-        if stage == self.report_stage:
+        if stage == "source":
             for reference in self.report.get("artifacts", {}).values():
                 if not isinstance(reference, dict) or not isinstance(
                     reference.get("path"), str
@@ -361,13 +342,11 @@ class _ZeroReturncodeTimeoutRunner(_PassingRunner):
         report: dict,
         *,
         timed_out_stage: str,
-        report_stage: str = "source",
     ):
         super().__init__(
             log_path,
             report_path,
             report,
-            report_stage=report_stage,
         )
         self.timed_out_stage = timed_out_stage
 
@@ -485,7 +464,6 @@ def _compile_with_zero_returncode_timeout(
     root: Path,
     *,
     timed_out_stage: str,
-    master: str = "brep",
 ) -> tuple[dict, _ZeroReturncodeTimeoutRunner]:
     marker = _mark(root)
     intent, _ = write_intent(
@@ -495,10 +473,7 @@ def _compile_with_zero_returncode_timeout(
         dimensions_mm=(40, 30, 20),
     )
     _localize_profile(intent, root)
-    scene = _write_scene(root, intent, master=master)
-    source_mesh = root / "part-source.stl"
-    if master == "mesh":
-        source_mesh.write_bytes(b"solid part\nendsolid part\n")
+    scene = _write_scene(root, intent)
     source = root / "build.py"
     source.write_text("# fake source is handled by the injected runner\n")
     report_path, report = _minimal_report(
@@ -507,16 +482,6 @@ def _compile_with_zero_returncode_timeout(
         scene_path=scene,
         source_path=source,
     )
-    report_stage = "source"
-    if master == "mesh":
-        report_stage = "backend-hybrid"
-        report["backend"] = "hybrid-mesh"
-        report["parts"]["part"]["representationMaster"] = "mesh"
-        report["inputs"].pop("source")
-        report["inputs"]["geometry"] = {
-            "node:part-body-node": _bound(source_mesh, schema="mesh-source/v1")
-        }
-        report["artifacts"].pop("step:part")
     holder: dict[str, _ZeroReturncodeTimeoutRunner] = {}
 
     def factory(log_path: Path) -> _ZeroReturncodeTimeoutRunner:
@@ -525,7 +490,6 @@ def _compile_with_zero_returncode_timeout(
             report_path,
             report,
             timed_out_stage=timed_out_stage,
-            report_stage=report_stage,
         )
         holder["runner"] = runner
         return runner
@@ -695,6 +659,77 @@ def _compile_with_render_fixture(root: Path, runner_type) -> tuple[dict, _Passin
 
 
 class CadCompileTests(unittest.TestCase):
+    def test_declared_installation_failure_blocks_successful_preview_publication(self) -> None:
+        class InstallationFailure(_PassingRunner):
+            def __init__(self, log_path, report_path, report):
+                super().__init__(log_path, report_path, report)
+                # Contract/geometry behavior is covered by the real STEP audit tests;
+                # this injected runner isolates stage dispatch and publication gating.
+                scene = json.loads(self.scene_bytes)
+                scene["installationChecks"] = [{"featureId": "part-body"}]
+                self.scene_bytes = json.dumps(scene).encode()
+                self.scene_path.write_bytes(self.scene_bytes)
+                self.report["inputs"]["scene"]["sha256"] = sha256(self.scene_bytes).hexdigest()
+
+            def run(self, stage, argv, **kwargs):
+                if stage == "installation-qa":
+                    self.calls.append(stage)
+                    output = Path(argv[argv.index("--out") + 1])
+                    output.write_text(json.dumps({
+                        "schema": "evidence-installation-audit/v1", "pass": False,
+                        "errors": [{"code": "QA.INSTALLATION_FAILED", "check": "mount/passage",
+                                    "message": "required passage is blocked"}],
+                    }))
+                    return CommandResult(returncode=1, elapsed_ms=1, output_tail="")
+                return super().run(stage, argv, **kwargs)
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "workspace") as directory:
+            root = Path(directory)
+            with mock.patch.object(cad_compile, "validate_scene", return_value=[]):
+                result, runner = _compile_with_render_fixture(root, InstallationFailure)
+            self.assertIn("installation-qa", runner.calls)
+            self.assertFalse(result["pass"])
+            self.assertFalse(result["deliveryReady"])
+            persisted = json.loads((root / "part_compile-result.json").read_text())
+            self.assertIn("installationAudit", persisted["artifacts"])
+            self.assertIn("diagnosticPreview", result["artifacts"])
+            self.assertNotIn("preview", result["artifacts"])
+            self.assertTrue(any(i["code"] == "QA.INSTALLATION_FAILED" for i in result["issues"]))
+
+    def test_source_failure_preserves_full_traceback_but_prints_compact_root_cause(self) -> None:
+        traceback = (
+            "Traceback (most recent call last):\n"
+            + '  File "/managed/library.py", line 42, in construct\n    invoke()\n' * 35
+            + '  File "build.py", line 69, in <module>\n    Cylinder(axis=(0, 1, 0))\n'
+            + "TypeError: Cylinder.__init__() got an unexpected keyword argument 'axis'"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, _ = write_intent(root, part="part", feature_owners={"part-body": "part"})
+            _localize_profile(intent, root)
+            source = root / "build.py"
+            source.write_text("# injected source failure\n", encoding="utf-8")
+            runner = mock.Mock()
+            runner.run.return_value = CommandResult(returncode=1, elapsed_ms=1, output_tail=traceback)
+            result = compile_cad(
+                CompileOptions(
+                    workspace=root, marker=marker, intent=intent,
+                    scene=root / "scene.json", source=source, output_dir=Path("."),
+                ),
+                runner_factory=lambda _: runner,
+            )
+            persisted = json.loads(Path(result["result"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(persisted["issues"][0]["message"], traceback)
+            self.assertEqual(result["issues"][0]["message"], traceback)
+            summary = cad_compile._agent_summary(result)
+            message = summary["issues"][0]["message"]
+            self.assertLessEqual(len(message), cad_compile.MAX_MESSAGE_CHARS)
+            self.assertIn('File "build.py", line 69', message)
+            self.assertTrue(message.endswith("unexpected keyword argument 'axis'"))
+            self.assertEqual(summary["issues"][0]["id"], persisted["issues"][0]["id"])
+            self.assertEqual(result["issues"][0]["message"], traceback)
+
     def test_agent_summary_preserves_errors_and_groups_repeated_warnings(self) -> None:
         result = {
             "artifacts": {
@@ -756,6 +791,137 @@ class CadCompileTests(unittest.TestCase):
             grouped["stages"],
             ["mesh-qa:key-1", "mesh-qa:key-2"],
         )
+
+    def test_agent_summary_bounds_nested_evidence_and_retains_cause_without_mutation(self) -> None:
+        message = (
+            "Traceback (most recent call last):\n" + "library frame\n" * 5_000
+            + 'File "build.py", line 69\nTypeError: unexpected keyword argument axis'
+        )
+        result = {
+            "pass": False, "status": "failed", "deliveryReady": False,
+            "result": {"path": "/tmp/part_compile-result.json"},
+            "issues": [{
+                "id": "source-failure", "code": "BACKEND.COMPILE_FAILED",
+                "severity": "error", "stage": "source", "message": message,
+                "actual": {
+                    "details": "x" * 50_000, "minimumMm": 0.5,
+                    "nested": [{"report": {"frames": ["y" * 10_000] * 20}}] * 20,
+                },
+                "expected": {"minimumMm": 1.2},
+            }],
+        }
+        original = json.dumps(result)
+
+        summary = cad_compile._agent_summary(result)
+        encoded = cad_compile._summary_json(summary)
+
+        self.assertLessEqual(len(encoded), cad_compile.MAX_SUMMARY_CHARS)
+        self.assertFalse(summary["pass"])
+        self.assertFalse(summary["deliveryReady"])
+        self.assertEqual(summary["result"], result["result"])
+        issue = summary["issues"][0]
+        self.assertEqual(issue["id"], "source-failure")
+        self.assertIn('File "build.py", line 69', issue["message"])
+        self.assertTrue(issue["message"].endswith("TypeError: unexpected keyword argument axis"))
+        self.assertEqual(issue["actual"]["minimumMm"], 0.5)
+        self.assertEqual(issue["expected"]["minimumMm"], 1.2)
+        self.assertTrue(issue["summaryTruncated"])
+        self.assertTrue(summary["diagnostics"]["truncated"])
+        self.assertEqual(json.dumps(result), original)
+
+    def test_agent_summary_keeps_warning_measurements_and_labels_group_samples(self) -> None:
+        warning = {
+            "id": "warning-a", "code": "QA.THIN_WALL", "severity": "warning",
+            "message": "review minimum wall", "featureId": "button/web",
+            "observed": {"minimumMm": 0.5}, "expected": {"minimumMm": 2.4},
+        }
+        single = cad_compile._agent_summary({"issues": [warning]})
+        self.assertEqual(single["issues"][0]["observed"], warning["observed"])
+        self.assertEqual(single["issues"][0]["expected"], warning["expected"])
+        self.assertEqual(single["issues"][0]["featureId"], "button/web")
+        self.assertFalse(single["diagnostics"]["truncated"])
+
+        grouped = cad_compile._agent_summary({"issues": [
+            warning, {**warning, "id": "warning-b", "observed": {"minimumMm": 0.8}},
+        ]})
+        sample = grouped["issues"][0]
+        self.assertEqual(sample["id"], "warning-a")
+        self.assertEqual(sample["observed"], warning["observed"])
+        self.assertEqual(sample["ids"], ["warning-a", "warning-b"])
+        self.assertEqual(sample["detailScope"], "representative-issue")
+        self.assertTrue(sample["summaryTruncated"])
+        self.assertTrue(grouped["diagnostics"]["truncated"])
+
+    def test_agent_summary_reserves_first_cause_before_extreme_path_metadata(self) -> None:
+        result = {
+            "result": {"path": "/" + "\n" * 4_050 + "/compile-result.json"},
+            "issues": [{"id": "failure", "code": "SOURCE.FAILED", "severity": "error",
+                        "message": "\x00" * 2_000 + "\nTypeError: actual root cause"}],
+        }
+        summary = cad_compile._agent_summary(result)
+        self.assertLessEqual(len(cad_compile._summary_json(summary)), cad_compile.MAX_SUMMARY_CHARS)
+        self.assertEqual(summary["diagnostics"]["shownIssueGroups"], 1)
+        self.assertTrue(summary["issues"][0]["message"].endswith("TypeError: actual root cause"))
+        self.assertTrue(summary["diagnostics"]["truncated"])
+        if "result" in summary:
+            self.assertEqual(summary["result"], result["result"])
+
+    def test_agent_summary_emits_strict_json_for_nonfinite_measurements(self) -> None:
+        result = {"issues": [{"code": "QA.FAILED", "message": "invalid measured bounds",
+                              "actual": {"volumeMm3": float("nan"), "distanceMm": float("inf")}}]}
+        summary = cad_compile._agent_summary(result)
+        # allow_nan=False would reject an unprojected invalid numeric value.
+        json.dumps(summary, allow_nan=False)
+        self.assertEqual(summary["issues"][0]["actual"], {"volumeMm3": "NaN", "distanceMm": "Infinity"})
+        self.assertTrue(summary["diagnostics"]["truncated"])
+
+    def test_agent_summary_budgets_all_fields_including_escaped_json_and_warning_groups(self) -> None:
+        # Controls expand sixfold in JSON; per-string limits alone cannot bound stdout.
+        detail = "\x00\n\"\\屏幕" * 1_000
+        result = {
+            "pass": False, "status": "failed", "deliveryReady": False,
+            "result": {"path": "/tmp/part_compile-result.json"},
+            "issues": [
+                {"id": f"error-{i}", "code": "QA.FAILED", "severity": "error",
+                 "message": detail + f"\nFailure {i}",
+                 "actual": {f"measurement-{j}": detail for j in range(40)},
+                 "repairHint": detail}
+                for i in range(40)
+            ] + [
+                {"id": f"warning-{i}", "code": "QA.WARNING", "severity": "warning",
+                 "message": "review overhang", "part": f"part-{i}", "repairHint": detail}
+                for i in range(40)
+            ],
+            "artifacts": {key: {"path": "/tmp/" + detail} for key in cad_compile.AGENT_ARTIFACT_KEYS},
+            "deliverables": {f"stl:part-{i}": "/tmp/" + detail for i in range(40)},
+            "physicalParts": [detail] * 40,
+            "colors": {f"part-{i}": detail for i in range(40)},
+            "repairDelta": {"remaining": [detail] * 40},
+            "omittedIssueCount": 3, "omittedErrorCount": 2,
+        }
+
+        for issues in (result["issues"], result["issues"][40:]):
+            with self.subTest(warnings_only=issues[0]["severity"] == "warning"):
+                payload = {**result, "issues": issues}
+                summary = cad_compile._agent_summary(payload)
+                self.assertLessEqual(len(cad_compile._summary_json(summary)), cad_compile.MAX_SUMMARY_CHARS)
+                shown = len(summary["issues"])
+                self.assertGreater(shown, 0)
+                self.assertLessEqual(shown, cad_compile.MAX_SUMMARY_ISSUES)
+                self.assertEqual(summary["diagnostics"]["shownIssueGroups"], shown)
+                groups = 1 + (40 if issues[0]["severity"] == "error" else 0)
+                self.assertEqual(summary["diagnostics"]["omittedIssueGroups"], groups - shown)
+                self.assertEqual(summary["issueCounts"]["warnings"], 40)
+                self.assertEqual(summary["issueCounts"]["omitted"], 3)
+                self.assertTrue(summary["diagnostics"]["truncated"])
+                self.assertEqual(summary["result"], result["result"])
+                self.assertFalse(summary["pass"])
+                if issues[0]["severity"] == "error":
+                    self.assertEqual(summary["issueCounts"]["errors"], 42)
+                    self.assertTrue(summary["issues"][0]["message"].endswith("Failure 0"))
+                else:
+                    self.assertEqual(summary["issues"][0]["count"], 40)
+                    self.assertTrue(summary["issues"][0]["summaryTruncated"])
 
     def test_report_agent_facts_exposes_only_public_delivery_paths(self) -> None:
         facts = cad_compile._report_agent_facts(
@@ -897,21 +1063,13 @@ class CadCompileTests(unittest.TestCase):
             select_backend({"parts": [{"representationMaster": "brep"}]}),
             "brep-source",
         )
-        self.assertEqual(
-            select_backend({"parts": [{"representationMaster": "mesh"}]}),
-            "hybrid",
-        )
-        self.assertEqual(
-            select_backend(
-                {
-                    "parts": [
-                        {"representationMaster": "brep"},
-                        {"representationMaster": "mesh"},
-                    ]
-                }
-            ),
-            "hybrid",
-        )
+        for parts in (
+            [{"representationMaster": "mesh"}],
+            [{"representationMaster": "brep"}, {"representationMaster": "mesh"}],
+            [{"representationMaster": "brep"}, None],
+        ):
+            with self.subTest(parts=parts), self.assertRaisesRegex(ValueError, "must be brep"):
+                select_backend({"parts": parts})
 
     def test_workspace_escape_is_rejected_before_execution(self) -> None:
         with tempfile.TemporaryDirectory() as workspace_directory, tempfile.TemporaryDirectory() as outside_directory:
@@ -1035,6 +1193,160 @@ class CadCompileTests(unittest.TestCase):
                 {"Ellipsoid", "write_intent"},
             )
 
+    def test_rejected_legacy_revision_keeps_baseline_for_next_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = _mark(root)
+            intent, original = write_intent(root, part="part", feature_owners={"part-body": "part"})
+            parent_hash = sha256(intent.read_bytes()).hexdigest()
+            (root / "part_compile-result.json").write_text(json.dumps({"inputs": {"intent": str(intent)}}))
+            (root / "part_repair-state.json").write_text(json.dumps({"schema": cad_compile.REPAIR_STATE_SCHEMA, "intentHash": parent_hash}))
+            source = root / "build.py"
+            source.write_text("# source is never run for unlinked targets\n")
+            revised = json.loads(json.dumps(original))
+            revised["features"][0]["acceptance"] = "Changed target"
+            revised_path = root / "part_next.json"
+            revised_path.write_text(json.dumps(revised))
+
+            class NoGeometryRunner:
+                def __init__(self, log_path):
+                    self.log_path = log_path
+                def run(self, stage, argv, **kwargs):
+                    return CommandResult(returncode=0, elapsed_ms=1, output_tail="")
+
+            options = CompileOptions(workspace=root, marker=marker, intent=revised_path, scene=Path("part_scene.json"), source=source, output_dir=Path("."))
+            invalid = {**revised, "features": []}
+            revised_path.write_text(json.dumps(invalid))
+            invalid_result = compile_cad(options, runner_factory=NoGeometryRunner)
+            self.assertTrue(any(issue["code"] == "CONTRACT.INTENT_INVALID" for issue in invalid_result["issues"]))
+            self.assertEqual(json.loads((root / ".part_intent-history.json").read_text())["headHash"], parent_hash)
+            revised_path.write_text(json.dumps(revised))
+            first = compile_cad(options, runner_factory=NoGeometryRunner)
+            self.assertTrue(any(issue["code"] == "CONTRACT.INTENT_REVISION_UNVERIFIED" for issue in first["issues"]))
+            history = json.loads((root / ".part_intent-history.json").read_text())
+            self.assertEqual(history["headHash"], parent_hash)
+            revised["revision"] = {"parent": {"path": intent.name, "sha256": parent_hash}, "kind": "target-change", "reason": "Updated requirement", "evidence": {"kind": "user-request", "text": "The target should change."}}
+            revised_path.write_text(json.dumps(revised))
+            second = compile_cad(options, runner_factory=NoGeometryRunner)
+            self.assertTrue(any(issue["code"] == "CONTRACT.SCENE_MISSING" for issue in second["issues"]))
+            self.assertFalse(any("REVISION_UNVERIFIED" in issue["code"] or "HISTORY_UNVERIFIED" in issue["code"] for issue in second["issues"]))
+            history = json.loads((root / ".part_intent-history.json").read_text())
+            self.assertEqual(history["headHash"], sha256(revised_path.read_bytes()).hexdigest())
+
+    def test_source_diagnostics_sidecar_preserves_fields_beyond_log_tail(self) -> None:
+        for stale in (False, True):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                marker = _mark(root)
+                intent, _ = write_intent(root, part="part", feature_owners={"part-body": "part"})
+                source = root / "build.py"
+                source.write_text("# structural authoring failure\n")
+
+                class SidecarRunner:
+                    def __init__(self, log_path):
+                        self.log_path = log_path
+
+                    def run(self, stage, argv, **kwargs):
+                        self.log_path.write_text("full source traceback\n")
+                        environment = kwargs["env_extra"]
+                        payload = {
+                            "schema": cad_compile.SOURCE_DIAGNOSTICS_SCHEMA,
+                            "runId": "older-run" if stale else environment["AMAGINE3D_COMPILE_RUN_ID"],
+                            "pass": False,
+                            "issues": [{"code": "SOURCE.AUTHORING_INVALID", "check": "authoring-interface", "path": f"interfaces[{i}].male.featureId", "interfaceId": f"join-{i}", "actual": None, "expected": ["male", "female"], "message": "Missing endpoint " + "details " * 100, "severity": "error"} for i in range(60)],
+                        }
+                        Path(environment["AMAGINE3D_SOURCE_DIAGNOSTICS_PATH"]).write_text(json.dumps(payload))
+                        return CommandResult(returncode=1, elapsed_ms=1, output_tail="truncated traceback")
+
+                result = compile_cad(CompileOptions(workspace=root, marker=marker, intent=intent, scene=Path("part_scene.json"), source=source, output_dir=Path(".")), runner_factory=SidecarRunner)
+                self.assertFalse(result["pass"])
+                if stale:
+                    self.assertTrue(any(issue["code"] == "SOURCE.EXECUTION_FAILED" for issue in result["issues"]))
+                    self.assertFalse(any(issue["code"] == "SOURCE.AUTHORING_INVALID" for issue in result["issues"]))
+                else:
+                    self.assertEqual(len(result["issues"]), 60)
+                    self.assertEqual(result["issues"][-1]["path"], "interfaces[59].male.featureId")
+                    self.assertTrue(all(issue["code"] == "SOURCE.AUTHORING_INVALID" for issue in result["issues"]))
+                    saved = json.loads(Path(result["result"]["path"]).read_text())
+                    self.assertEqual(len(saved["issueOccurrences"]), 60)
+                    self.assertIn("sourceDiagnostics", saved["artifacts"])
+
+    def test_layout_failure_publishes_only_current_bound_diagnostics(self) -> None:
+        for tamper in (None, "old-report", "old-run", "artifact-hash", "input-hash", "escape", "symlink", "hardlink", "stale"):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                marker = _mark(root)
+                intent, _ = write_intent(root, part="part", feature_owners={"part-body": "part"})
+                _localize_profile(intent, root)
+                source = root / "build.py"
+                source.write_text("# failed packing fixture\n")
+                old_pointer = root / "part_render.json"
+                old_pointer.write_text("previous successful render")
+
+                class CandidateRunner:
+                    def __init__(self, log_path):
+                        self.log_path = log_path
+
+                    def run(self, stage, argv, **kwargs):
+                        self.log_path.write_text("layout failure log\n")
+                        environment = kwargs["env_extra"]
+                        run_id = environment["AMAGINE3D_COMPILE_RUN_ID"]
+                        scene = _write_scene(root, intent)
+                        candidate = {
+                            "runId": run_id, "manufacturingValidated": False,
+                            "inputBindings": {name: _bound(path) for name, path in (("intent", intent), ("source", source), ("scene", scene), ("profile", root / "printer-profile.json"))},
+                            "artifacts": {},
+                        }
+                        for kind, suffix in (("step", ".step"), ("glb", ".glb"), ("preview", ".png")):
+                            path = root / f"part-{run_id}-diagnostic{suffix}"
+                            path.write_bytes(b"diagnostic geometry fixture")
+                            candidate["artifacts"][kind] = _bound(path)
+                        preview = Path(candidate["artifacts"]["preview"]["path"])
+                        if tamper == "old-run":
+                            candidate["runId"] = "older-run"
+                        elif tamper == "artifact-hash":
+                            candidate["artifacts"]["preview"]["sha256"] = "0" * 64
+                        elif tamper == "input-hash":
+                            candidate["inputBindings"]["source"]["sha256"] = "0" * 64
+                        elif tamper == "escape":
+                            candidate["artifacts"]["preview"] = _bound(Path(__file__))
+                        elif tamper == "symlink":
+                            preview.unlink()
+                            preview.symlink_to(source)
+                            candidate["artifacts"]["preview"]["sha256"] = sha256(source.read_bytes()).hexdigest()
+                        elif tamper == "hardlink":
+                            os.link(preview, root / "duplicate.png")
+                        elif tamper == "stale":
+                            os.utime(preview, (1, 1))
+                        elif tamper == "old-report":
+                            # A failed source can leave an old report alongside
+                            # its new diagnostic bundle. It must not suppress
+                            # independently verified evidence from this run.
+                            (root / "part_report.json").write_text(json.dumps({
+                                "schema": cad_compile.BUILD_SCHEMA, "runId": "older-run",
+                                "part": "part", "pass": True, "artifacts": {},
+                            }))
+                        payload = {"schema": cad_compile.SOURCE_DIAGNOSTICS_SCHEMA, "runId": run_id, "pass": False,
+                                   "issues": [{"code": "SOURCE.PLATE_LAYOUT_FAILED", "message": "single-plate heuristic found no placement", "severity": "error"}],
+                                   "diagnosticCandidate": candidate}
+                        Path(environment["AMAGINE3D_SOURCE_DIAGNOSTICS_PATH"]).write_text(json.dumps(payload))
+                        return CommandResult(returncode=1, elapsed_ms=1, output_tail="layout failed")
+
+                result = compile_cad(CompileOptions(workspace=root, marker=marker, intent=intent, scene=Path("part_scene.json"), source=source, output_dir=Path(".")), runner_factory=CandidateRunner)
+                self.assertFalse(result["pass"])
+                self.assertFalse(result["deliveryReady"])
+                self.assertNotIn("buildReport", result["artifacts"])
+                self.assertNotIn("renderEvidence", result["artifacts"])
+                self.assertEqual(old_pointer.read_text(), "previous successful render")
+                if tamper and tamper != "old-report":
+                    self.assertNotIn("diagnosticPreview", result["artifacts"])
+                    self.assertTrue(any(issue["code"] == "SOURCE.DIAGNOSTIC_PROVENANCE_INVALID" for issue in result["issues"]))
+                else:
+                    self.assertTrue({"diagnosticPreview", "diagnosticStep", "diagnosticGlb", "diagnosticSourceEvidence"} <= result["artifacts"].keys())
+                    evidence = json.loads(Path(result["artifacts"]["diagnosticSourceEvidence"]["path"]).read_text())
+                    self.assertFalse(evidence["manufacturingValidated"])
+                    self.assertEqual(evidence["runId"], result["runId"])
+
     def test_source_cannot_mutate_immutable_intent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1132,32 +1444,6 @@ class CadCompileTests(unittest.TestCase):
                     }
                 ],
             )
-
-    def test_hybrid_timeout_is_fail_closed_when_process_returns_zero(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            result, runner = _compile_with_zero_returncode_timeout(
-                Path(directory),
-                timed_out_stage="backend-hybrid",
-                master="mesh",
-            )
-
-            self.assertFalse(result["pass"], result)
-            self.assertEqual(
-                [issue["code"] for issue in result["issues"]],
-                ["BACKEND.TIMEOUT"],
-            )
-            self.assertEqual(runner.calls, ["source", "backend-hybrid"])
-            self.assertNotIn("buildReport", result["artifacts"])
-            full = json.loads(
-                Path(result["result"]["path"]).read_text(encoding="utf-8")
-            )
-            hybrid_stage = next(
-                stage
-                for stage in full["stages"]
-                if stage["name"] == "backend-hybrid"
-            )
-            self.assertEqual(hybrid_stage["returnCode"], 0)
-            self.assertEqual(hybrid_stage["status"], "timeout")
 
     def test_render_timeout_is_fail_closed_when_process_returns_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1716,7 +2002,7 @@ class CadCompileTests(unittest.TestCase):
             self.assertTrue(any(issue["code"] == "QA.MESH_FAILED" for issue in result["issues"]))
             self.assertIn("diagnosticPreview", cad_compile._agent_summary(result)["artifacts"])
 
-    def test_omitted_qa_error_cannot_publish_over_previous_successful_render(self) -> None:
+    def test_warning_overflow_keeps_fatal_evidence_and_previous_successful_render(self) -> None:
         class OverflowWarningsRunner(_FailingMeshRunner):
             def run(self, stage, argv, **kwargs):
                 command = super().run(stage, argv, **kwargs)
@@ -1736,8 +2022,10 @@ class CadCompileTests(unittest.TestCase):
             result, runner = _compile_with_render_fixture(root, OverflowWarningsRunner)
 
             self.assertIn("mesh-qa:part", runner.calls)
-            self.assertGreater(result["omittedErrorCount"], 0)
-            self.assertTrue(all(issue["severity"] == "warning" for issue in result["issues"]))
+            self.assertEqual(result["omittedErrorCount"], 0)
+            self.assertTrue(any(issue["severity"] == "error" for issue in result["issues"]))
+            saved = json.loads(Path(result["result"]["path"]).read_text())
+            self.assertGreater(len(saved["issueOccurrences"]), cad_compile.MAX_ISSUES)
             self.assertFalse(result["pass"], result)
             self.assertEqual(old_pointer.read_bytes(), b"previous successful render")
             self.assertIn("diagnosticPreview", result["artifacts"])
@@ -1988,75 +2276,6 @@ class CadCompileTests(unittest.TestCase):
             self.assertEqual(structured[0]["componentCount"], 3)
             self.assertEqual(structured[1]["observed"], {"minimumMm": 0.5})
             self.assertNotIn("renderEvidence", result["artifacts"])
-
-    def test_mesh_scene_delegates_to_hybrid_without_claiming_step(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            marker = _mark(root)
-            intent, _ = write_intent(
-                root,
-                part="part",
-                feature_owners={"part-body": "part"},
-                dimensions_mm=(40, 30, 20),
-            )
-            _localize_profile(intent, root)
-            scene = _write_scene(root, intent, master="mesh")
-            (root / "part-source.stl").write_bytes(
-                b"solid part\nendsolid part\n"
-            )
-            source = root / "build.py"
-            source.write_text("# fake source is handled by the injected runner\n")
-            report_path, report = _minimal_report(
-                root,
-                intent_path=intent,
-                scene_path=scene,
-                source_path=source,
-            )
-            report["backend"] = "hybrid-mesh"
-            report["parts"]["part"]["representationMaster"] = "mesh"
-            report["inputs"].pop("source")
-            report["inputs"]["geometry"] = {
-                "node:part-body-node": _bound(
-                    root / "part-source.stl", schema="mesh-source/v1"
-                )
-            }
-            report["artifacts"].pop("step:part")
-            holder = {}
-
-            def factory(log_path):
-                runner = _PassingRunner(
-                    log_path,
-                    report_path,
-                    report,
-                    report_stage="backend-hybrid",
-                )
-                holder["runner"] = runner
-                return runner
-
-            result = compile_cad(
-                CompileOptions(
-                    workspace=root,
-                    marker=marker,
-                    intent=intent,
-                    scene=scene,
-                    source=source,
-                    output_dir=Path("."),
-                ),
-                runner_factory=factory,
-            )
-            self.assertTrue(result["pass"], result)
-            self.assertEqual(result["backend"], "hybrid")
-            self.assertEqual(
-                holder["runner"].calls,
-                [
-                    "source",
-                    "backend-hybrid",
-                    "build-check",
-                    "render",
-                    "mesh-qa:part",
-                    "freshness",
-                ],
-            )
 
     def test_real_brep_pipeline_emits_fresh_automated_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

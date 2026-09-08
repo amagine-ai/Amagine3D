@@ -127,6 +127,34 @@ def _non_negative_number(value) -> bool:
     )
 
 
+def dimension_limits(data: dict, axis: str, tolerance_mm: float = 0.5) -> tuple[float, float]:
+    """Return allowed independently measured dimensions; inferred values stay fixed.
+
+    The caller supplies the measurement tolerance used by its audit. A range is
+    an explicit design freedom, not a request to change the measured geometry.
+    """
+    dimensions = data.get("dimensions_mm") if isinstance(data, dict) else None
+    item = dimensions.get(axis) if isinstance(dimensions, dict) else None
+    if axis not in {"x", "y", "z"} or not isinstance(item, dict) or not _positive_number(item.get("value")):
+        raise ValueError(f"dimensions_mm.{axis}.value must be finite and positive")
+    if not _non_negative_number(tolerance_mm):
+        raise ValueError("dimension measurement tolerance must be finite and non-negative")
+    constraint = item.get("constraint", {"kind": "fixed"})
+    if not isinstance(constraint, dict) or constraint.get("kind") not in {"fixed", "range"}:
+        raise ValueError(f"dimensions_mm.{axis}.constraint.kind must be fixed or range")
+    if constraint["kind"] == "range":
+        lower, upper = constraint.get("min_mm"), constraint.get("max_mm")
+        if not _positive_number(lower) or not _positive_number(upper) or lower > upper:
+            raise ValueError(f"dimensions_mm.{axis}.constraint must define positive min_mm <= max_mm")
+        if not lower <= item["value"] <= upper:
+            raise ValueError(f"dimensions_mm.{axis}.value must stay within its declared range")
+    else:
+        if any(key in constraint for key in ("min_mm", "max_mm")):
+            raise ValueError(f"dimensions_mm.{axis}.constraint fixed targets cannot declare range limits")
+        lower = upper = item["value"]
+    return float(lower) - tolerance_mm, float(upper) + tolerance_mm
+
+
 def _load_profile(reference: dict, base_dir: Path | None, errors: list[str]) -> dict | None:
     if not isinstance(reference, dict):
         errors.append("printability.profile must be an object")
@@ -517,9 +545,16 @@ def validate_manufacturing(
                                 f"manufacturing.interfaces[{index}].clearances_mm"
                                 f".{field} must be finite and non-negative"
                             )
-                if not _positive_number(interface.get("engagement_mm")):
+                requires_engagement = connection == "self-tapping-screw" or bool(
+                    capability and "engagement" in capability.get("geometryChecks", ())
+                )
+                if requires_engagement and not _positive_number(interface.get("engagement_mm")):
                     errors.append(
                         f"manufacturing.interfaces[{index}].engagement_mm must be positive"
+                    )
+                elif not requires_engagement and "engagement_mm" in interface and not _non_negative_number(interface["engagement_mm"]):
+                    errors.append(
+                        f"manufacturing.interfaces[{index}].engagement_mm must be finite and non-negative when supplied"
                     )
                 interface_features = interface.get("features")
                 if not isinstance(interface_features, list) or not interface_features:
@@ -799,6 +834,22 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 errors.append(f"dimensions_mm.{axis}.source must be evidence-scoped")
             if item.get("confidence") not in CONFIDENCE:
                 errors.append(f"dimensions_mm.{axis}.confidence is invalid")
+            constraint = item.get("constraint", {"kind": "fixed"})
+            prefix = f"dimensions_mm.{axis}.constraint"
+            if not isinstance(constraint, dict) or constraint.get("kind") not in {"fixed", "range"}:
+                errors.append(f"{prefix}.kind must be fixed or range")
+            elif constraint["kind"] == "range":
+                lower, upper = constraint.get("min_mm"), constraint.get("max_mm")
+                if not _positive_number(lower) or not _positive_number(upper) or lower > upper:
+                    errors.append(f"{prefix} must define positive min_mm <= max_mm")
+                elif _positive_number(item.get("value")) and not lower <= item["value"] <= upper:
+                    errors.append(f"dimensions_mm.{axis}.value must stay within its declared range")
+            elif any(key in constraint for key in ("min_mm", "max_mm")):
+                errors.append(f"{prefix} fixed targets cannot declare range limits")
+
+    if "revision" in data:
+        from intent_revision import validate_revision
+        errors.extend(validate_revision(data, base_dir))
 
     features = data.get("features")
     ids: list[str] = []
@@ -818,6 +869,11 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(f"features[{index}].id is invalid")
                 ids.append(feature_id)
             errors.extend(validate_feature_semantics(feature, index))
+            if "installation_checks" in feature:
+                from installation_contract import validate_requirements
+                errors.extend(validate_requirements(
+                    feature["installation_checks"], f"features[{index}].installation_checks"
+                ))
         if len(ids) != len(set(ids)):
             errors.append("feature ids must be unique")
     feature_ids = (

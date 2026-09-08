@@ -28,7 +28,6 @@ export interface CodexTurnRequest {
   signal?: AbortSignal;
   taskType: RuntimeTaskType;
   threadId?: string;
-  webSearchEnabled?: boolean;
 }
 
 export interface CodexTurnResult {
@@ -43,6 +42,7 @@ export interface CodexRuntimeLike {
   readonly skillDiagnostics: readonly string[];
   readonly skills: readonly RuntimeSkillSummary[];
   readonly stateRoot: string;
+  readonly webSearchEnabled: boolean;
   readonly workspaceRoot: string;
   runTurn(request: CodexTurnRequest): Promise<CodexTurnResult>;
 }
@@ -109,6 +109,13 @@ export function codexReasoningEffort(
   throw new Error(`Unsupported LLM_THINKING_LEVEL: ${normalized}`);
 }
 
+function configuredWebSearch(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  throw new Error('CODEX_WEB_SEARCH_ENABLED must be true or false.');
+}
+
 export function codexPrompt(
   taskType: RuntimeTaskType,
   message: string,
@@ -120,14 +127,22 @@ export function codexPrompt(
       ? [
           '这是一个 CAD 任务。直接在当前会话目录完成它；先运行 `a3d help`，使用项目提供的 CAD 工具，并在回复前检查生成的预览。',
           '用原生 view_image 读取最新五视图预览。工具返回图像内容但无法识别时，应说明视觉审查未完成；不要用颜色统计冒充看图，也不要改用其他技能启动查看器。',
+          '外观主导的设计先建立主要体量、轮廓和比例，尽早生成预览；对照用户要求及已查看的参考指出具体差距，再修改对应几何参数，不要只列举已有部件。',
           '在每个主要阶段或耗时工具调用前，用一句简短中文说明当前目标；只描述用户可理解的工作，不复述 shell 命令或内部推理。',
           '不要为了查询 API 主动阅读 `cad_helpers.py` 等内部实现；先使用 `a3d help`、一个与当前问题直接相关的 `a3d guide TOPIC`，以及 `a3d capabilities --symbol NAME`。只有公开接口和具体报错仍不足以定位问题时，才检查最小范围的内部源码。',
           '工具调用保持简短，一次只完成一个清晰操作，避免为了查看资料拼接多条 shell 命令。如果工具包装出现 JavaScript 语法或引号错误，简化调用并立即重试；单次包装错误不代表 CAD 工具不可用。',
+          '耗时命令要保留完整工具返回（包括执行句柄和退出状态），不要只输出 output 字段；续读只能使用工具实际返回的句柄，不要猜测、截断或转换它。如果续读被运行时拒绝，检查本轮已落盘的结果及完成状态，避免盲目重复启动构建或把旧结果当成本轮成功。',
         ].join('\n')
       : '直接处理用户请求；只有确实需要时才修改当前会话目录中的文件。';
   const searchInstruction = webSearchEnabled
-    ? '本轮允许联网搜索；仅在搜索能补充可靠规格或参考资料时使用。'
-    : '';
+    ? [
+        '本轮允许使用运行时提供的原生联网搜索；按任务需要使用可用工具补充可靠规格或参考资料。开启权限不代表搜索、原图获取和图像感知已经验证，不要为每轮任务预先做能力探测。',
+        ...(taskType === 'cad' ? [
+          '外观主导且用户没有提供明确视觉参考时，默认先寻找少量相关参考并实际打开图片查看，再确定造型方向；在会话目录简要记录所用来源、可观察的轮廓和比例关系，并在早期预览中对照。纯尺寸驱动的零件无需为了流程而搜图；用户已有参考时优先使用它。',
+          '网页标题或图片文字描述不等于看过图片，照片不能替代可靠的工程规格或尺寸。若当前工具不能搜索、获取或识别图片，准确说明是哪一步不可用，并基于已有资料继续，不要声称参考已查看。',
+        ] : []),
+      ].join('\n')
+    : '本轮联网已关闭；使用用户提供的资料和本地文件，不要尝试通过其他工具联网。';
   return [request, taskInstruction, searchInstruction].filter(Boolean).join('\n\n');
 }
 
@@ -143,6 +158,7 @@ export class CodexRuntime implements CodexRuntimeLike {
     },
   ];
   readonly stateRoot: string;
+  readonly webSearchEnabled: boolean;
   readonly workspaceRoot: string;
 
   private readonly apiKey: string | undefined;
@@ -163,6 +179,9 @@ export class CodexRuntime implements CodexRuntimeLike {
     this.projectRoot = options.projectRoot;
     this.stateRoot = join(options.projectRoot, '.amagine-state');
     this.workspaceRoot = join(options.projectRoot, 'workspace');
+    this.webSearchEnabled = configuredWebSearch(
+      options.environment.CODEX_WEB_SEARCH_ENABLED,
+    );
 
     this.apiKey =
       options.environment.LLM_API_KEY?.trim() ||
@@ -268,7 +287,7 @@ export class CodexRuntime implements CodexRuntimeLike {
       permissions: {
         [SESSION_PERMISSION_PROFILE]: {
           extends: ':workspace',
-          network: { enabled: Boolean(request.webSearchEnabled) },
+          network: { enabled: this.webSearchEnabled },
         },
       },
       project_root_markers: [],
@@ -315,7 +334,7 @@ export class CodexRuntime implements CodexRuntimeLike {
       model: this.modelId,
       modelReasoningEffort: this.reasoningEffort,
       skipGitRepoCheck: true,
-      webSearchMode: request.webSearchEnabled ? 'live' : 'disabled',
+      webSearchMode: this.webSearchEnabled ? 'live' : 'disabled',
       workingDirectory,
     };
     const thread = request.threadId
@@ -326,7 +345,7 @@ export class CodexRuntime implements CodexRuntimeLike {
         text: codexPrompt(
           request.taskType,
           request.message,
-          Boolean(request.webSearchEnabled),
+          this.webSearchEnabled,
         ),
         type: 'text',
       },

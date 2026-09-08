@@ -27,7 +27,7 @@ def _geometry_recipe(
     root: Path,
     filename: str,
     *,
-    representation: str = "mesh",
+    representation: str = "brep",
 ) -> dict:
     path = root / filename
     if not path.exists():
@@ -55,7 +55,7 @@ def _scene(root: Path) -> dict:
         "coordinateSystem": {"handedness": "right", "up": "Z"},
         "parts": [
             {"id": "base", "representationMaster": "brep"},
-            {"id": "button", "representationMaster": "mesh"},
+            {"id": "button", "representationMaster": "brep"},
         ],
         "nodes": [
             {
@@ -274,7 +274,7 @@ def _self_tapping_scene(root: Path) -> dict:
         "units": "mm",
         "coordinateSystem": {"handedness": "right", "up": "Z"},
         "parts": [
-            {"id": "housing", "representationMaster": "mesh"},
+            {"id": "housing", "representationMaster": "brep"},
             {"id": "base", "representationMaster": "brep"},
         ],
         "nodes": nodes,
@@ -371,7 +371,7 @@ class SemanticSceneContractTests(unittest.TestCase):
             data = _scene(root)
             self.assertEqual(scene_contract.validate(data, root), [])
 
-    def test_hybrid_physical_nodes_reject_the_removed_source_mesh_recipe(self):
+    def test_physical_nodes_reject_the_removed_source_mesh_recipe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data = _scene(root)
@@ -388,6 +388,16 @@ class SemanticSceneContractTests(unittest.TestCase):
                 ),
                 errors,
             )
+
+    def test_rejects_mesh_masters_and_mesh_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene(root)
+            data["parts"][1]["representationMaster"] = "mesh"
+            data["nodes"][1]["recipe"]["kind"] = "meshGeometry"
+            errors = scene_contract.validate(data, root)
+            self.assertTrue(any("representationMaster must be brep" in item for item in errors), errors)
+            self.assertTrue(any("meshGeometry is unsupported for physical nodes" in item for item in errors), errors)
 
     def test_referenced_intent_must_pass_the_complete_v5_contract(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -408,7 +418,7 @@ class SemanticSceneContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data = _scene(root)
-            data["parts"].append({"id": "unrelated", "representationMaster": "mesh"})
+            data["parts"].append({"id": "unrelated", "representationMaster": "brep"})
             data["nodes"].append({
                 "id": "unrelated-detail",
                 "partId": "unrelated",
@@ -452,7 +462,7 @@ class SemanticSceneContractTests(unittest.TestCase):
                 "revision": "single-part-001",
                 "units": "mm",
                 "coordinateSystem": {"handedness": "right", "up": "Z"},
-                "parts": [{"id": "device", "representationMaster": "mesh"}],
+                "parts": [{"id": "device", "representationMaster": "brep"}],
                 "nodes": [{
                     "id": "device-shell",
                     "partId": "device",
@@ -540,7 +550,7 @@ class SemanticSceneContractTests(unittest.TestCase):
                 errors,
             )
 
-    def test_display_component_requires_real_cutter_and_source_mesh(self):
+    def test_display_component_requires_physical_feature_and_source_mesh(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data = _scene(root)
@@ -562,13 +572,18 @@ class SemanticSceneContractTests(unittest.TestCase):
                 "baseColor": "#111417"
             }
             errors = scene_contract.validate(data, root)
-            self.assertTrue(
-                any("displayComponent must reference a cutter" in item for item in errors),
-                errors,
-            )
+            # Installed components can rest on a physical support as well as
+            # occupy an aperture. Both must belong to the receiving part.
+            self.assertEqual(errors, [])
 
             display["physicalFeatureRef"] = "button-guide"
             self.assertEqual(scene_contract.validate(data, root), [])
+
+            display["physicalFeatureRef"] = "button-stem"
+            self.assertTrue(any(
+                "must match immutable intent owner" in error
+                for error in scene_contract.validate(data, root)
+            ))
 
     def test_rejects_scaled_canonical_transform(self):
         with tempfile.TemporaryDirectory() as directory:

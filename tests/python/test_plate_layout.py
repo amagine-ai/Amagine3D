@@ -6,13 +6,17 @@ import importlib.util
 import io
 from itertools import combinations
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from uuid import uuid4
 
 from build123d import Align, Box, Pos
 import trimesh
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,6 +151,44 @@ class PlateLayoutAlgorithmTests(unittest.TestCase):
             first["min"][1], second["min"][1]
         )
         self.assertFalse(overlap_x > 0 and overlap_y > 0)
+
+    def test_rotation_applies_to_geometry_and_transform_without_scaling(self):
+        profile = json.loads(json.dumps(self.profile))
+        profile["machine"]["selected_tool"]["polygon_mm"] = [[10, 20], [110, 20], [110, 80], [10, 80]]
+        shape = Pos(-9, 13, -4) * Box(50, 90, 5, align=(Align.MIN, Align.MIN, Align.MIN))
+        _, placed, transforms, layout = cad_helpers._print_plate({"panel": shape}, profile=profile)
+        self.assertEqual(layout["rotations"]["panel"], [0, 0, 90])
+        bounds = placed["panel"].bounding_box()
+        self.assertAlmostEqual(bounds.min.X, 10)
+        self.assertAlmostEqual(bounds.min.Y, 20)
+        self.assertAlmostEqual(bounds.min.Z, 0)
+        self.assertAlmostEqual(bounds.size.X, 90)
+        self.assertAlmostEqual(bounds.size.Y, 50)
+        self.assertAlmostEqual(placed["panel"].volume, shape.volume)
+        from coordinate_frames import transform_bounds
+        actual = transform_bounds([[-9, 13, -4], [41, 103, 1]], np.asarray(transforms["panel"]["matrix"]))
+        np.testing.assert_allclose(actual[0], layout["parts"]["panel"]["plate_bbox_mm"]["min"], atol=1e-6)
+        np.testing.assert_allclose(actual[1], layout["parts"]["panel"]["plate_bbox_mm"]["max"], atol=1e-6)
+
+    def test_early_plan_honors_margin_plate_limit_and_distinguishes_oversize(self):
+        boxes = {f"part-{i}": {"min": [0, 0, 0], "max": [100, 100, 5]} for i in range(3)}
+        before = json.dumps(self.profile, sort_keys=True)
+        restricted = plate_layout.plan_plates(boxes, self.profile, max_plates=1, edge_margin_mm=4)
+        accepted = plate_layout.plan_plates(dict(reversed(list(boxes.items()))), self.profile, max_plates=3, edge_margin_mm=4)
+        self.assertFalse(restricted["pass"])
+        self.assertEqual(restricted["status"], "layout-not-found")
+        self.assertTrue(accepted["pass"])
+        self.assertFalse(accepted["manufacturingValidated"])
+        self.assertEqual(restricted["plates"], accepted["plates"])
+        self.assertEqual(len(accepted["plates"]), 3)
+        self.assertEqual(before, json.dumps(self.profile, sort_keys=True))
+        for plate in accepted["plates"]:
+            for part in plate["layout"]["parts"].values():
+                self.assertGreaterEqual(min(part["plate_bbox_mm"]["min"][:2]), 4)
+                self.assertLessEqual(max(part["plate_bbox_mm"]["max"][:2]), 176)
+        too_big = plate_layout.plan_plates({"piece": {"min": [0, 0, 0], "max": [181, 181, 5]}}, self.profile, max_plates=5)
+        self.assertFalse(too_big["pass"])
+        self.assertEqual(too_big["issues"][0]["kind"], "part-exceeds-volume")
 
     def test_recovers_unused_space_above_short_parts(self):
         # Vary sizes and counts: successful layouts must not depend on a product name.
@@ -302,6 +344,33 @@ class ExportAssemblyPlateLayoutTests(unittest.TestCase):
                 left_bounds[0, 1], right_bounds[0, 1]
             )
             self.assertFalse(overlap_x > 0 and overlap_y > 0)
+
+            # A current packing failure preserves geometry, but never produces
+            # a successful manufacturing manifest in the failed output folder.
+            failed_dir = root / "failed-layout"
+            diagnostics = failed_dir / "source-diagnostics.json"
+            failure = cad_helpers.PlateLayoutError("heuristic layout not found", kind="layout-not-found")
+            wrapped = cad_helpers.BuildInvariantError(str(failure))
+            wrapped.__cause__ = failure
+            run_id = str(uuid4())
+            with patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": "compile",
+                "AMAGINE3D_COMPILE_RUN_ID": run_id, "AMAGINE3D_SOURCE_DIAGNOSTICS_PATH": str(diagnostics),
+                "AMAGINE3D_OUTPUT_DIR": str(failed_dir)}), patch.object(cad_helpers, "_print_plate", side_effect=wrapped), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(cad_helpers.BuildInvariantError):
+                    cad_helpers.export_assembly({"medium": medium, "large": large}, "shelf-case", str(failed_dir),
+                        intent_path=str(intent_path), scene_path=str(scene_path), source_path=__file__)
+            payload = json.loads(diagnostics.read_text())
+            self.assertFalse(payload["pass"])
+            self.assertEqual(payload["issues"][0]["code"], "SOURCE.PLATE_LAYOUT_FAILED")
+            candidate = payload["diagnosticCandidate"]
+            self.assertEqual(candidate["runId"], run_id)
+            self.assertFalse(candidate["manufacturingValidated"])
+            self.assertEqual(candidate["inputBindings"]["intent"]["sha256"], sha256(intent_path.read_bytes()).hexdigest())
+            for artifact in candidate["artifacts"].values():
+                path = Path(artifact["path"])
+                self.assertEqual(artifact["sha256"], sha256(path.read_bytes()).hexdigest())
+            self.assertFalse((failed_dir / "shelf-case_report.json").exists())
+            self.assertFalse((failed_dir / "shelf-case.3mf").exists())
 
 
 if __name__ == "__main__":

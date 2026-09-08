@@ -44,7 +44,10 @@ function healthResponse(context: TrpcContext): HealthResponse {
     ...(runtimeError ? { runtimeError } : {}),
     runtimeReady: Boolean(runtime),
     skills: runtime ? [...runtime.skills] : [],
-    webSearchConfigured: Boolean(runtime),
+    webSearchConfigured: Boolean(runtime?.configured && runtime.runtimeReady),
+    webSearchEnabled: runtime?.webSearchEnabled ?? false,
+    // Health reads configuration only; they never invoke a provider or image probe.
+    webSearchVerification: 'untested',
     workspace: 'workspace/',
   };
 }

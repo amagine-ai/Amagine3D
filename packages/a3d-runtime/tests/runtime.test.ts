@@ -31,6 +31,12 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.match(codexPrompt('cad', '建模', false), /不要为了查询 API/u);
   assert.match(codexPrompt('cad', '建模', false), /不复述 shell 命令/u);
   assert.match(codexPrompt('cad', '建模', false), /简化调用并立即重试/u);
+  assert.match(codexPrompt('cad', '建模', false), /联网已关闭/u);
+  assert.doesNotMatch(codexPrompt('cad', '建模', false), /默认先寻找少量相关参考/u);
+  assert.match(codexPrompt('cad', '建模', true), /实际打开图片查看/u);
+  assert.match(codexPrompt('cad', '建模', true), /照片不能替代可靠的工程规格/u);
+  assert.match(codexPrompt('cad', '建模', true), /完整工具返回/u);
+  assert.doesNotMatch(codexPrompt('chat', '解释', true), /造型方向/u);
   assert.doesNotMatch(codexPrompt('chat', '解释', false), /a3d help/u);
 });
 
@@ -116,7 +122,6 @@ test('runs isolated threads and exposes only normalized runtime events', async (
       },
       sessionId: SESSION_ID,
       taskType: 'cad',
-      webSearchEnabled: true,
     });
 
     assert.equal(result.finalResponse, '完成');
@@ -205,17 +210,68 @@ test('runs isolated threads and exposes only normalized runtime events', async (
       sessionId: SESSION_ID,
       taskType: 'cad',
       threadId: result.threadId,
-      webSearchEnabled: false,
     });
     assert.equal(startCount, 1);
     assert.deepEqual(resumedThreadIds, ['thread-1']);
     assert.deepEqual(clientOptions?.config?.permissions, {
       'amagine3d-session': {
         extends: ':workspace',
-        network: { enabled: false },
+        network: { enabled: true },
       },
     });
-    assert.equal(threadOptions?.webSearchMode, 'disabled');
+    assert.equal(threadOptions?.webSearchMode, 'live');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('only environment configuration controls native search and network access', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-codex-search-'));
+  try {
+    for (const value of [undefined, '', 'true', 'false', ' FALSE ']) {
+      const enabled = value?.trim().toLowerCase() !== 'false';
+      let clientOptions: CodexOptions | undefined;
+      let threadOptions: ThreadOptions | undefined;
+      let receivedInput: Input | undefined;
+      const runtime = await CodexRuntime.create(root, {
+        environment: { LLM_API_KEY: 'test-key', CODEX_WEB_SEARCH_ENABLED: value },
+        clientFactory: (options) => {
+          clientOptions = options;
+          const createThread = (options?: ThreadOptions) => {
+            threadOptions = options;
+            return {
+              id: 'thread-search',
+              async runStreamed(input: Input) {
+                receivedInput = input;
+                async function* events(): AsyncGenerator<ThreadEvent> {
+                  yield { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'ok' } };
+                }
+                return { events: events() };
+              },
+            };
+          };
+          return { startThread: createThread, resumeThread: (_, options) => createThread(options) };
+        },
+      });
+      assert.equal(runtime.webSearchEnabled, enabled);
+      for (const legacyValue of [undefined, true, false]) {
+        await runtime.runTurn({
+          imagePaths: [], message: '建模', sessionId: SESSION_ID, taskType: 'cad',
+          ...(legacyValue === undefined ? {} : { threadId: 'thread-search', webSearchEnabled: legacyValue }),
+        });
+        assert.equal(threadOptions?.webSearchMode, enabled ? 'live' : 'disabled');
+        assert.deepEqual(clientOptions?.config?.permissions, {
+          'amagine3d-session': { extends: ':workspace', network: { enabled } },
+        });
+        const prompt = JSON.stringify(receivedInput);
+        if (enabled) assert.match(prompt, /原生联网搜索/u);
+        else assert.match(prompt, /不要尝试通过其他工具联网/u);
+      }
+    }
+    await assert.rejects(
+      CodexRuntime.create(root, { environment: { LLM_API_KEY: 'test-key', CODEX_WEB_SEARCH_ENABLED: 'fales' } }),
+      /CODEX_WEB_SEARCH_ENABLED must be true or false/u,
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -39,6 +39,7 @@ assembly_check = load_module("single_assembly_check", SKILL / "assembly_check.py
 intent_contract = load_module("single_intent_contract", SKILL / "intent_contract.py")
 step_check = load_module("single_step_check", SKILL / "step_check.py")
 import capability_registry  # noqa: E402
+from geometry_binding import bind_display_component  # noqa: E402
 from tests.python.intent_fixture import write_intent as write_fixture_intent  # noqa: E402
 
 COORDINATE_SYSTEM = {
@@ -1209,31 +1210,21 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
             display_path = root / "status-surface.ply"
             display_mesh = trimesh.creation.box(extents=[4.0, 0.1, 1.0])
             display_mesh.apply_translation([0.0, -4.8, 5.0])
-            display_mesh.export(display_path)
+            display_node = bind_display_component(
+                node_id="status-surface",
+                feature_id="display/status-surface",
+                physical_feature_ref="top-lid-envelope",
+                shape=display_mesh,
+                path=display_path,
+                appearance={"baseColor": "#111417", "roughness": 0.2},
+            )
             scene_path = _write_brep_scene(
                 root,
                 intent_path,
                 ["lower-shell", "top-lid"],
                 interface_dimensions={"lid-tab-slot": ("width", 6.0)},
                 display_nodes=[
-                    {
-                        "id": "status-surface",
-                        "partId": "top-lid",
-                        "featureId": "display/status-surface",
-                        "role": "display-only",
-                        "operation": "none",
-                        "physicalFeatureRef": "lid-slot",
-                        "recipe": {
-                            "kind": "displayComponent",
-                            "parameters": {
-                                "sourceMesh": display_path.name,
-                                "appearance": {
-                                    "baseColor": "#111417",
-                                    "roughness": 0.2,
-                                },
-                            },
-                        },
-                    }
+                    {**display_node, "partId": "top-lid"}
                 ],
             )
             tab = Pos(0, 0, 4) * Box(
@@ -1312,6 +1303,24 @@ class SingleMaterialAssemblyTests(unittest.TestCase):
                 ["status-surface"],
             )
             self.assertNotIn("status-surface", report["parts"])
+            self.assertNotIn("stl:status-surface", report["artifacts"])
+            self.assertNotIn("step:status-surface", report["artifacts"])
+            preview = trimesh.load(root / "case-display.glb", force="scene", process=False)
+            metadata = {
+                node_name: preview.geometry[preview.graph[node_name][1]].metadata["amagine3d"]
+                for node_name in preview.graph.nodes_geometry
+            }
+            self.assertEqual(metadata, {
+                "lower-shell": {"role": "manufactured"},
+                "top-lid": {"role": "manufactured"},
+                "status-surface": {
+                    "role": "display-only", "physicalFeatureRef": "top-lid-envelope"
+                },
+            })
+            self.assertEqual(
+                {item["name"] for item in report["backendData"]["threeMf"]["inspection"]["lib3mf"]["mesh_objects"]},
+                {"lower-shell", "top-lid"},
+            )
             self.assertTrue((root / "case.3mf").is_file())
             self.assertTrue((root / "case_material-plan.json").is_file())
             self.assertEqual(

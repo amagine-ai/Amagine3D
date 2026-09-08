@@ -403,20 +403,16 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
         )
         mesh = trimesh.load(mesh_path, force="mesh", process=False)
     if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
-        return {
-            "center_inside_contact_bounds": False,
-            "contact_area_mm2": 0.0,
-            "contact_area_ratio": 0.0,
-            "contact_bounds_mm": None,
-            "overhang_area_mm2": float("inf"),
-            "stability_offset_ratio": float("inf"),
-            "support_mean_clearance_mm": float("inf"),
-            "support_volume_proxy_mm3": float("inf"),
-        }
+        raise RegionInvariantError("print orientation tessellation is empty or invalid")
     normals = np.asarray(mesh.face_normals, dtype=float)
     triangles = np.asarray(mesh.triangles, dtype=float)
     areas = np.asarray(mesh.area_faces, dtype=float)
     bounds = np.asarray(mesh.bounds, dtype=float)
+    if (
+        not all(np.isfinite(values).all() for values in (normals, triangles, areas, bounds))
+        or not (areas > 0).all()
+    ):
+        raise RegionInvariantError("print orientation tessellation is empty or invalid")
     minimum_z = float(bounds[0, 2])
     contact_mask = (
         (triangles[:, :, 2].max(axis=1) <= minimum_z + 0.08)
@@ -426,7 +422,7 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
     footprint_area = max(float((bounds[1, 0] - bounds[0, 0]) * (bounds[1, 1] - bounds[0, 1])), 1e-9)
     contact_bounds = None
     center_inside = False
-    stability_offset = float("inf")
+    stability_offset = None
     if contact_mask.any():
         contact_points = triangles[contact_mask][:, :, :2].reshape((-1, 2))
         lower = contact_points.min(axis=0)
@@ -469,7 +465,9 @@ def _mesh_orientation_metrics(shape, *, threshold_deg: float) -> dict:
             else None
         ),
         "overhang_area_mm2": round(overhang_area, 5),
-        "stability_offset_ratio": round(stability_offset, 8),
+        "stability_offset_ratio": (
+            round(stability_offset, 8) if stability_offset is not None else None
+        ),
         "support_mean_clearance_mm": round(support_mean_clearance, 5),
         "support_volume_proxy_mm3": round(support_volume_proxy, 5),
     }
@@ -544,6 +542,13 @@ def _orientation_candidates(
         protected_penalty = 1 if bed_face in protected else 0
         no_contact_penalty = 1 if metrics["contact_area_mm2"] <= 1e-9 else 0
         center_penalty = 0 if metrics["center_inside_contact_bounds"] else 1
+        # Contact penalties sort first. Missing stability only ties candidates
+        # that both lack measurable contact; it never describes a stable base.
+        stability_score = (
+            round(float(metrics["stability_offset_ratio"]), 8)
+            if metrics["stability_offset_ratio"] is not None
+            else 0.0
+        )
         results.append({
             "bed_contact_semantic_face": bed_face,
             "bed_fit": bed,
@@ -569,7 +574,7 @@ def _orientation_candidates(
                 round(float(metrics["overhang_area_mm2"]), 5),
                 no_contact_penalty,
                 center_penalty,
-                round(float(metrics["stability_offset_ratio"]), 8),
+                stability_score,
                 round(-float(metrics["contact_area_mm2"]), 5),
                 protected_penalty,
                 0.0,

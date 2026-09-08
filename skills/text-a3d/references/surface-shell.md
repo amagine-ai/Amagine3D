@@ -1,21 +1,23 @@
-# Continuous-section shell example
+# BRep loft shell example
 
 This example implements one of the constructions described in `surface-design.md`.
 
-Use `examples/surface_shell_intent.py` and `examples/surface_shell_build.py` when
-the intended silhouette needs smoothly changing sections and a mesh master is
-appropriate. This is one surface construction example, not the default shape or
-architecture for consumer electronics. Keep dimension-controlled mechanisms and
-interfaces in the appropriate BRep workflow.
+Use `examples/surface_shell_intent.py` and `examples/surface_shell_build.py` to
+develop an enclosure from a few editable key sections. Adapt the proportions,
+section shapes and opening to the requested product; add mechanisms and
+interfaces as BRep features of their owning parts.
 
-The example exposes width, depth, height, horizontal wall inset, floor thickness,
-section exponent and separate upper/lower shoulder controls. Quintic transitions
-join the shoulders to the full-width middle with continuous first and second
-derivatives. Its 96-point sections and 41 height levels form a real cavity, an
-annular rim and a closed floor. Increasing samples improves tessellation, not the
-underlying proportions. The inset is exact within each analytic horizontal
-section; sloping walls do not have an exact 3D normal-offset thickness. Check the
-measured wall thickness and shoulder overhang after changes.
+The example uses six rounded-rectangle sections. Each `STATIONS` entry controls
+height, width, depth, corner radius and center position. It lofts an outer solid
+and subtracts an inner loft to form a real cavity, rim and floor. `WALL_INSET`
+and `FLOOR` control the section inset and base thickness. Section insets do not
+guarantee constant 3D normal thickness on sloping walls; check measured wall
+thickness and shoulder overhang after changes.
+
+`RULED=True` allows visible shoulder transitions. Smooth lofts are also useful
+when the profiles remain valid; changing this setting requires fresh geometry
+and wall checks. G2 continuity is not required. Simplify or split the BRep
+construction when profiles become unstable.
 
 Copy the two files into the current session workspace, then use the public path:
 
@@ -29,9 +31,11 @@ a3d intent surface_shell_intent.json
 a3d compile surface_shell_scene.json --marker .surface_shell.generation-start --intent surface_shell_intent.json --source surface_shell_build.py --output-dir .
 ```
 
-The intent is written once; the compiler executes the build source. This mesh
-example ends at `write_scene`; the public compiler handles hybrid export. Do not
-call `export_assembly` or run the build source separately.
+The intent is written once; the compiler executes the build source. The source
+records the outer solid and cavity cutter, binds their BRep feature nodes with
+`write_scene`, and calls `export_part` for the final valid solid. STEP is the
+manufacturing master; STL, GLB and 3MF are derived outputs. Run the build through
+the compiler so its geometry, wall checks and artifacts remain bound together.
 
 Use the current geometry's preview to refine the silhouette, opening and shoulders
 through their source controls. The main skill describes current-run previews and

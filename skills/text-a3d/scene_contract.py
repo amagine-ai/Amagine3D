@@ -27,14 +27,12 @@ from intent_contract import (
 
 SCENE_SCHEMA = "evidence-semantic-scene/v1"
 INTENT_SCHEMAS = {"evidence-cad-intent/v5"}
-REPRESENTATION_MASTERS = {"brep", "mesh"}
+REPRESENTATION_MASTERS = {"brep"}
 ROLES = {"solid", "cutter", "separate", "display-only"}
 DISPLAY_COMPONENT_KIND = "displayComponent"
 BREP_GEOMETRY_RECIPE_KIND = "brepGeometry"
-MESH_GEOMETRY_RECIPE_KIND = "meshGeometry"
 PHYSICAL_GEOMETRY_RECIPE_KINDS = {
     BREP_GEOMETRY_RECIPE_KIND,
-    MESH_GEOMETRY_RECIPE_KIND,
 }
 SELF_TAPPING_RECIPE_KIND = "selfTappingScrewPair"
 SELF_TAPPING_OUTPUTS = {
@@ -69,6 +67,80 @@ INTENT_ONLY_FIELDS = {
     "task_mode",
     "visual",
 }
+
+
+def interface_alignment_issues(
+    intent: dict, interfaces: list, *, check_dimensions: bool = True,
+) -> list[dict[str, Any]]:
+    """Report independent interface declaration errors without guessing endpoint order."""
+    issues: list[dict[str, Any]] = []
+
+    def add(code, path, actual, expected, message, interface_id=None):
+        issues.append({
+            "code": code, "path": path, "actual": actual, "expected": expected,
+            "message": message, "interfaceId": interface_id,
+        })
+
+    manufacturing = intent.get("manufacturing", {})
+    targets = manufacturing.get("interfaces", []) if isinstance(manufacturing, dict) else []
+    targets = targets if isinstance(targets, list) else []
+    target_by_id = {item["id"]: item for item in targets if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    actual_by_id = {item["id"]: item for item in interfaces if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    expected_ids = set(target_by_id)
+    for target in target_by_id.values():
+        fastening = target.get("fastening", {})
+        if target.get("connection") == "self-tapping-screw" and isinstance(fastening, dict):
+            expected_ids.update(item["id"] for item in fastening.get("locator_pairs", []) if isinstance(item, dict) and isinstance(item.get("id"), str))
+    if set(actual_by_id) != expected_ids:
+        add("INTERFACE.ID_MISMATCH", "interfaces", sorted(actual_by_id), sorted(expected_ids),
+            f"scene interface ids must exactly match immutable intent: expected {sorted(expected_ids)}, observed {sorted(actual_by_id)}")
+    owners = intent_feature_owner_map(intent)
+    for interface_id in sorted(set(target_by_id) & set(actual_by_id)):
+        target, actual = target_by_id[interface_id], actual_by_id[interface_id]
+        path = f"interfaces[{interface_id}]"
+        if actual.get("kind") != target.get("connection"):
+            add("INTERFACE.KIND_MISMATCH", f"{path}.kind", actual.get("kind"), target.get("connection"),
+                f"{path}.kind must match immutable connection {target.get('connection')!r}; observed {actual.get('kind')!r}", interface_id)
+        if target.get("connection") == "self-tapping-screw":
+            continue
+        expected_features = sorted(set(target.get("features", [])))
+        observed_features = []
+        for name in ("male", "female"):
+            endpoint = actual.get(name)
+            feature = endpoint.get("featureId") if isinstance(endpoint, dict) else None
+            endpoint_path = f"{path}.{name}.featureId"
+            if not isinstance(feature, str) or not feature:
+                add("INTERFACE.ENDPOINT_FEATURE_REQUIRED", endpoint_path, feature, expected_features,
+                    f"{endpoint_path} is required; observed {feature!r}; expected one of immutable features {expected_features}. Set the endpoint object; features list order is irrelevant.", interface_id)
+                continue
+            observed_features.append(feature)
+            if feature not in expected_features:
+                add("INTERFACE.ENDPOINT_FEATURE_MISMATCH", endpoint_path, feature, expected_features,
+                    f"{endpoint_path} must reference one of immutable features {expected_features}; observed {feature!r}", interface_id)
+            owner = owners.get(feature)
+            if owner is not None and endpoint.get("partId") != owner:
+                add("INTERFACE.ENDPOINT_OWNER_MISMATCH", f"{path}.{name}.partId", endpoint.get("partId"), owner,
+                    f"{path}.{name}.partId must match immutable owner {owner!r} of {feature!r}; observed {endpoint.get('partId')!r}", interface_id)
+        if len(observed_features) == 2 and set(observed_features) != set(expected_features):
+            add("INTERFACE.ENDPOINT_SET_MISMATCH", path, observed_features, expected_features,
+                f"{path} endpoints must exactly match immutable features {expected_features}; observed {observed_features}", interface_id)
+        if not check_dimensions:
+            continue
+        female = actual.get("female", {})
+        derived = female.get("derivedDimensionsMm", {}) if isinstance(female, dict) else {}
+        clearances = target.get("clearances_mm", {})
+        clearances = clearances if isinstance(clearances, dict) else {}
+        if not isinstance(derived, dict) or set(derived) != set(clearances):
+            add("INTERFACE.CLEARANCE_FIELDS_MISMATCH", f"{path}.female.derivedDimensionsMm", derived, sorted(clearances),
+                f"{path} derived dimension fields must exactly match immutable clearances_mm: expected {sorted(clearances)}, observed {derived!r}", interface_id)
+        if isinstance(derived, dict):
+            for field in sorted(set(derived) & set(clearances)):
+                rule = derived[field]
+                offset = rule.get("offsetMm") if isinstance(rule, dict) else None
+                if not _number(offset) or offset != clearances[field]:
+                    add("INTERFACE.CLEARANCE_MISMATCH", f"{path}.female.derivedDimensionsMm.{field}.offsetMm", offset, clearances[field],
+                        f"{path} clearance {field!r} must exactly match immutable clearances_mm: expected {clearances[field]!r}, observed {offset!r}", interface_id)
+    return issues
 
 
 def _validate_interface_intent_alignment(
@@ -146,10 +218,15 @@ def _validate_interface_intent_alignment(
             if isinstance(endpoint.get("featureId"), str)
         }
         if observed_features != expected_features:
-            errors.append(
-                f"{path} endpoints must exactly match immutable features "
-                f"{sorted(expected_features)}"
-            )
+            for endpoint_name in ("male", "female"):
+                endpoint = endpoints.get(endpoint_name, {})
+                feature_id = endpoint.get("featureId")
+                if not isinstance(feature_id, str) or feature_id not in expected_features:
+                    errors.append(
+                        f"{path}.{endpoint_name}.featureId must reference one of immutable features "
+                        f"{sorted(expected_features)}; observed {feature_id!r}; features list order is irrelevant"
+                    )
+            errors.append(f"{path} endpoints must exactly match immutable features {sorted(expected_features)}; observed {sorted(observed_features)}")
         expected_parts = {
             item for item in target.get("between", []) if isinstance(item, str)
         }
@@ -477,11 +554,7 @@ def _validate_bound_geometry(
     parameters = recipe.get("parameters")
     if kind not in PHYSICAL_GEOMETRY_RECIPE_KINDS or not isinstance(parameters, dict):
         return
-    expected_parameters = (
-        {"geometry", "tessellation"}
-        if kind == BREP_GEOMETRY_RECIPE_KIND
-        else {"geometry"}
-    )
+    expected_parameters = {"geometry", "tessellation"}
     if set(parameters) != expected_parameters:
         errors.append(
             f"{path}.parameters must contain exactly {sorted(expected_parameters)}"
@@ -1339,42 +1412,20 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 part_by_id[part_id] = part
             if part.get("representationMaster") not in REPRESENTATION_MASTERS:
                 errors.append(
-                    f"{path}.representationMaster must be brep or mesh"
+                    f"{path}.representationMaster must be brep"
                 )
             representation_master = part.get("representationMaster")
             material_id = part.get("materialId")
             if material_id is not None and material_id not in material_ids:
                 errors.append(f"{path}.materialId references an unknown material")
             color_regions = part.get("colorRegions", [])
-            region_ids: list[str] = []
             if not isinstance(color_regions, list):
                 errors.append(f"{path}.colorRegions must be a list")
-            else:
-                if color_regions and representation_master != "mesh":
-                    errors.append(
-                        f"{path}.colorRegions is only supported for mesh-master parts"
-                    )
-                for region_index, region in enumerate(color_regions):
-                    region_path = f"{path}.colorRegions[{region_index}]"
-                    if not isinstance(region, dict):
-                        errors.append(f"{region_path} must be an object")
-                        continue
-                    region_id = region.get("id")
-                    if not _valid_id(region_id):
-                        errors.append(f"{region_path}.id is invalid")
-                    else:
-                        region_ids.append(region_id)
-                    if region.get("materialId") not in material_ids:
-                        errors.append(
-                            f"{region_path}.materialId references an unknown material"
-                        )
-                    _validate_source_mesh_spec(
-                        region.get("sourceMesh"),
-                        f"{region_path}.sourceMesh",
-                        errors,
-                    )
-                if len(region_ids) != len(set(region_ids)):
-                    errors.append(f"{path}.colorRegions ids must be unique")
+            elif color_regions:
+                errors.append(
+                    f"{path}.colorRegions mesh sources are unsupported; "
+                    "export manufactured color regions from BRep geometry"
+                )
             artifacts = part.get("artifacts")
             if artifacts is not None:
                 if not isinstance(artifacts, dict):
@@ -1437,10 +1488,6 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 errors.append(
                     f"{path}.artifacts.masterStep is required once a brep part is bound"
                 )
-            if representation_master == "mesh" and isinstance(master_step, dict):
-                errors.append(
-                    f"{path}.artifacts.masterStep is forbidden for a mesh master"
-                )
         if len(part_ids) != len(set(part_ids)):
             errors.append("part ids must be unique")
 
@@ -1460,11 +1507,6 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
         if isinstance(intent_data, dict)
         else {}
     )
-    hybrid_scene = any(
-        part.get("representationMaster") == "mesh"
-        for part in part_by_id.values()
-    )
-
     nodes = data.get("nodes")
     node_ids: list[str] = []
     feature_ids: list[str] = []
@@ -1533,38 +1575,18 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     _validate_json_value(
                         recipe["parameters"], f"{path}.recipe.parameters", errors
                     )
-                if role != "display-only" and kind == "sourceMesh":
+                if role != "display-only" and kind in {"sourceMesh", "meshGeometry"}:
                     errors.append(
-                        f"{path}.recipe.kind sourceMesh is unsupported for physical "
-                        "nodes; bind the authored object as meshGeometry or brepGeometry"
+                        f"{path}.recipe.kind {kind} is unsupported for physical "
+                        "nodes; author BRep geometry and bind it as brepGeometry"
                     )
-                if (
-                    hybrid_scene
-                    and role != "display-only"
-                    and kind != SELF_TAPPING_RECIPE_KIND
-                ):
-                    if kind not in PHYSICAL_GEOMETRY_RECIPE_KINDS:
-                        errors.append(
-                            f"{path}.recipe.kind must be one of "
-                            f"{sorted(PHYSICAL_GEOMETRY_RECIPE_KINDS)} in a hybrid scene"
-                        )
-                    else:
-                        owner = part_by_id.get(part_id)
-                        if (
-                            isinstance(owner, dict)
-                            and owner.get("representationMaster") == "brep"
-                            and kind != BREP_GEOMETRY_RECIPE_KIND
-                        ):
-                            errors.append(
-                                f"{path}.recipe.kind must be "
-                                f"{BREP_GEOMETRY_RECIPE_KIND} for a BRep-master part"
-                            )
-                        _validate_bound_geometry(
-                            recipe,
-                            f"{path}.recipe",
-                            base_dir,
-                            errors,
-                        )
+                if role != "display-only" and kind == BREP_GEOMETRY_RECIPE_KIND:
+                    _validate_bound_geometry(
+                        recipe,
+                        f"{path}.recipe",
+                        base_dir,
+                        errors,
+                    )
 
             physical_ref = node.get("physicalFeatureRef")
             if role == "display-only":
@@ -1647,13 +1669,6 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 errors.append(
                     f"nodes[{index}].physicalFeatureRef must reference a non-display feature"
                 )
-            elif recipe_kind == DISPLAY_COMPONENT_KIND:
-                referenced = nodes_by_feature[feature_ref]
-                if referenced.get("role") != "cutter":
-                    errors.append(
-                        f"nodes[{index}].physicalFeatureRef for recipe.kind "
-                        "displayComponent must reference a cutter"
-                    )
             expected_owner = intent_feature_owners.get(feature_ref)
             display_node = nodes[index]
             if expected_owner is None:
@@ -1688,9 +1703,9 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 interface_ids.append(interface_id)
             kind = interface.get("kind")
             if not isinstance(kind, str) or not TOKEN_PATTERN.fullmatch(kind):
-                errors.append(f"{path}.kind is invalid")
+                errors.append(f"{path}.kind is invalid; allowed values: {sorted(connection_kinds())}")
             elif kind not in connection_kinds():
-                errors.append(f"{path}.kind has no registered interface capability")
+                errors.append(f"{path}.kind has no registered interface capability; allowed values: {sorted(connection_kinds())}")
             if kind == "self-tapping-screw":
                 if "male" in interface or "female" in interface:
                     errors.append(
@@ -1802,6 +1817,11 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
     _validate_self_tapping_locator_interfaces(interfaces, nodes_by_feature, errors)
     _validate_self_tapping_recipe_nodes(interfaces, nodes, errors)
     _validate_self_tapping_intent_alignment(intent_data, interfaces, errors)
+
+    from installation_contract import validate_installations
+    errors.extend(validate_installations(
+        data.get("installationChecks", []), intent_data, set(part_ids), base_dir
+    ))
 
     return errors
 

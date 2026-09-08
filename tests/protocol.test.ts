@@ -69,15 +69,6 @@ test('rejects malformed or empty chat requests', () => {
   assert.equal(isChatRequest(null), false);
   assert.equal(
     isChatRequest({
-      message: 'hello',
-      sessionId: crypto.randomUUID(),
-      taskType: 'chat',
-      webSearchEnabled: 'true',
-    }),
-    false,
-  );
-  assert.equal(
-    isChatRequest({
       images: [{ data: 'not base64!', mimeType: 'image/png', name: 'part.png' }],
       message: '查看图片',
       sessionId: crypto.randomUUID(),

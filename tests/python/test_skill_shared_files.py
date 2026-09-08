@@ -20,7 +20,6 @@ class SharedSkillFileTests(unittest.TestCase):
             "cpu_z_buffer.py",
             "freshness_check.py",
             "mesh_topology.py",
-            "organic_shell.py",
             "reference_analyze.py",
             "render_preview.py",
         )

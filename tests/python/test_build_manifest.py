@@ -465,6 +465,29 @@ class BuildManifestTests(unittest.TestCase):
                 for item in result["errors"]
             ))
 
+    def test_measured_envelope_uses_only_explicit_design_freedom(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parts = _valid_report(Path(directory))["parts"]
+            intent = {"dimensions_mm": {axis: {"value": 2.0, "source": "inferred"} for axis in "xyz"}}
+            with self.assertRaisesRegex(ValueError, "differs from intent"):
+                semantic_assembly_record(parts, "a" * 64, intent)
+            for dimension in intent["dimensions_mm"].values():
+                dimension["constraint"] = {"kind": "range", "min_mm": 1.0, "max_mm": 2.0}
+            actual = semantic_assembly_record(parts, "a" * 64, intent)
+            self.assertEqual(actual["boundsMm"]["size"], [1.0, 1.0, 1.0])
+            intent["dimensions_mm"]["x"]["constraint"]["min_mm"] = 1.5001
+            with self.assertRaisesRegex(ValueError, "differs from intent"):
+                semantic_assembly_record(parts, "a" * 64, intent)
+
+    def test_malformed_envelope_constraint_remains_an_audit_error(self):
+        from build_manifest import semantic_envelope_errors
+        for constraint in (None, {"kind": "range"}, {"kind": "range", "min_mm": 1, "max_mm": "invalid"}):
+            with self.subTest(constraint=constraint):
+                errors = semantic_envelope_errors({"size": [1, 1, 1]}, {"dimensions_mm": {
+                    axis: {"value": 1, "constraint": constraint} for axis in "xyz"}})
+                self.assertEqual(len(errors), 3)
+                self.assertTrue(all("invalid constraint" in item for item in errors))
+
     def test_build_check_rejects_semantic_envelope_that_misses_intent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

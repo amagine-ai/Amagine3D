@@ -12,6 +12,7 @@ import numpy as np
 import trimesh
 
 from build_manifest import SEMANTIC_ENVELOPE_TOLERANCE_MM
+from intent_contract import dimension_limits
 from coordinate_frames import (
     bounds_overlap,
     transform_bounds,
@@ -1058,14 +1059,21 @@ def main() -> int:
     report_frame = _report_coordinate_frame(report, report_artifact)
     if report_frame == "plate-print" and intent_dimensions is not None and semantic_dimensions is not None:
         for index, axis in enumerate("xyz"):
+            try:
+                lower, upper = dimension_limits(intent, axis, tolerance_mm=SEMANTIC_ENVELOPE_TOLERANCE_MM)
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                audit.add(f"semantic_envelope_dimension_{axis}", False,
+                          {"error": f"invalid dimension constraint: {error}"},
+                          "valid independent intent dimension constraint", category="dimensions")
+                continue
             audit.add(
                 f"semantic_envelope_dimension_{axis}",
-                abs(semantic_dimensions[index] - intent_dimensions[index])
-                <= SEMANTIC_ENVELOPE_TOLERANCE_MM,
+                lower <= semantic_dimensions[index] <= upper,
                 semantic_dimensions[index],
                 {
                     "value": intent_dimensions[index],
                     "tolerance": SEMANTIC_ENVELOPE_TOLERANCE_MM,
+                    "allowedRangeMm": [lower, upper],
                 },
                 category="dimensions",
             )

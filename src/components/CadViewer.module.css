@@ -119,6 +119,11 @@
   touch-action: none;
 }
 
+.shell:not([data-viewer-status='ready']) .canvas {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .canvas:active {
   cursor: grabbing;
 }

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
+import subprocess
 import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +21,56 @@ import capability_registry  # noqa: E402
 
 
 class CapabilityManifestTests(unittest.TestCase):
+    def test_managed_queries_expose_installed_call_parameters_without_importing_kernel(self):
+        completed = subprocess.run(
+            [sys.executable, "-c", (
+                "import json, sys; import capability_manifest; "
+                "result = capability_manifest.build_manifest(['Cylinder', 'RectangleRounded', 'extrude', 'Pos', 'Rot', 'MM']); "
+                "assert 'build123d' not in sys.modules; "
+                "assert not any(name.startswith('OCP') for name in sys.modules); "
+                "print(json.dumps(result['query']))"
+            )],
+            cwd=SKILL, check=True, capture_output=True, text=True,
+        )
+        query = json.loads(completed.stdout)
+        self.assertIn("radius", query["Cylinder"]["parameters"])
+        self.assertIn("rotation", query["Cylinder"]["parameters"])
+        self.assertNotIn("axis", query["Cylinder"]["parameters"])
+        self.assertNotIn("self", query["Cylinder"]["parameters"])
+        self.assertIn("width", query["RectangleRounded"]["parameters"])
+        self.assertIn("both: bool=False", query["extrude"]["signature"])
+        self.assertTrue(any("X: float=0" in item for item in query["Pos"]["overloadSignatures"]))
+        self.assertTrue(all(item.startswith("Rot(") for item in query["Rot"]["overloadSignatures"]))
+        self.assertTrue(query["MM"]["available"])
+        self.assertNotIn("signature", query["MM"])
+
+    def test_source_signatures_follow_export_aliases_and_inherited_constructor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory)
+            (package / "__init__.py").write_text(
+                "raise RuntimeError('source must never execute')\n"
+                "from .objects import *\n"
+                "from .unrelated import *\n"
+                "__all__ = ['Alias']\n", encoding="utf-8",
+            )
+            (package / "objects.py").write_text(
+                "class Base:\n"
+                "    def __init__(self, width: float, /, *, gap: float=0.2): pass\n"
+                "class Child(Base): pass\n"
+                "Alias = Child\n"
+                "__all__ = ['Alias']\n", encoding="utf-8",
+            )
+            (package / "unrelated.py").write_text(
+                "def Alias(wrong): pass\n__all__ = []\n", encoding="utf-8",
+            )
+            with mock.patch.object(
+                capability_manifest.util, "find_spec",
+                return_value=SimpleNamespace(origin=str(package / "__init__.py")),
+            ):
+                query = capability_manifest._ManagedSignatures().query("Alias")
+            self.assertEqual(query["signature"], "Alias(width: float, /, *, gap: float=0.2)")
+            self.assertEqual(query["parameters"], ["width", "gap"])
+
     def test_manifest_reports_the_pinned_api_without_importing_model_source(self):
         manifest = capability_manifest.build_manifest(["Sphere", "Ellipsoid"])
 
@@ -30,7 +85,7 @@ class CapabilityManifestTests(unittest.TestCase):
             next(
                 item
                 for item in manifest["authoring"]["modelingRecipes"]
-                if item["id"] == "sdf-organic-shell"
+                if item["id"] == "section-loft-shell"
             )["available"]
         )
         self.assertTrue(
@@ -38,13 +93,6 @@ class CapabilityManifestTests(unittest.TestCase):
                 item
                 for item in manifest["authoring"]["modelingRecipes"]
                 if item["id"] == "checked-brep-features"
-            )["available"]
-        )
-        self.assertTrue(
-            next(
-                item
-                for item in manifest["authoring"]["modelingRecipes"]
-                if item["id"] == "bound-hybrid-features"
             )["available"]
         )
         self.assertNotIn(
@@ -89,7 +137,7 @@ class CapabilityManifestTests(unittest.TestCase):
             for item in manifest["authoring"]["authoringHelpers"]
         }
         self.assertEqual(authoring["paired_dimensions"], ["interface"])
-        self.assertNotIn(
+        self.assertIn(
             "female_dimensions_mm",
             authoring["paired_interface"],
         )
@@ -101,14 +149,6 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertIn("collar_socket", helpers)
         self.assertIn("radial_clearance_mm", helpers["collar_socket"])
         self.assertIn("self_tapping_screw_pair", helpers)
-
-        shell_helpers = {
-            item["name"]: item["parameters"]
-            for item in manifest["authoring"]["organicShellHelpers"]
-        }
-        self.assertIn("build_organic_shell", shell_helpers)
-        self.assertIn("cavity_strategy", shell_helpers["build_organic_shell"])
-        self.assertIn("self_supporting_cavity", shell_helpers)
 
         geometry_helpers = {
             item["name"]: item["parameters"]
@@ -123,8 +163,37 @@ class CapabilityManifestTests(unittest.TestCase):
             for item in manifest["authoring"]["geometryBindingHelpers"]
         }
         self.assertIn("bind_brep_feature", binding_helpers)
-        self.assertIn("bind_mesh_feature", binding_helpers)
         self.assertIn("shape", binding_helpers["bind_brep_feature"])
+
+    def test_owned_feature_and_plate_planning_signatures_are_discoverable(self):
+        names = ["BrepFeature", "BrepFeature.bind", "BrepFeature.cut_from", "plan_plates"]
+        query = capability_manifest.build_manifest(names)["query"]
+        self.assertEqual(query["BrepFeature"]["parameters"], ["id", "part", "role", "shape"])
+        self.assertIn("path", query["BrepFeature.bind"]["parameters"])
+        self.assertIn("min_removed_mm3", query["BrepFeature.cut_from"]["parameters"])
+        self.assertEqual(query["BrepFeature"]["provider"], "geometry_binding")
+        self.assertEqual(query["plan_plates"]["provider"], "plate_layout")
+        self.assertEqual(query["plan_plates"]["parameters"], ["bboxes", "profile", "spacing_mm", "edge_margin_mm", "max_plates"])
+        self.assertIn("max_plates: int=1", query["plan_plates"]["signature"])
+        self.assertIn("revision", capability_manifest.build_manifest(["write_intent"])["query"]["write_intent"]["parameters"])
+
+    def test_public_authoring_surface_supports_brep_without_mesh_master_helpers(self):
+        retired = ["bind_mesh_feature", "build_organic_shell", "self_supporting_cavity"]
+        manifest = capability_manifest.build_manifest(["loft", "bind_brep_feature", *retired])
+        self.assertTrue(manifest["query"]["loft"]["available"])
+        self.assertTrue(manifest["query"]["bind_brep_feature"]["available"])
+        for name in retired:
+            with self.subTest(name=name):
+                self.assertFalse(manifest["query"][name]["available"])
+        self.assertEqual(manifest["policies"]["representationMasters"], ["brep"])
+        self.assertNotIn("hybrid", {
+            mode["id"] for mode in manifest["authoring"]["artifactModes"]
+        })
+        self.assertTrue({"STL", "display GLB"}.issubset({
+            output
+            for mode in manifest["authoring"]["artifactModes"]
+            for output in mode["outputs"]
+        }))
 
     def test_queries_resolve_public_authoring_and_export_helpers(self):
         names = ["write_intent", "write_scene", "export_part", "export_assembly", "retained_slider"]

@@ -365,6 +365,8 @@ def semantic_assembly_record(
 def semantic_envelope_errors(bounds_mm: Any, intent: Any) -> list[str]:
     """Compare a final semantic assembly envelope with immutable intent."""
 
+    from intent_contract import dimension_limits
+
     dimensions = intent.get("dimensions_mm") if isinstance(intent, dict) else None
     observed_size = bounds_mm.get("size") if isinstance(bounds_mm, dict) else None
     if not isinstance(dimensions, dict):
@@ -380,12 +382,18 @@ def semantic_envelope_errors(bounds_mm: Any, intent: Any) -> list[str]:
         )
         if not _finite_number(expected) or not _finite_number(observed):
             errors.append(f"semantic envelope dimension {axis} is unavailable")
-        elif abs(float(observed) - float(expected)) > SEMANTIC_ENVELOPE_TOLERANCE_MM:
-            errors.append(
-                f"semantic envelope dimension {axis} differs from intent by more "
-                f"than {SEMANTIC_ENVELOPE_TOLERANCE_MM} mm: "
-                f"expected {float(expected)}, observed {float(observed)}"
-            )
+        else:
+            try:
+                lower, upper = dimension_limits(intent, axis, tolerance_mm=SEMANTIC_ENVELOPE_TOLERANCE_MM)
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                errors.append(f"semantic envelope dimension {axis} has an invalid constraint: {error}")
+                continue
+            if not lower <= float(observed) <= upper:
+                errors.append(
+                    f"semantic envelope dimension {axis} differs from intent: "
+                    f"expected {lower}..{upper} mm including "
+                    f"{SEMANTIC_ENVELOPE_TOLERANCE_MM} mm audit tolerance, observed {float(observed)}"
+                )
     return errors
 
 

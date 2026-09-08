@@ -115,8 +115,7 @@
   position: relative;
 }
 
-.runtimeSelector,
-.webSearchToggle {
+.runtimeSelector {
   display: inline-flex;
   width: auto;
   padding-inline: 0.5rem;
@@ -138,8 +137,7 @@
   line-height: 1;
 }
 
-.runtimeSelector span,
-.webSearchToggle span {
+.runtimeSelector span {
   white-space: nowrap;
 }
 

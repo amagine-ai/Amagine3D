@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AmbientLight,
   Box3,
@@ -24,6 +24,7 @@ import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js';
 
 import styles from './CadViewer.module.css';
 import { formatBytes } from '../lib/format';
+import { referenceVisibility, type ReferenceComponentInfo } from '../lib/reference-visibility';
 import type { ArtifactSummary } from '../types';
 
 type ViewName = 'front' | 'isometric' | 'top';
@@ -32,15 +33,18 @@ export type ViewerState = 'empty' | 'error' | 'loading' | 'ready';
 export interface ViewerStatus {
   state: ViewerState;
   text: string;
+  referenceComponents?: ReferenceComponentInfo;
 }
 
 interface ViewerController {
   fit: () => void;
   setView: (view: ViewName) => void;
+  setReferencesHidden: (hidden: boolean) => void;
 }
 
 interface CadViewerProps {
   artifact?: ArtifactSummary;
+  hideReferenceComponents?: boolean;
   onStatusChange?: (status: ViewerStatus) => void;
 }
 
@@ -67,7 +71,7 @@ function disposeTree(root: Object3D): void {
 
 function triangleCount(root: Object3D): number {
   let total = 0;
-  root.traverse((object) => {
+  root.traverseVisible((object) => {
     if (!(object instanceof Mesh)) return;
     const geometry = object.geometry as BufferGeometry;
     total += geometry.index
@@ -154,7 +158,11 @@ function StatePanel({
   );
 }
 
-export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
+export function CadViewer({
+  artifact,
+  hideReferenceComponents = false,
+  onStatusChange,
+}: CadViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<ViewerController | undefined>(undefined);
@@ -162,10 +170,12 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
   const [error, setError] = useState('');
   const [state, setState] = useState<ViewerState>('empty');
   const [triangles, setTriangles] = useState(0);
+  const [referenceComponents, setReferenceComponents] = useState<ReferenceComponentInfo>();
+  const hideReferencesRef = useRef(hideReferenceComponents);
 
   const statusText =
     state === 'ready'
-      ? `${triangles.toLocaleString()} triangles · ${artifact?.format === 'glb' ? 'display model' : 'print mesh'}`
+      ? `${triangles.toLocaleString()} triangles · ${artifact?.format === 'glb' ? 'assembly preview' : 'print mesh'}`
       : state === 'loading'
         ? 'Reading model data…'
         : state === 'error'
@@ -173,12 +183,19 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
           : 'Waiting for model data';
 
   useEffect(() => {
-    onStatusChange?.({ state, text: statusText });
-  }, [onStatusChange, state, statusText]);
+    onStatusChange?.({ state, text: statusText, referenceComponents });
+  }, [onStatusChange, referenceComponents, state, statusText]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    hideReferencesRef.current = hideReferenceComponents;
+    controllerRef.current?.setReferencesHidden(hideReferenceComponents);
+  }, [hideReferenceComponents]);
+
+  // Reset the persistent canvas and its status before a changed artifact can paint.
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const host = hostRef.current;
+    setReferenceComponents(undefined);
     if (!canvas || !host || !artifact?.format) {
       controllerRef.current = undefined;
       setBounds(undefined);
@@ -196,6 +213,7 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
     let disposed = false;
     let frame = 0;
     let model: Object3D | undefined;
+    let references: ReturnType<typeof referenceVisibility> | undefined;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const scene = new Scene();
     const camera = new PerspectiveCamera(32, 1, 0.1, 100_000);
@@ -270,6 +288,12 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
     controllerRef.current = {
       fit: () => fit(),
       setView: (view) => fit(directionForView(view)),
+      setReferencesHidden: (hidden) => {
+        if (!model || !references) return;
+        references.setHidden(hidden);
+        setTriangles(triangleCount(model));
+        draw();
+      },
     };
 
     const observer = new ResizeObserver(resize);
@@ -279,6 +303,8 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
     if (!reduceMotion) frame = requestAnimationFrame(animate);
 
     const controller = new AbortController();
+    setBounds(undefined);
+    setTriangles(0);
     setState('loading');
     setError('');
     void fetch(artifact.url, { signal: controller.signal })
@@ -297,6 +323,11 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
         root.add(loaded);
         model = root;
         scene.add(root);
+        if (artifact.format === 'glb') {
+          references = referenceVisibility(root);
+          references.setHidden(hideReferencesRef.current);
+          setReferenceComponents(references.info);
+        }
         setBounds(new Box3().setFromObject(root).getSize(new Vector3()));
         setTriangles(triangleCount(root));
         fit();
@@ -318,6 +349,11 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
       controls.removeEventListener('change', draw);
       controls.dispose();
       if (model) disposeTree(model);
+      grid.geometry.dispose();
+      const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
+      gridMaterials.forEach(disposeMaterial);
+      // dispose() releases resources, but does not erase the last rendered frame.
+      renderer.clear();
       renderer.dispose();
       controllerRef.current = undefined;
     };
@@ -332,10 +368,11 @@ export function CadViewer({ artifact, onStatusChange }: CadViewerProps) {
     >
       <div className={styles.stage} ref={hostRef}>
         <canvas
+          aria-hidden={!ready}
           aria-label="Interactive 3D preview. Drag to orbit, scroll to zoom."
           className={styles.canvas}
           ref={canvasRef}
-          tabIndex={0}
+          tabIndex={ready ? 0 : -1}
         />
         <div className={styles.selectionTools} aria-label="Selection mode" role="group">
           <ToolButton disabled={!ready} onClick={() => undefined} pressed={ready}>

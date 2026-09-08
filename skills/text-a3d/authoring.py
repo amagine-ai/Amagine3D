@@ -17,6 +17,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from capability_registry import capability_for_connection, connection_kinds
 from intent_contract import (
     COORDINATE_SYSTEM,
     INTENT_SCHEMA,
@@ -27,6 +28,7 @@ from intent_contract import (
 from scene_contract import (
     ROLE_OPERATIONS,
     SCENE_SCHEMA,
+    interface_alignment_issues,
     validate as validate_scene,
 )
 
@@ -37,10 +39,44 @@ SCENE_COORDINATE_SYSTEM = {"handedness": "right", "up": "Z"}
 class AuthoringError(ValueError):
     """Raised before an invalid or semantically ambiguous document is written."""
 
-    def __init__(self, stage: str, errors: Sequence[str]):
+    def __init__(
+        self, stage: str, errors: Sequence[str], *,
+        issues: Sequence[Mapping[str, Any]] = (),
+    ):
         self.stage = stage
         self.errors = tuple(str(error) for error in errors)
+        self.issues = tuple(deepcopy(dict(issue)) for issue in issues)
         super().__init__(f"{stage} authoring failed: " + "; ".join(self.errors))
+        diagnostic_path = os.environ.get("AMAGINE3D_SOURCE_DIAGNOSTICS_PATH")
+        run_id = os.environ.get("AMAGINE3D_COMPILE_RUN_ID")
+        if os.environ.get("AMAGINE3D_SOURCE_PHASE") == "compile" and diagnostic_path and run_id:
+            self._persist_diagnostics()
+
+    def _persist_diagnostics(self) -> None:
+        """Preserve complete diagnostics across the compiler subprocess boundary."""
+        records = self.issues or tuple({
+            "code": "AUTHORING.INVALID", "path": self.stage, "message": message,
+        } for message in self.errors)
+        issues = [{"check": "authoring", "severity": "error", **item,
+                   **({"observed": item["actual"]} if "actual" in item else {})}
+                  for item in records]
+
+        def json_value(value: Any) -> Any:
+            if isinstance(value, float) and not math.isfinite(value):
+                return repr(value)
+            if isinstance(value, Mapping):
+                return {str(key): json_value(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [json_value(item) for item in value]
+            return value
+
+        from cad_diagnostics import write_source_diagnostics
+
+        try:
+            write_source_diagnostics({"pass": False, "issues": json_value(issues)})
+        except (OSError, TypeError, ValueError) as error:
+            # Preserve the original authoring failure if the diagnostic sink is unavailable.
+            self.diagnostics_write_error = str(error)
 
 
 def _records(value: Sequence[Mapping[str, Any]], path: str) -> list[dict[str, Any]]:
@@ -288,6 +324,7 @@ def write_intent(
     reference_files: Sequence[Mapping[str, Any]] = (),
     color_regions: Sequence[Mapping[str, Any]] | None = None,
     palette_reduction: Mapping[str, Any] | None = None,
+    revision: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write one validated canonical intent from explicit semantic decisions.
 
@@ -371,6 +408,9 @@ def write_intent(
             else "separate_parts"
         )
 
+    if revision is not None:
+        document["revision"] = deepcopy(dict(revision))
+
     errors = validate_intent(document, destination.parent)
     if errors:
         raise AuthoringError("intent", errors)
@@ -386,6 +426,7 @@ def paired_interface(
     male_dimensions_mm: Mapping[str, float],
     female_feature: str,
     clearances_mm: Mapping[str, float],
+    female_dimensions_mm: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Declare a paired scene interface without duplicating owners or dimensions.
 
@@ -411,6 +452,8 @@ def paired_interface(
             "clearancesMm": deepcopy(dict(clearances_mm)),
         },
     }
+    if female_dimensions_mm is not None:
+        interface["female"]["dimensionsMm"] = deepcopy(dict(female_dimensions_mm))
     _paired_dimensions(interface, "paired_interface")
     return interface
 
@@ -428,7 +471,16 @@ def _paired_dimensions(
         )
     male_dimensions = male.get("dimensionsMm")
     clearances = female.get("clearancesMm")
-    if "dimensionsMm" in female:
+    capability = capability_for_connection(str(interface.get("kind")))
+    if capability is None:
+        allowed = sorted(connection_kinds() - {"self-tapping-screw"})
+        message = f"{context}.kind must be one of {allowed}; observed {interface.get('kind')!r}"
+        raise AuthoringError("scene interface", [message], issues=[{
+            "code": "INTERFACE.KIND_INVALID", "path": f"{context}.kind",
+            "actual": interface.get("kind"), "expected": allowed, "message": message,
+        }])
+    requires_clearance = "clearance" in capability.get("geometryChecks", ())
+    if requires_clearance and "dimensionsMm" in female:
         raise AuthoringError(
             "scene interface",
             [
@@ -436,16 +488,26 @@ def _paired_dimensions(
                 "are derived only from male dimensions and clearances"
             ],
         )
+    issues: list[dict[str, Any]] = []
+
+    def invalid(path: str, actual: Any, expected: Any, message: str) -> None:
+        issues.append({"code": "INTERFACE.DIMENSION_INVALID", "path": path,
+                       "actual": actual, "expected": expected, "message": message})
+
     if not isinstance(male_dimensions, Mapping) or not male_dimensions:
-        raise AuthoringError(
-            "scene interface",
-            [f"{context}.male.dimensionsMm must be non-empty"],
-        )
+        invalid(f"{context}.male.dimensionsMm", male_dimensions, "non-empty object",
+                f"{context}.male.dimensionsMm must be non-empty")
+        male_dimensions = {}
     if not isinstance(clearances, Mapping):
-        raise AuthoringError(
-            "scene interface",
-            [f"{context}.female.clearancesMm must be an object"],
-        )
+        invalid(f"{context}.female.clearancesMm", clearances, "object",
+                f"{context}.female.clearancesMm must be an object")
+        clearances = {}
+    if requires_clearance and not clearances:
+        invalid(f"{context}.female.clearancesMm", clearances, "non-empty named dimension deltas",
+                f"{context}.female.clearancesMm must be non-empty for this interface capability")
+    if not requires_clearance and clearances:
+        invalid(f"{context}.female.clearancesMm", clearances, {},
+                f"{context}.female.clearancesMm must be empty for surface contact")
 
     canonical_male: dict[str, float] = {}
     female_dimensions: dict[str, float] = {}
@@ -459,37 +521,45 @@ def _paired_dimensions(
             or not math.isfinite(float(male_value))
             or float(male_value) <= 0
         ):
-            raise AuthoringError(
-                "scene interface",
-                [f"{context}.male dimension {field!r} must be finite and positive"],
-            )
+            invalid(f"{context}.male.dimensionsMm.{field}", male_value, "finite positive number",
+                    f"{context}.male dimension {field!r} must be finite and positive")
+            continue
         canonical_male[field] = float(male_value)
     for field, clearance in clearances.items():
         if field not in canonical_male:
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"{context} cannot derive female {field!r} because the male "
-                    "dimension is missing"
-                ],
-            )
+            invalid(f"{context}.female.clearancesMm.{field}", clearance, sorted(canonical_male),
+                    f"{context} cannot derive female {field!r} because the male dimension is missing")
+            continue
         if (
             not isinstance(clearance, (int, float))
             or isinstance(clearance, bool)
             or not math.isfinite(float(clearance))
             or float(clearance) < 0
         ):
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"{context} clearance {field!r} must be finite and non-negative"
-                ],
-            )
+            invalid(f"{context}.female.clearancesMm.{field}", clearance, "finite non-negative number",
+                    f"{context} clearance {field!r} must be finite and non-negative")
+            continue
         female_dimensions[field] = canonical_male[field] + float(clearance)
         provenance[field] = {
             "from": f"male.{field}",
             "offsetMm": float(clearance),
         }
+    if not requires_clearance:
+        # Shared profiles are a geometry-driving convenience, never a clearance proof.
+        contact_dimensions = female.get("dimensionsMm", canonical_male)
+        if not isinstance(contact_dimensions, Mapping) or not contact_dimensions:
+            invalid(f"{context}.female.dimensionsMm", contact_dimensions, "non-empty object",
+                    f"{context}.female.dimensionsMm must be non-empty for surface contact")
+        else:
+            for field, value in contact_dimensions.items():
+                if not isinstance(field, str) or not field or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)) or value <= 0:
+                    invalid(f"{context}.female.dimensionsMm.{field}", value, "finite positive number",
+                            f"{context}.female dimension {field!r} must be finite and positive")
+                else:
+                    female_dimensions[field] = float(value)
+        provenance = {}
+    if issues:
+        raise AuthoringError("scene interface", [item["message"] for item in issues], issues=issues)
     return canonical_male, female_dimensions, provenance
 
 
@@ -506,58 +576,55 @@ def _expand_paired_interfaces(
 ) -> list[dict[str, Any]]:
     interfaces = _records(raw_interfaces, "paired_interfaces")
     expanded: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     for index, interface in enumerate(interfaces):
-        interface_id = interface.get("id")
-        kind = interface.get("kind")
-        if kind == "self-tapping-screw":
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"paired_interfaces[{index}] cannot abbreviate "
-                    "self-tapping-screw semantics"
-                ],
-            )
-        canonical: dict[str, Any] = {"id": interface_id, "kind": kind}
+        context = f"paired_interfaces[{index}]"
+        canonical: dict[str, Any] = {"id": interface.get("id"), "kind": interface.get("kind")}
+        endpoint_issues = []
         for endpoint_name in ("male", "female"):
-            endpoint = interface.get(endpoint_name)
-            if not isinstance(endpoint, Mapping):
-                raise AuthoringError(
-                    "scene interface",
-                    [f"paired_interfaces[{index}].{endpoint_name} is required"],
-                )
-            endpoint = deepcopy(dict(endpoint))
+            raw_endpoint = interface.get(endpoint_name)
+            endpoint = deepcopy(dict(raw_endpoint)) if isinstance(raw_endpoint, Mapping) else {}
             feature_id = endpoint.get("featureId")
             owner = owners.get(feature_id) if isinstance(feature_id, str) else None
             if owner is None:
-                raise AuthoringError(
-                    "scene interface",
-                    [
-                        f"paired_interfaces[{index}].{endpoint_name}.featureId "
-                        "must resolve to immutable intent ownership"
-                    ],
-                )
-            declared_owner = endpoint.pop("partId", owner)
+                path = f"{context}.{endpoint_name}.featureId"
+                endpoint_issues.append({
+                    "code": "INTERFACE.ENDPOINT_FEATURE_REQUIRED", "path": path,
+                    "actual": feature_id, "expected": sorted(owners),
+                    "message": f"{path} must resolve to immutable intent ownership; observed {feature_id!r}; allowed features: {sorted(owners)}",
+                })
+                continue
+            declared_owner = endpoint.get("partId", owner)
             if declared_owner != owner:
-                raise AuthoringError(
-                    "scene interface",
-                    [
-                        f"paired_interfaces[{index}].{endpoint_name}.partId "
-                        "conflicts with immutable intent ownership"
-                    ],
-                )
+                path = f"{context}.{endpoint_name}.partId"
+                endpoint_issues.append({
+                    "code": "INTERFACE.ENDPOINT_OWNER_MISMATCH", "path": path,
+                    "actual": declared_owner, "expected": owner,
+                    "message": f"{path} conflicts with immutable intent ownership: expected {owner!r}, observed {declared_owner!r}",
+                })
             endpoint["partId"] = owner
             canonical[endpoint_name] = endpoint
-
-        female = canonical["female"]
-        male_dimensions, female_dimensions, derived = _paired_dimensions(
-            canonical,
-            f"paired_interfaces[{index}]",
-        )
+        if endpoint_issues:
+            issues.extend(endpoint_issues)
+            continue
+        try:
+            if canonical["kind"] == "self-tapping-screw":
+                raise AuthoringError("scene interface", [f"{context} cannot abbreviate self-tapping-screw semantics"])
+            male_dimensions, female_dimensions, derived = _paired_dimensions(canonical, context)
+        except AuthoringError as error:
+            issues.extend(error.issues or ({
+                "code": "INTERFACE.DECLARATION_INVALID", "path": context,
+                "message": message,
+            } for message in error.errors))
+            continue
         canonical["male"]["dimensionsMm"] = male_dimensions
+        female = canonical["female"]
         female.pop("clearancesMm")
         female["dimensionsMm"] = female_dimensions
         female["derivedDimensionsMm"] = derived
         expanded.append(canonical)
+    if issues:
+        raise AuthoringError("scene interface", [item["message"] for item in issues], issues=issues)
     return expanded
 
 
@@ -565,146 +632,12 @@ def _validate_interface_alignment(
     intent: Mapping[str, Any],
     interfaces: Sequence[Mapping[str, Any]],
 ) -> None:
-    """Bind every scene interface to the immutable multipart declaration."""
-
-    manufacturing = intent.get("manufacturing")
-    if not isinstance(manufacturing, Mapping):
-        raise AuthoringError("scene interface", ["intent manufacturing is invalid"])
-    if manufacturing.get("mode") != "multipart":
-        if interfaces:
-            raise AuthoringError(
-                "scene interface",
-                ["single-part intent cannot declare scene interfaces"],
-            )
-        return
-
-    raw_intent_interfaces = manufacturing.get("interfaces")
-    if not isinstance(raw_intent_interfaces, Sequence) or isinstance(
-        raw_intent_interfaces, (str, bytes)
-    ):
-        raw_intent_interfaces = []
-    intent_interfaces = {
-        item.get("id"): item
-        for item in raw_intent_interfaces
-        if isinstance(item, Mapping)
-        and isinstance(item.get("id"), str)
-    }
-    expected_interface_ids = set(intent_interfaces)
-    for target in intent_interfaces.values():
-        if target.get("connection") != "self-tapping-screw":
-            continue
-        fastening = target.get("fastening")
-        locator_pairs = (
-            fastening.get("locator_pairs")
-            if isinstance(fastening, Mapping)
-            else ()
-        )
-        for locator in locator_pairs if isinstance(locator_pairs, Sequence) else ():
-            if isinstance(locator, Mapping) and isinstance(locator.get("id"), str):
-                expected_interface_ids.add(locator["id"])
-    scene_interfaces = {
-        item.get("id"): item
-        for item in interfaces
-        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
-    }
-    if set(scene_interfaces) != expected_interface_ids:
+    """Keep all independent field diagnostics in one authoring failure."""
+    issues = interface_alignment_issues(dict(intent), list(interfaces))
+    if issues:
         raise AuthoringError(
-            "scene interface",
-            [
-                "scene interface ids must exactly match immutable intent: "
-                f"expected {sorted(expected_interface_ids)}, observed {sorted(scene_interfaces)}"
-            ],
+            "scene interface", [issue["message"] for issue in issues], issues=issues
         )
-
-    for interface_id, target in intent_interfaces.items():
-        scene_interface = scene_interfaces[interface_id]
-        expected_kind = target.get("connection")
-        if scene_interface.get("kind") != expected_kind:
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"interface {interface_id!r}.kind must match immutable "
-                    f"connection {expected_kind!r}"
-                ],
-            )
-        if expected_kind == "self-tapping-screw":
-            continue
-
-        endpoints = [
-            scene_interface.get(name)
-            for name in ("male", "female")
-        ]
-        observed_features = {
-            endpoint.get("featureId")
-            for endpoint in endpoints
-            if isinstance(endpoint, Mapping)
-            and isinstance(endpoint.get("featureId"), str)
-        }
-        expected_features = {
-            item
-            for item in target.get("features", [])
-            if isinstance(item, str)
-        }
-        if observed_features != expected_features:
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"interface {interface_id!r} endpoints must exactly match "
-                    f"immutable features {sorted(expected_features)}"
-                ],
-            )
-        observed_parts = {
-            endpoint.get("partId")
-            for endpoint in endpoints
-            if isinstance(endpoint, Mapping)
-            and isinstance(endpoint.get("partId"), str)
-        }
-        expected_parts = {
-            item for item in target.get("between", []) if isinstance(item, str)
-        }
-        if observed_parts != expected_parts:
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"interface {interface_id!r} endpoint owners must exactly match "
-                    f"immutable parts {sorted(expected_parts)}"
-                ],
-            )
-        female = scene_interface.get("female")
-        derived = (
-            female.get("derivedDimensionsMm")
-            if isinstance(female, Mapping)
-            else None
-        )
-        raw_clearances = target.get("clearances_mm")
-        clearances = raw_clearances if isinstance(raw_clearances, Mapping) else {}
-        if derived is None:
-            derived = {}
-        if not isinstance(derived, Mapping) or set(derived) != set(clearances):
-            raise AuthoringError(
-                "scene interface",
-                [
-                    f"interface {interface_id!r} derived dimension fields must "
-                    "exactly match immutable clearances_mm"
-                ],
-            )
-        for field, clearance in clearances.items():
-            rule = derived.get(field)
-            offset = rule.get("offsetMm") if isinstance(rule, Mapping) else None
-            if (
-                not isinstance(offset, (int, float))
-                or isinstance(offset, bool)
-                or not isinstance(clearance, (int, float))
-                or isinstance(clearance, bool)
-                or float(offset) != float(clearance)
-            ):
-                raise AuthoringError(
-                    "scene interface",
-                    [
-                        f"interface {interface_id!r} clearance {field!r} must "
-                        "exactly match immutable clearances_mm"
-                    ],
-                )
 
 
 def _intent_materials(intent: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -785,7 +718,7 @@ def _expand_scene_parts(
                 "scene",
                 [
                     f"parts[{part_id!r}].representationMaster must be chosen "
-                    "explicitly as brep or mesh"
+                    "explicitly as brep"
                 ],
             )
 
@@ -847,7 +780,7 @@ def _expand_scene_parts(
             if operation is None:
                 raise AuthoringError(
                     "scene",
-                    [f"node {node.get('id')!r} must choose a supported role"],
+                    [f"node {node.get('id')!r} must choose a supported role from {sorted(ROLE_OPERATIONS)}; observed {role!r}"],
                 )
             declared_operation = node.get("operation", operation)
             if declared_operation != operation:
@@ -872,14 +805,15 @@ def write_scene(
     paired_interfaces: Sequence[Mapping[str, Any]] = (),
     interfaces: Sequence[Mapping[str, Any]] = (),
     materials: Sequence[Mapping[str, Any]] = (),
+    installation_checks: Sequence[Mapping[str, Any]] = (),
     revision: str | None = None,
 ) -> dict[str, Any]:
     """Write one validated canonical semantic scene directly.
 
     Part nesting supplies node ownership; node role supplies operation.  Paired
     interfaces derive endpoint ownership and female dimensions from explicit
-    named clearances.  Representation masters, recipes, fit clearances, source meshes, and
-    optional raw interface structures remain caller decisions.
+    named clearances. Parts use BRep masters; recipes, fit clearances, display
+    sources, and optional raw interface structures remain caller decisions.
     """
 
     destination = Path(path).resolve()
@@ -895,9 +829,24 @@ def write_scene(
         raise AuthoringError("scene intent", intent_errors)
 
     owners = feature_owner_map(intent)
+    declared_interfaces = _records(paired_interfaces, "paired_interfaces")
+    raw_interfaces = _records(interfaces, "interfaces")
+    for interface in declared_interfaces:
+        for endpoint_name in ("male", "female"):
+            endpoint = interface.get(endpoint_name)
+            if isinstance(endpoint, dict):
+                feature_id = endpoint.get("featureId")
+                if isinstance(feature_id, str) and feature_id in owners:
+                    endpoint.setdefault("partId", owners[feature_id])
+    declaration_issues = interface_alignment_issues(
+        intent, declared_interfaces + raw_interfaces, check_dimensions=False
+    )
+    if declaration_issues:
+        raise AuthoringError("scene interface", [item["message"] for item in declaration_issues],
+                             issues=declaration_issues)
     canonical_parts, nodes = _expand_scene_parts(parts, intent)
-    canonical_interfaces = _expand_paired_interfaces(paired_interfaces, owners)
-    canonical_interfaces.extend(_records(interfaces, "interfaces"))
+    canonical_interfaces = _expand_paired_interfaces(declared_interfaces, owners)
+    canonical_interfaces.extend(raw_interfaces)
     _validate_interface_alignment(intent, canonical_interfaces)
     intent_ref = {
         "path": _stored_path(immutable_path, destination.parent),
@@ -913,6 +862,8 @@ def write_scene(
         "nodes": nodes,
         "interfaces": canonical_interfaces,
     }
+    if installation_checks:
+        body["installationChecks"] = _records(installation_checks, "installation_checks")
     if revision is None:
         revision_payload = json.dumps(
             body, ensure_ascii=False, sort_keys=True, separators=(",", ":")

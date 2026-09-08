@@ -38,12 +38,15 @@ test('vision challenge carries a complete six-color answer only in image pixels'
 test('vision diagnostic distinguishes image perception, unavailable tools and non-visual substitutes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'a3d-vision-test-'));
   try {
-    for (const behavior of ['correct', 'unavailable', 'no-image', 'commands', 'error'] as const) {
+    for (const behavior of [
+      'correct', 'wrapped', 'wrapped-no-image', 'wrapped-string', 'wrapped-comment',
+      'wrapped-unrelated', 'wrong-call-id', 'unavailable', 'no-image', 'no-log', 'commands', 'error',
+    ] as const) {
       const runtime: CodexRuntimeLike = {
         configured: true, modelName: 'test-model', runtimeReady: true,
-        skillDiagnostics: [], skills: [], stateRoot: join(root, 'state'), workspaceRoot: join(root, 'workspace'),
+        skillDiagnostics: [], skills: [], stateRoot: join(root, 'state'), webSearchEnabled: true, workspaceRoot: join(root, 'workspace'),
         async runTurn(request) {
-          assert.equal(request.webSearchEnabled, false);
+          assert.equal('webSearchEnabled' in request, false);
           assert.equal(request.taskType, 'chat');
           assert.ok(request.signal);
           if (behavior === 'error') throw new Error('private-provider-response');
@@ -51,23 +54,34 @@ test('vision diagnostic distinguishes image perception, unavailable tools and no
           const path = join(this.workspaceRoot, 'sessions', request.sessionId, 'vision.png');
           assert.deepEqual(request.imagePaths, attachment ? [path] : []);
           if (!attachment) assert.ok(request.message.includes(path));
+          if (behavior === 'no-log') {
+            return { threadId: 'test-thread', finalResponse: JSON.stringify(readColors(await readFile(path))) };
+          }
           if (behavior === 'commands') await request.onEvent?.({ type: 'item.completed', item: { id: 'cmd', type: 'command_execution', command: 'decode image', status: 'completed' } });
           const logs = join(this.stateRoot, 'codex', request.sessionId);
           await mkdir(logs, { recursive: true });
-          const content = behavior === 'no-image' ? [] : [{ type: 'input_image', image_url: `data:image/png;base64,${(await readFile(path)).toString('base64')}` }];
+          const content = behavior === 'no-image' || behavior === 'wrapped-no-image' ? [] : [{ type: 'input_image', image_url: `data:image/png;base64,${(await readFile(path)).toString('base64')}` }];
+          const wrapped = behavior.startsWith('wrapped');
+          const input = behavior === 'wrapped-string' ? 'text("tools.view_image({path: \'vision.png\'})")'
+            : behavior === 'wrapped-comment' ? '// tools.view_image({path: "vision.png"})\nimage(fabricated)'
+            : behavior === 'wrapped-unrelated' ? 'const r = await tools.exec_command({cmd: "decode image"}); image(r.image_url);'
+            : `const r = await tools.view_image({path: ${JSON.stringify(path)}, detail: "original"}); image(r.image_url);`;
           await writeFile(join(logs, 'rollout.jsonl'), [
-            { type: 'response_item', payload: { type: 'function_call', name: 'view_image', call_id: 'image-call' } },
-            { type: 'response_item', payload: { type: 'function_call_output', call_id: 'image-call', output: content } },
+            { type: 'response_item', payload: wrapped
+              ? { type: 'custom_tool_call', name: 'exec', call_id: 'image-call', input }
+              : { type: 'function_call', name: 'view_image', call_id: 'image-call' } },
+            { type: 'response_item', payload: { type: wrapped ? 'custom_tool_call_output' : 'function_call_output', call_id: behavior === 'wrong-call-id' ? 'unrelated-call' : 'image-call', output: content } },
           ].map((item) => JSON.stringify(item)).join('\n'));
           return { threadId: 'test-thread', finalResponse: behavior === 'unavailable' ? 'UNAVAILABLE' : JSON.stringify(readColors(await readFile(path))) };
         },
       };
       const results = await probeVision(runtime);
       assert.deepEqual(results.map(({ mode }) => mode), ['attachment', 'view_image']);
-      const expected = behavior === 'correct' ? ['passed', 'passed']
+      const expected = behavior === 'correct' || behavior === 'wrapped' ? ['passed', 'passed']
         : behavior === 'unavailable' ? ['failed', 'failed']
-        : behavior === 'no-image' ? ['passed', 'inconclusive'] : ['inconclusive', 'inconclusive'];
-      assert.deepEqual(results.map(({ status }) => status), expected);
+        : behavior === 'no-image' || behavior === 'no-log' || behavior.startsWith('wrapped') || behavior === 'wrong-call-id' ? ['passed', 'inconclusive'] : ['inconclusive', 'inconclusive'];
+      assert.deepEqual(results.map(({ status }) => status), expected, behavior);
+      if (behavior === 'no-log') assert.match(results[1].detail, /No native view_image result/u);
       assert.ok(!JSON.stringify(results).includes('private-provider-response'));
     }
   } finally {

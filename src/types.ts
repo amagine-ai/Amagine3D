@@ -183,7 +183,10 @@ export interface HealthResponse {
   runtimeError?: string;
   runtimeReady: boolean;
   skills: SkillSummary[];
+  /** Native search can be enabled; this does not verify provider tool support. */
   webSearchConfigured: boolean;
+  webSearchEnabled: boolean;
+  webSearchVerification: 'untested';
   workspace: string;
 }
 

@@ -12,7 +12,7 @@ import {
 } from '@trpc/client';
 
 import { createApp } from '../server/app.ts';
-import type { AppRouter } from '../server/trpc/router.ts';
+import { appRouter, type AppRouter } from '../server/trpc/router.ts';
 import { API_VERSION, BUNDLED_POMODORO_SESSION_ID } from '../src/types.ts';
 
 test('serves the JSON contract through tRPC and removes the old REST API', async () => {
@@ -53,6 +53,9 @@ test('serves the JSON contract through tRPC and removes the old REST API', async
     const health = await client.health.query();
     assert.equal(health.apiVersion, API_VERSION);
     assert.equal(health.runtimeReady, false);
+    assert.equal(health.webSearchConfigured, false);
+    assert.equal(health.webSearchEnabled, false);
+    assert.equal(health.webSearchVerification, 'untested');
 
     const catalog = await client.sessions.catalog.query();
     assert.equal(catalog.initialSessionId, BUNDLED_POMODORO_SESSION_ID);
@@ -85,5 +88,29 @@ test('serves the JSON contract through tRPC and removes the old REST API', async
       });
     });
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('health reports search configuration without claiming provider verification', async () => {
+  for (const configured of [false, true]) {
+    for (const webSearchEnabled of [false, true]) {
+      const caller = appRouter.createCaller({
+        paths: {
+          bundledPomodoroRoot: '/unused', distPath: '/unused', projectRoot: '/unused',
+          sessionRoot: '/unused', workspaceRoot: '/unused',
+        },
+        python: { executable: null, ready: false, version: null },
+        runtimeError: undefined,
+        runtime: {
+          configured, modelName: 'test-model', runtimeReady: true, skills: [],
+          skillDiagnostics: [], stateRoot: '/unused', workspaceRoot: '/unused', webSearchEnabled,
+          async runTurn() { throw new Error('Health must not invoke the provider.'); },
+        },
+      });
+      const health = await caller.health();
+      assert.equal(health.webSearchConfigured, configured);
+      assert.equal(health.webSearchEnabled, webSearchEnabled);
+      assert.equal(health.webSearchVerification, 'untested');
+    }
   }
 });

@@ -13,6 +13,25 @@ loop.
   than the union of both tool envelopes.
 - Never switch profiles, lower limits, or scale user dimensions to clear QA.
 
+Before detailed construction, plan the proposed **per-part bounds in a selected
+print orientation** against that profile, including exclusions, clearance
+between parts, edge margin and allowed plate count. Keep three measurements
+distinct: assembled semantic envelope, each printable part, and arranged plate.
+Use `a3d layout BOUNDS.json --profile PROFILE.json --max-plates N
+--edge-margin-mm N --out PLAN.json`; the bounds file maps part IDs to
+`{"min":[x,y,z],"max":[x,y,z]}`. Plan estimates early and recheck measured geometry
+at export. A successful footprint plan is not a manufacturing audit.
+
+The planner tries translations and 90-degree turns about the build axis, then
+proposes separate plates up to the stated limit. It distinguishes a single
+part exceeding the usable volume from a heuristic that has not found a layout.
+The latter is not proof of impossibility. The current `export_assembly` complete
+manufacturing package still requires one plate; a multi-plate plan alone does
+not constitute exported, audited multi-plate 3MF delivery. A failed export keeps
+hash-bound semantic STEP/GLB and a diagnostic preview where generation succeeds,
+without declaring manufacture complete. Use that evidence to improve packing
+or plan the required export work, keeping the selected printer and target form.
+
 ## Design targets
 
 The profile exposes two different width limits:
@@ -38,31 +57,27 @@ required `NAME-assemble.step` preserve physical mating positions, while
 `NAME-display.glb` preserves the display model instead of acting as
 printability evidence.
 
-## Constructive organic shells
+## BRep enclosure shells
 
-Decide the print direction and cavity topology before extracting the mesh.
-Use `organic_shell.build_organic_shell(...)` so these are inputs to the solid,
-not repairs applied after tessellation.
+Choose print direction and cavity topology while developing the BRep solid.
+Use a few key loft sections for the outer form and a separately controlled inner
+loft or valid BRep offset for the cavity.
 
-- Prefer `open-cavity` for housings: make the service opening intersect the
-  inner offset and the exterior so supports, powder, and loose debris can be
-  removed. A separately printed cover can remain a BRep master; precise bosses,
-  seats, and cutters fused into the shell are bound BRep features of the final
-  mesh-master body.
-- For a deliberately sealed void printed in +Z, use
-  `self_supporting_cavity(...)`. Its arbitrary 2D footprint shrinks on every
-  layer to a roof of at least 45 degrees from horizontal; it rejects a closure
-  inset that would leave a flat suspended ceiling.
-- Set level-set edge length to no more than half the planned wall thickness.
-  Increase local radii or revise the field when the inner offset collapses;
-  never fill holes or smooth over the failure.
+- Make a housing's service opening connect the cavity to the exterior so
+  supports and loose debris can be removed. Keep a separately printed cover as
+  its own BRep part.
+- Inspect measured wall thickness at shoulders, corners and the floor. An inset
+  within each section is not constant 3D normal thickness. If the inner form
+  collapses or leaves thin walls, adjust its profiles, radii or section spacing.
+- For a deliberately sealed void, shape its roof with slopes or arches suited
+  to the selected support angle and print orientation. A valid solid alone does
+  not prove its internal ceiling is printable without supports.
 - Choose a broad, intentional bed-contact region or a permitted assembly split.
   Do not flatten identity-bearing outer geometry merely to obtain first-layer
   contact.
 - Construct sockets, locating faces, bosses, covers, and other
-  tolerance-bearing features as BRep geometry. Bind them into a mesh-master body
-  when they belong to that printed part; retain a separate BRep master only for
-  a separate printed part. Do not smooth their derived interfaces.
+  tolerance-bearing features as BRep geometry. Use checked unions and cuts on
+  the owning solid, then verify its exported STEP and derived print mesh.
 
 ## Support-free construction
 
@@ -75,9 +90,10 @@ with `a3d guide strategy`.
 - Evaluate all six bed-facing orientations, including a top-down 180-degree
   flip. Profile fit is a hard gate; among fitting poses, support burden and
   stable contact outrank minimizing print height. Candidate evidence records
-  the uniform scale required to fit the selected profile; use it only when
-  dimensions are inferred and update the intent, semantic model, and parameters
-  together before rebuilding.
+  the uniform scale required to fit the selected profile as diagnostic evidence;
+  it does not authorize resizing. An inferred dimension remains fixed unless an
+  explicit allowed range was declared. Adjust within that range or make a
+  justified requirement revision; do not rewrite the target to match failure.
 - Add slopes, chamfers, or arches only when they are faithful to the requested
   object or explicitly accepted as a manufacturing compromise.
 - Use chamfers or arches under ledges and teardrop profiles for horizontal
@@ -95,8 +111,10 @@ exist to catch coarse process risks. They should drive source repair only when
 the observed issue is broad or severe enough that the print process is likely
 to fail.
 
-- `printability_bed_fit`: try the reported XY rotation or a permitted build
-  orientation; otherwise request a larger supported Bambu machine.
+- `printability_bed_fit`: try the reported XY rotation, a permitted build
+  orientation or plate grouping on the selected machine. A genuine single-part
+  size conflict requires a justified design/requirement decision, not an
+  automatic printer change.
 - `printability_feature_resolution`: widen the named source feature to at
   least `single_line_floor_mm` when the feature is critical or intentionally
   manufactured; disclose tiny cosmetic detail risk instead of redesigning the

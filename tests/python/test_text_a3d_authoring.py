@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import trimesh
+from build123d import Box, Pos
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -82,7 +82,7 @@ class AuthoringTests(unittest.TestCase):
         self.assertNotIn("clearancesMm", expanded["female"])
 
     def test_paired_interface_has_no_duplicate_female_dimension_path(self):
-        with self.assertRaisesRegex(TypeError, "female_dimensions_mm"):
+        with self.assertRaisesRegex(authoring.AuthoringError, "female dimensions are derived only"):
             authoring.paired_interface(
                 id="pin-fit",
                 kind="pin-socket",
@@ -110,6 +110,139 @@ class AuthoringTests(unittest.TestCase):
                 [raw],
                 {"pin/stem": "pin", "guide/bore": "guide"},
             )
+
+    def test_missing_endpoints_and_kind_are_reported_together_with_exact_fields(self):
+        intent = {
+            "manufacturing": {"mode": "multipart", "interfaces": [{
+                "id": "mount", "connection": "pin-socket",
+                "features": ["stem", "bore"], "between": ["cap", "base"],
+                "clearances_mm": {"diameter": 0.2},
+            }]},
+            "features": [{"id": "stem", "part": "cap"}, {"id": "bore", "part": "base"}],
+        }
+        with self.assertRaises(authoring.AuthoringError) as failure:
+            authoring._validate_interface_alignment(intent, [{
+                "id": "mount", "kind": "glue-face", "features": ["bore", "stem"],
+            }])
+        issues = failure.exception.issues
+        by_path = {issue["path"]: issue for issue in issues}
+        for field in ("male", "female"):
+            issue = by_path[f"interfaces[mount].{field}.featureId"]
+            self.assertIsNone(issue["actual"])
+            self.assertEqual(issue["expected"], ["bore", "stem"])
+            self.assertIn("order is irrelevant", issue["message"])
+        self.assertIn("interfaces[mount].kind", by_path)
+        self.assertGreaterEqual(len(failure.exception.errors), 3)
+
+    def test_dimension_errors_are_batched_and_invalid_kind_lists_allowed_values(self):
+        with self.assertRaises(authoring.AuthoringError) as failure:
+            authoring.paired_interface(
+                id="mount", kind="pin-socket", male_feature="stem", female_feature="bore",
+                male_dimensions_mm={"diameter": -1, "length": float("nan")},
+                clearances_mm={"diameter": 0.2},
+            )
+        self.assertTrue(any("male.dimensionsMm.diameter" in i["path"] for i in failure.exception.issues))
+        self.assertTrue(any("male.dimensionsMm.length" in i["path"] for i in failure.exception.issues))
+        with self.assertRaises(authoring.AuthoringError) as failure:
+            authoring.paired_interface(
+                id="mount", kind="unknown", male_feature="stem", female_feature="bore",
+                male_dimensions_mm={"diameter": 3}, clearances_mm={"diameter": 0.2},
+            )
+        self.assertIn("glue-face", failure.exception.issues[0]["expected"])
+
+    def test_compile_diagnostics_preserve_all_fields_in_run_bound_sidecar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sidecar = Path(directory) / "source-errors.json"
+            environment = {
+                "AMAGINE3D_SOURCE_PHASE": "compile",
+                "AMAGINE3D_SOURCE_DIAGNOSTICS_PATH": str(sidecar),
+                "AMAGINE3D_COMPILE_RUN_ID": "test-run",
+            }
+            with patch.dict("os.environ", environment, clear=False):
+                with self.assertRaises(authoring.AuthoringError):
+                    authoring.paired_interface(
+                        id="mount", kind="pin-socket", male_feature="stem", female_feature="bore",
+                        male_dimensions_mm={"diameter": -1, "length": float("nan")},
+                        clearances_mm={"diameter": 0.2},
+                    )
+            diagnostics = json.loads(sidecar.read_text())
+            self.assertEqual(diagnostics["runId"], "test-run")
+            self.assertFalse(diagnostics["pass"])
+            self.assertGreaterEqual(len(diagnostics["issues"]), 2)
+            self.assertTrue(all("observed" in issue and "expected" in issue for issue in diagnostics["issues"]))
+            self.assertNotIn("NaN", sidecar.read_text())
+
+    def test_surface_contact_writes_a_valid_scene_without_insertion_depth(self):
+        import interface_geometry
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parts = {
+                name: {"role": name, "acceptance": "one contact member", "features": [{
+                    "id": f"{name}-face", "kind": "interface",
+                    "evidence": "bonded mating surface", "acceptance": "the members touch",
+                }]}
+                for name in ("base", "cap")
+            }
+            path = root / "bond_intent.json"
+            intent = authoring.write_intent(
+                path, part="bond", manufacturing_mode="multipart", parts=parts,
+                critical_features=["base-face", "cap-face"],
+                interfaces=[{"id": "bond", "connection": "glue-face", "assembly_axis": "+Z",
+                             "features": ["cap-face", "base-face"], "acceptance": "bonded surface contact"}],
+                **_intent_kwargs(),
+            )
+            compact = authoring.paired_interface(
+                id="bond", kind="glue-face", male_feature="cap-face",
+                male_dimensions_mm={"width": 8, "depth": 6},
+                female_feature="base-face", female_dimensions_mm={"width": 10, "depth": 8},
+                clearances_mm={},
+            )
+            dims = authoring.paired_dimensions(compact)
+            self.assertEqual(dims["female"], {"width": 10, "depth": 8})
+            scene = authoring.write_scene(
+                root / "bond_scene.json", intent_path=path,
+                parts={name: {"representationMaster": "brep", "nodes": [{
+                    "id": f"{name}-node", "featureId": f"{name}-face", "role": "solid",
+                    "recipe": {"kind": "roundedBox", "parameters": {"sizeMm": [10, 8, 2] if name == "base" else [8, 6, 2]}},
+                }]} for name in parts},
+                paired_interfaces=[compact],
+            )
+            self.assertEqual(scene_contract.validate(scene, root), [])
+            self.assertEqual(scene["interfaces"][0]["female"]["derivedDimensionsMm"], {})
+            meshes = {
+                "base": geometry_binding.shape_to_mesh(Box(10, 8, 2), "base"),
+                "cap": geometry_binding.shape_to_mesh(Pos(0, 0, 2) * Box(8, 6, 2), "cap"),
+            }
+            audit = interface_geometry.audit_interfaces(
+                intent=intent, scene=scene, part_meshes=meshes,
+                feature_records={f"{name}-face": {"bbox_mm": {
+                    "min": mesh.bounds[0].tolist(), "max": mesh.bounds[1].tolist(),
+                }} for name, mesh in meshes.items()},
+            )
+            self.assertTrue(audit["pass"], audit)
+            self.assertNotIn("engagement", {item["check"] for item in audit["checks"]})
+            with self.assertRaises(authoring.AuthoringError) as failure:
+                authoring.write_scene(root / "missing.json", intent_path=path, parts={},
+                                      interfaces=[{"id": "bond", "kind": "glue-face"}])
+            self.assertEqual(len([i for i in failure.exception.issues if i["code"] == "INTERFACE.ENDPOINT_FEATURE_REQUIRED"]), 2)
+
+    def test_feature_handle_uses_one_identity_for_cut_observation_and_binding(self):
+        import cad_helpers
+        with tempfile.TemporaryDirectory() as directory, patch.dict(cad_helpers._FEATURES, {}, clear=True), patch.object(cad_helpers, "_EVENTS", []):
+            cutter = geometry_binding.BrepFeature("slot", "housing", "cutter", Box(2, 3, 20))
+            body = Box(10, 10, 10)
+            result = cutter.cut_from(body)
+            self.assertAlmostEqual(float(body.volume) - float(result.volume), 60)
+            node = cutter.bind(Path(directory) / "slot.stl")
+            self.assertEqual((node["featureId"], node["partId"], node["role"]), ("slot", "housing", "cutter"))
+            event = [item for item in cad_helpers._EVENTS if item.get("id") == "slot"][-1]
+            self.assertEqual(event["part"], "housing")
+            self.assertEqual(cad_helpers._FEATURES["slot"]["part"], "housing")
+            missed = geometry_binding.BrepFeature("remote-slot", "housing", "cutter", Pos(30, 0, 0) * Box(2, 3, 20))
+            with self.assertRaisesRegex(cad_helpers.BuildInvariantError, "likely missed"):
+                missed.cut_from(body)
+            with self.assertRaisesRegex(geometry_binding.GeometryBindingError, "requires.*cutter"):
+                geometry_binding.BrepFeature("body", "housing", "solid", body).cut_from(body)
 
     def test_compile_phase_forbids_intent_authoring_without_creating_a_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -339,11 +472,11 @@ class AuthoringTests(unittest.TestCase):
             self.assertEqual(intent_contract.validate(intent, root), [])
 
             scene_path = root / "device_scene.json"
-            body_node = geometry_binding.bind_mesh_feature(
+            body_node = geometry_binding.bind_brep_feature(
                 node_id="body-node",
                 feature_id="body",
                 role="solid",
-                mesh=trimesh.creation.box(extents=[4.0, 3.0, 2.0]),
+                shape=Box(4.0, 3.0, 2.0),
                 path=root / "body.stl",
             )
             with patch.dict(
@@ -354,7 +487,7 @@ class AuthoringTests(unittest.TestCase):
                     intent_path=intent_path,
                     parts={
                         "device": {
-                            "representationMaster": "mesh",
+                            "representationMaster": "brep",
                             "nodes": [body_node],
                         }
                     },
@@ -364,7 +497,7 @@ class AuthoringTests(unittest.TestCase):
                 intent_path=intent_path,
                 parts={
                     "device": {
-                        "representationMaster": "mesh",
+                        "representationMaster": "brep",
                         "nodes": [body_node],
                     }
                 },

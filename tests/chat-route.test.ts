@@ -34,9 +34,11 @@ test('streams one native Codex turn without server-side repair prompts', async (
     skillDiagnostics: [],
     skills: [],
     stateRoot,
+    webSearchEnabled: true,
     workspaceRoot,
     runTurn: async (request) => {
       runCalls += 1;
+      assert.equal('webSearchEnabled' in request, false);
       await request.onThreadStarted?.('thread-1');
       const events: RuntimeEvent[] = [
         { threadId: 'thread-1', type: 'thread.started' },
@@ -99,6 +101,7 @@ test('streams one native Codex turn without server-side repair prompts', async (
         message: '创建一个支架',
         sessionId: SESSION_ID,
         taskType: 'cad',
+        webSearchEnabled: false,
       }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
@@ -193,8 +196,12 @@ test('does not require Python for a plain Codex chat turn', async () => {
     skillDiagnostics: [],
     skills: [],
     stateRoot: join(root, 'state'),
+    webSearchEnabled: false,
     workspaceRoot: join(root, 'workspace'),
-    runTurn: async () => ({ finalResponse: 'ok', threadId: 'thread-1' }),
+    runTurn: async (request) => {
+      assert.equal('webSearchEnabled' in request, false);
+      return { finalResponse: 'ok', threadId: 'thread-1' };
+    },
   };
   const app = express();
   app.use(express.json());
@@ -212,11 +219,13 @@ test('does not require Python for a plain Codex chat turn', async () => {
         message: '解释 BRep',
         sessionId: SESSION_ID,
         taskType: 'chat',
+        webSearchEnabled: true,
       }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
     });
     assert.equal(response.status, 200);
+    await response.text();
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -238,6 +247,7 @@ test('streams Codex failures without aborting the settled runtime', async () => 
     skillDiagnostics: [],
     skills: [],
     stateRoot: join(root, 'state'),
+    webSearchEnabled: true,
     workspaceRoot: join(root, 'workspace'),
     runTurn: async (request) => {
       request.signal?.addEventListener(

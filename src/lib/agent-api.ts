@@ -20,7 +20,6 @@ interface StreamAgentOptions {
   sessionId: string;
   signal: AbortSignal;
   taskType: ChatTaskType;
-  webSearchEnabled: boolean;
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
@@ -139,7 +138,6 @@ export async function streamAgent({
   sessionId,
   signal,
   taskType,
-  webSearchEnabled,
 }: StreamAgentOptions): Promise<void> {
   const response = await fetch('/api/chat', {
     body: JSON.stringify({
@@ -147,7 +145,6 @@ export async function streamAgent({
       message,
       sessionId,
       taskType,
-      webSearchEnabled,
     }),
     headers: { 'Content-Type': 'application/json' },
     method: 'POST',

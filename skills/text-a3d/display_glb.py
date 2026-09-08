@@ -96,6 +96,10 @@ def load_display_component(
         raise DisplayGlbError(
             f"display component {node['id']!r} source cannot be loaded: {error}"
         ) from error
+    mesh.metadata["amagine3d"] = {
+        "role": "display-only",
+        "physicalFeatureRef": node["physicalFeatureRef"],
+    }
     visual = parameters["appearance"]
     return (
         node["id"],
@@ -160,6 +164,8 @@ def export_display_glb(
     scene = trimesh.Scene()
     scene.metadata.update(metadata or {})
     expected_colors: dict[str, str] = {}
+    expected_components: dict[str, dict[str, Any]] = {}
+    display_name_set = set(display_names)
     for node_name, mesh, visual_style in [*physical, *visual]:
         if not isinstance(mesh, trimesh.Trimesh) or mesh.is_empty:
             raise DisplayGlbError(f"display GLB mesh for {node_name!r} is empty")
@@ -175,6 +181,21 @@ def export_display_glb(
         )
         display.visual = TextureVisuals(material=_material(node_name, normalized))
         display.metadata["name"] = node_name
+        component = {
+            "role": "display-only" if node_name in display_name_set else "manufactured"
+        }
+        if node_name in display_name_set:
+            reference = mesh.metadata.get("amagine3d", {}).get("physicalFeatureRef")
+            if reference is not None:
+                if not isinstance(reference, str) or not reference.strip():
+                    raise DisplayGlbError(
+                        f"display GLB node {node_name!r} physicalFeatureRef is invalid"
+                    )
+                component["physicalFeatureRef"] = reference
+        # Mesh extras survive GLTFLoader as Mesh.userData. Classification comes
+        # from the export inputs, never a name, color, or stale source metadata.
+        display.metadata["amagine3d"] = component
+        expected_components[node_name] = component
         scene.add_geometry(
             display,
             node_name=node_name,
@@ -199,6 +220,10 @@ def export_display_glb(
     for node_name, expected_color in expected_colors.items():
         _, geometry_name = loaded.graph[node_name]
         geometry = loaded.geometry[geometry_name]
+        if geometry.metadata.get("amagine3d") != expected_components[node_name]:
+            raise DisplayGlbError(
+                f"display GLB node {node_name!r} component metadata readback mismatch"
+            )
         normals = geometry._cache.cache.get("vertex_normals")
         if (
             normals is None

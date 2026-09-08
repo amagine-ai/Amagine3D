@@ -15,7 +15,7 @@
   position: relative;
   z-index: var(--z-raised);
   display: grid;
-  grid-template-columns: minmax(10rem, 1fr) auto;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, auto);
   min-height: 3.625rem;
   align-items: center;
   justify-content: space-between;
@@ -64,6 +64,7 @@
 
 .canvasMeta {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
   justify-content: flex-end;
@@ -96,7 +97,8 @@
 
 .viewerSummary {
   display: inline-flex;
-  min-width: max-content;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: var(--space-xs);
   color: var(--color-muted);
@@ -104,6 +106,11 @@
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.viewerSummary > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .statusMark {
