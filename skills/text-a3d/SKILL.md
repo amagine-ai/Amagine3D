@@ -5,192 +5,89 @@ description: Create or modify printable 3D models and their editable sources.
 
 # text-a3d
 
-Use editable source only from the current session workspace; never inspect
-sibling sessions. Use public `a3d` commands and keep source beside artifacts.
+Work in the current session workspace with the public `a3d` tools. Keep editable
+source beside the outputs. Manufactured parts use build123d BRep solids and
+genuine STEP masters; STL, GLB and 3MF are derived outputs.
 
-Author manufactured geometry as build123d BRep solids and retain genuine STEP
-masters. STL, GLB and 3MF meshes are derived export and review artifacts.
+## Design the requested object
 
-Develop the primary form from the requested product character and use. For
-consumer enclosures and other appearance-led objects, read
-`references/surface-design.md` for shaping volumes, choosing surface controls,
-and integrating details. Describe the defining contours, surface transitions and
-functional datums in the existing landmarks and acceptance fields. Choose the
-construction that gives these relationships useful freedom to evolve, and carry
-them through revisions to the BRep construction.
-For appearance-led work, establish a reference direction using the image guidance
-below and inspect a primary-form preview before detail makes proportion changes
-expensive. Compare contours and relationships, not just the presence of parts.
+Identify the user's required dimensions, functions and defining visual relationships.
+Keep them distinct from proposed construction and dimensions in intent. Give
+adjustable inferred dimensions explicit ranges before using them; otherwise the
+contract treats them as fixed. Expose controlling dimensions near the source top.
 
-## Author and build
+For functional products, develop the component space, support, access and required
+exterior-to-interior passages with the main form. Unknown components can use
+replaceable, parameterized envelopes. Purchased references stay outside the
+manufactured part list; their visibility does not determine installation needs.
 
-Separate user requirements, functional necessities, and your proposed construction
-in the existing evidence, acceptance, and assumptions fields. For a requested
-functional device, derive the geometry needed for each function before writing
-intent: relevant component envelopes and the internal space, exterior passages,
-and assembly or installation paths those functions need. Resolve how installed
-items are supported, located and retained in use, and provide closure or protection
-where the intended use needs it. Choose those relationships from the function;
-an installed item does not by itself require a lid, screws or a particular split.
-Model these relationships and record them in feature acceptance. A functional opening serving an internal
-component must form a continuous passage from the exterior into its target cavity
-or keepout.
+Use the relevant guidance below when making that design decision. Begin with the
+matching construction example and load further detail for an applicable feature
+or a concrete error, rather than reading the reference library in advance.
 
-When component specifications are unknown, expose proposed envelopes and
-controlling dimensions as reversible parameters while retaining the geometry
-needed for the requested functions. Use a form-only scope with simple physical
-seats when the user's request is limited to appearance; missing component
-specifications or dimensions alone do not establish that scope.
+| Current design need | Guidance |
+|---|---|
+| One dimension-driven BRep part | `examples/simple_brep_intent.py` and `simple_brep_build.py` |
+| Appearance-led form or enclosure | `references/surface-design.md`; `references/surface-shell.md` for its loft example |
+| Separately manufactured parts | `a3d guide multipart`; `examples/assembly_intent.py` and `assembly_build.py` |
+| Installed components or assembly-path reasoning | `references/design-review.md`; `references/installation-checks.md` for applicable geometry evidence |
+| Direct fasteners into printed plastic or serviceable closure | `references/multipart-connections.md` |
+| Pressable or sliding control | `a3d guide pressable-control` |
+| Non-manufactured display component | `references/installed-displays.md` |
+| Permanent manufactured color | `a3d guide color`; `color/BACKEND.md` for multiple regions within one part |
 
-Keep manufactured parts, purchased-component references and transient visual
-content distinct. `NAME-display.glb` means assembly preview: it contains the
-manufactured geometry plus any optional `display-only` references. Producing it
-does not require a dummy component. Only intended manufactured pieces belong in
-the export part list. Develop installation geometry independently of whether a
-reference component is shown. For required installation relationships, declare
-the applicable evidence using `references/installation-checks.md`.
+Inspect supplied reference images directly. For appearance-led work without a
+reference, use available native search and actually view a few relevant images
+when network access is enabled. Record sources and useful contour/proportion
+relationships locally. Use primary component specifications for uncertain fit
+dimensions. If evidence is unavailable, state the gap and expose assumptions;
+perspective images do not establish exact dimensions. `a3d reference IMAGE`
+provides optional palette/silhouette facts, not a substitute for seeing the image.
 
-For a new model, create its marker before authoring intent and build source.
-Use the user's or project's printer selection and reuse its valid profile when
-available. The profile command below illustrates an A1 mini with a 0.4 mm nozzle;
-when using it as a fallback, record that process assumption in intent.
+## Build and inspect
 
-Resolve the usable print volume before choosing part dimensions and detail.
-For multipart work, use `a3d layout` on proposed part bounds in their print
-orientations, with spacing, edge margin and allowed plate count; see
-`references/bambu-printability.md`. Keep assembled size, individual part size
-and plate occupancy distinct. A failed packing heuristic does not authorize
-changing the printer or the target dimensions.
+For a new model, create a marker before writing source. Reuse the selected printer
+profile or resolve one with `a3d profile`; record a fallback printer as an assumption.
+Resolve usable print volume early. For multipart work, plan part bounds in their
+print orientations with `a3d layout`; a failed layout is not permission to resize.
+
+Write `<name>_intent.py` separately and run it once to create the intent; validate
+with `a3d intent`. The build source constructs geometry, binds the actual feature
+objects with `write_scene(...)`, and calls the matching exporter. Use the examples
+above; `references/authoring-example.md` provides their invocation and binding API.
+Query related signatures together with `a3d capabilities --symbol NAME`.
 
 ```bash
 a3d mark --mark ".<name>.generation-start"
-a3d profile --machine a1-mini --nozzle 0.4 --tool 0 \
-  --out "<name>_printer-profile.json"
+# Reuse a valid profile, or choose machine/nozzle with a3d profile.
+python3 "<name>_intent.py"
+a3d intent "<name>_intent.json"
+a3d compile "<name>_scene.json" --marker ".<name>.generation-start" \
+  --intent "<name>_intent.json" --source "<name>_build.py" --output-dir .
 ```
 
-Run `<name>_intent.py` once to write `<name>_intent.json`; validate it with
-`a3d intent`. Keep contract creation separate from `<name>_build.py`, which owns
-the scene and geometry. Expose controlling dimensions near the top of the source.
+The compiler executes the build source; do not run it separately. Inspect its
+current `preview`, or `diagnosticPreview` on failure, with native `view_image`.
+Inspect the primary form before adding dependent detail. Compare the visible
+contours, proportions and functional spaces with the brief, then edit the geometry
+responsible for the largest discrepancy. A successful compile does not settle
+visual or functional omissions; state when visual inspection is incomplete.
 
-For a starting example, choose one that fits the construction and adapt its
-geometry to the brief:
+## Repair and revise
 
-- One BRep part: `examples/simple_brep_intent.py` and `simple_brep_build.py`.
-- Separately manufactured BRep parts: `examples/assembly_intent.py` and `assembly_build.py`.
-- A BRep shell lofted through key sections: `references/surface-shell.md`.
+Keep the latest valid report's source/output paths stable for the same model.
+Repair geometry against the existing user targets. Change construction when
+necessary while preserving defining form and function. Use `checked_fillet()` and
+`checked_chamfer()`; do not silently return unfinished geometry after a failure.
 
-`references/authoring-example.md` gives the invocation. Finish the build source
-with `write_scene(...)` and the appropriate `export_part(...)`,
-`export_assembly(...)` or `export_regions(...)` call. Query individual signatures
-with `a3d capabilities --symbol NAME`.
+Read only the diagnostic detail needed for the repair with `a3d diagnose`.
+Group findings with a shared cause into one source edit. Keep full evidence on
+disk; use `references/cad-compile.md` for pagination or compile lifecycle questions.
+`references/construction-strategies.md` helps with construction failures;
+`references/bambu-printability.md` distinguishes process advisories and blockers.
+Inspect internals only when public guidance and the reported error are insufficient.
 
-Compile, audit, package, and render through one public boundary:
-
-```bash
-a3d compile "<name>_scene.json" \
-  --marker ".<name>.generation-start" \
-  --intent "<name>_intent.json" \
-  --source "<name>_build.py" \
-  --output-dir .
-```
-
-The command prints a compact decision with actionable errors and paths. Full
-evidence remains in the reported compile-result and audit files; saving evidence
-does not require loading it into context. Default compile and diagnostic output
-have a total character budget. Follow diagnostic pagination for omitted blocking
-findings; use `a3d diagnose RESULT.json --id ID --field FIELD` for bounded chunks
-of a specific field. See `references/cad-compile.md` for query options. Group related findings by their source cause
-and make a coordinated edit. `references/design-review.md` helps with fit and
-assembly reasoning; `references/bambu-printability.md` explains which process
-advisories call for a change and which can remain disclosed limitations.
-
-Repair or rebuild the BRep construction around the user's goals, required
-functional relationships, and defining form features. A kernel failure identifies
-a problem with the current construction; it does not establish that the intended
-design must be simplified. Provisional implementation choices may be replaced;
-do not treat an arbitrary first idea as a requirement. Do not discard a defining
-feature merely to obtain a valid solid. Judge the repair by the final form,
-function, and manufacturability against intent, not only a successful operation
-or compile.
-Use `checked_fillet()` and `checked_chamfer()` for finishing operations; never
-catch a failure and silently return the unfinished input solid.
-For construction-specific failures, read `references/construction-strategies.md`.
-
-## Iterative edits
-
-Use the paths in the newest valid build report as the current working set. Keep
-source and output names stable for refinements and repairs. Create a separate
-model version when the user requests a snapshot, variant or additional model.
-
-Keep the existing intent for refinements that preserve its targets. When the user
-changes a target recorded there, write a new intent revision file with the updated
-request and compile with that path. For the same model, retain its part ID, source
-and output paths; the previous intent remains intact. Contract revision is a
-separate authoring step before compile.
-Bind every changed intent to its verified parent path and SHA-256, and state the
-revision kind and reason; see `references/evidence-contract.md`. Declare genuine
-design freedom as dimension ranges before using it. An inferred value alone is
-not a range, and deleting an unmet requirement is a scope change, not a repair.
-
-Read the current result's `preview`, or its `diagnosticPreview` after a failed
-compile, with native `view_image`. Use the visible form to guide the next source
-edit. A failed run can leave the previous successful render pointer in place, so
-use the paths returned for this attempt. If the returned image cannot be
-interpreted, state that visual review is incomplete. Deliver useful editable and
-manufacturing files with specific observations and remaining limitations.
-
-## Reference images
-
-Inspect uploaded images directly and use them as the primary visual reference.
-For appearance-led work without a supplied reference, use available native search
-to find and actually view a small, relevant set of images when network access is
-enabled. Record their source URLs and a few useful silhouette, proportion or
-surface relationships in the session workspace; distinguish observed features
-from your interpretation. A page title or textual image description is not visual
-inspection. Dimension-driven parts do not need an unrelated visual-reference search.
-
-Follow the runtime's network instruction. The server defaults
-`CODEX_WEB_SEARCH_ENABLED` to true; only a server environment setting of false
-disables it. Enabled configuration does not establish provider support for search,
-image retrieval or perception. Use the available tools directly; if a step fails,
-state which evidence is unavailable and continue from supplied or local evidence.
-Do not run a capability probe before every task or claim to have seen unavailable
-images.
-
-When deterministic palette or silhouette facts are useful, run:
-
-```bash
-a3d reference "/absolute/image/path" --out "<name>_reference.json"
-```
-
-Treat appearance inferred from a perspective image as approximate. Do not claim
-an exact reproduction without measurements.
-When network access is enabled, use primary component drawings or supplier
-specifications for uncertain mounting, fit, or process dimensions. Carry the source
-and exact component identity into intent evidence; a similar product is not an
-exact specification. Otherwise expose reversible assumptions as parameters.
-
-## Pull details only when needed
-
-Keep one BRep master for each manufactured part, then add applicable assembly,
-control, and manufactured-color concerns. Route by meaning, not keywords.
-
-- Unclear construction choice from the available evidence: `a3d guide strategy`.
-- Pressable or sliding mechanism: `a3d guide pressable-control`.
-- Separately manufactured or assembled parts: `a3d guide multipart`; additionally
-  read `references/multipart-connections.md` for direct fastening into printed
-  plastic or a serviceable-enclosure closure.
-- Installed components or uncertain assembly/functional relationships:
-  `references/design-review.md`; use `references/installation-checks.md` when
-  checking component clearance, an insertion envelope, support, retention or a passage.
-- Non-manufactured display affecting the enclosure or preview:
-  `references/installed-displays.md`.
-- Permanent printed color: `a3d guide color`; additionally read
-  `color/BACKEND.md` for multiple regions inside one part or uncommon topology.
-- Uncertain helper signature: `a3d capabilities --symbol NAME`.
-- Intent field meaning after consulting its helper: `references/evidence-contract.md`.
-- Feature construction and binding: `references/construction-strategies.md`.
-- Compile lifecycle or evidence-path questions: `references/cad-compile.md`.
-
-Inspect internals only when the relevant guide, capability result, and reported
-error are insufficient.
+When the user changes a target, create a separate intent revision bound to its
+verified parent; see `references/evidence-contract.md` for revision and field rules.
+Do not remove unmet requirements to make a check pass. Deliver the useful editable
+and manufacturing files with observations and remaining limitations.
