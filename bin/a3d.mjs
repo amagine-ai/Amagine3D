@@ -17,10 +17,13 @@ const python =
 
 const commands = {
   capabilities: 'capability_manifest.py',
+  compare: 'visual_compare.py',
   compile: 'cad_compile.py',
+  draft: 'cad_draft.py',
   intent: 'intent_contract.py',
   layout: 'plate_layout.py',
   mark: 'freshness_check.py',
+  measure: 'brep_measurements.py',
   profile: 'bambu_profile.py',
   reference: 'reference_analyze.py',
   scene: 'scene_contract.py',
@@ -84,11 +87,16 @@ Usage:
   a3d layout BOUNDS.json --profile PROFILE.json [--max-plates N --spacing-mm N --edge-margin-mm N --out PLAN.json]
   a3d scene SCENE.json
   a3d reference IMAGE [--out REPORT.json]
+  a3d draft SOURCE.py [--timeout-seconds 120]
+  a3d measure MODEL.step [--section-z MM] [--section-x MM] [--section-y MM] [--out FILE]
+  a3d compare BEFORE AFTER --view front [--out FILE] [--report FILE]
   a3d compile SCENE.json --marker FILE --intent INTENT.json --source BUILD.py [--output-dir DIR]
 
 All paths are resolved inside the current session workspace. Run the generated
 build source through \`a3d compile\`; do not execute it separately. Concise CAD
-authoring guidance is at $AMAGINE3D_SKILL_DIR/SKILL.md.
+authoring guidance is at $AMAGINE3D_SKILL_DIR/SKILL.md. Use \`a3d draft\` for
+provisional BRep previews before intent and feature registration; draft files
+are unvalidated and never replace final compile artifacts or publication.
 
 Diagnostics default to at most 5 issues and 12000 serialized characters.
 Field pages contain JSON text in data (default 2000 UTF-16 code units); follow
@@ -350,13 +358,14 @@ if (!existsSync(python)) {
   console.error('Managed Python is missing. Run npm run python:setup.');
   process.exit(2);
 }
-if (command === 'compile' && args.includes('--workspace')) {
-  console.error('a3d compile fixes --workspace to the current session directory.');
+const workspaceCommands = new Set(['compile', 'draft', 'measure', 'compare']);
+if (workspaceCommands.has(command) && args.some((arg) => arg === '--workspace' || arg.startsWith('--workspace='))) {
+  console.error(`a3d ${command} fixes --workspace to the current session directory.`);
   process.exit(2);
 }
 
 const scriptArgs = [join(skillRoot, commands[command]), ...args];
-if (command === 'compile') scriptArgs.push('--workspace', process.cwd());
+if (workspaceCommands.has(command)) scriptArgs.push('--workspace', process.cwd());
 const child = spawn(python, scriptArgs, {
   cwd: process.cwd(),
   env: {
