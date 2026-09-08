@@ -216,6 +216,67 @@ build.export()
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["intent"]["path"], str((self.workspace / "different.json").resolve()))
 
+    def test_draft_boolean_failures_retain_spatial_witnesses(self):
+        for operation, gap, code in (("add", .05, "SOURCE.UNION_DISCONNECTED"),
+                                     ("cut", 2., "SOURCE.CUT_MISSED_OWNER")):
+            with self.subTest(operation=operation):
+                self.source(f'''from build123d import Box, Pos
+from build_session import BuildSession
+build = BuildSession(__file__, part_names=("body",))
+build.add("body-main", Box(10, 10, 10))
+build.{operation}("feature", Pos({6 + gap}, 0, 0) * Box(2, 2, 2))
+build.export()
+''')
+                command = self.cli("draft", "draft.py")
+                self.assertEqual(command.returncode, 1, command.stdout + command.stderr)
+                result = json.loads(command.stdout)
+                self.assertEqual(result["artifacts"], {})
+                cause = result["issues"][0]["sourceIssue"]
+                self.assertEqual(cause["code"], code)
+                witness = cause["booleanWitness"]
+                self.assertEqual(witness["ownerPartId"], "body")
+                self.assertAlmostEqual(witness["component"]["gapMm"], gap)
+                self.assertEqual(len(witness["component"]["ownerPointMm"]), 3)
+                binding = result["sourceDiagnostics"]
+                payload = Path(binding["path"]).read_bytes()
+                self.assertEqual(sha256(payload).hexdigest(), binding["sha256"])
+                self.assertEqual(json.loads(payload)["runId"], result["runId"])
+
+    def test_caught_draft_operation_failure_cannot_claim_ready_preview(self):
+        source = '''from build123d import Box, Pos
+from cad_helpers import checked_union
+from cad_draft import export_draft
+body = Box(10, 10, 10)
+try:
+    checked_union(body, Pos(8, 0, 0) * Box(2, 2, 2), "floating")
+except RuntimeError:
+    pass
+export_draft({"body": body})
+'''
+        tails = ["", '''
+from pathlib import Path
+import os
+Path(os.environ["AMAGINE3D_SOURCE_DIAGNOSTICS_PATH"]).write_text('{"schema":"old","issues":[]}')
+''']
+        for edit in ('data["issues"] = []', 'data["issues"] = [None]', 'data["pass"] = True'):
+            tails.append('''
+from pathlib import Path
+import json, os
+p = Path(os.environ["AMAGINE3D_SOURCE_DIAGNOSTICS_PATH"])
+data = json.loads(p.read_text())
+''' + edit + '\np.write_text(json.dumps(data))\n')
+        for tail in tails:
+            self.source(source + tail)
+            command = self.cli("draft", "draft.py")
+            self.assertEqual(command.returncode, 1, command.stdout + command.stderr)
+            result = json.loads(command.stdout)
+            self.assertFalse(result["deliveryReady"])
+            self.assertEqual(result["artifacts"], {})
+            if tail:
+                self.assertTrue(result["diagnosticWarning"])
+            else:
+                self.assertEqual(result["issues"][0]["sourceIssue"]["code"], "SOURCE.UNION_DISCONNECTED")
+
     def test_draft_api_and_incomplete_contract_cannot_enter_final_compile(self):
         marker = self.workspace / ".start"
         marker.write_text("start")

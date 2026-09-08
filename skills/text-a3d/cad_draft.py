@@ -20,7 +20,8 @@ import sys
 from typing import Any, Mapping
 from uuid import uuid4
 
-from cad_compile import CommandRunner, ConfigurationError, _positive_timeout, _workspace_path, _write_json
+from cad_compile import CommandRunner, ConfigurationError, _agent_summary, _positive_timeout, _workspace_path, _write_json
+from cad_diagnostics import SOURCE_DIAGNOSTICS_SCHEMA
 
 
 DRAFT_SCHEMA = "a3d-draft-result/v1"
@@ -125,22 +126,48 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0,
     if intent_binding is not None:
         result["intent"] = intent_binding
     runner = CommandRunner(log)
+    diagnostics_path = output / "source-diagnostics.json"
     command = runner.run(
         "draft-source", [sys.executable, str(source)], cwd=workspace, timeout_seconds=timeout_seconds,
         env_extra={"AMAGINE3D_SOURCE_PHASE": "draft", "AMAGINE3D_DRAFT_DIR": str(output),
                    "AMAGINE3D_DRAFT_RUN_ID": run_id, "AMAGINE3D_OUTPUT_DIR": str(output),
                    "AMAGINE3D_INTENT_PATH": str(intent) if intent is not None else "", "AMAGINE3D_SCENE_PATH": "",
-                   "AMAGINE3D_COMPILE_RUN_ID": "", "AMAGINE3D_SOURCE_DIAGNOSTICS_PATH": "",
+                   "AMAGINE3D_COMPILE_RUN_ID": "", "AMAGINE3D_SOURCE_DIAGNOSTICS_PATH": str(diagnostics_path),
                    "PYTHONDONTWRITEBYTECODE": "1",
                    "PYTHONPATH": str(Path(__file__).resolve().parent) + os.pathsep + os.environ.get("PYTHONPATH", "")},
     )
     result["elapsedMs"] = command.elapsed_ms
     result["log"] = _binding(log)
-    if command.timed_out or command.returncode != 0:
+    source_issues = []
+    if diagnostics_path.is_file():
+        try:
+            if diagnostics_path.is_symlink() or diagnostics_path.resolve().parent != output:
+                raise ValueError("source diagnostics must stay in this draft directory")
+            diagnostics_binding = _binding(diagnostics_path)
+            diagnostics = json.loads(diagnostics_path.read_text())
+            if (diagnostics.get("schema") != SOURCE_DIAGNOSTICS_SCHEMA or diagnostics.get("runId") != run_id
+                    or not isinstance(diagnostics.get("issues"), list) or _binding(diagnostics_path) != diagnostics_binding):
+                raise ValueError("source diagnostics are not bound to this draft")
+            if any(not isinstance(item, dict)
+                   or any(not isinstance(item.get(key), str) or not item[key].strip() for key in ("code", "message"))
+                   or not isinstance(item.get("severity", "error"), str)
+                   or item.get("severity", "error") not in {"error", "warning"} for item in diagnostics["issues"]):
+                raise ValueError("malformed source diagnostic issue")
+            source_issues = [item for item in diagnostics["issues"] if item.get("severity", "error") == "error"]
+            if type(diagnostics.get("pass")) is not bool or diagnostics["pass"] != (not source_issues):
+                raise ValueError("source diagnostic pass/issue mismatch")
+            result["sourceDiagnostics"] = diagnostics_binding
+        except (OSError, ValueError, AttributeError) as error:
+            result["diagnosticWarning"] = str(error)
+    if command.timed_out or command.returncode != 0 or source_issues or "diagnosticWarning" in result:
         issue = {"code": "DRAFT.TIMEOUT" if command.timed_out else "DRAFT.SOURCE_FAILED",
                  "message": "draft exceeded its deadline" if command.timed_out else "draft source failed; inspect draft.log"}
         if not command.timed_out:
             issue.update(detail=command.output_tail[-1600:], repairHint=SOURCE_GUIDANCE)
+        if source_issues:
+            issue["sourceIssue"] = _agent_summary({"issues": source_issues[:1]})["issues"][0]
+            issue["omittedSourceIssueCount"] = len(source_issues) - 1
+            issue["repairHint"] = "Use the sourceIssue measurements to repair the geometry; full evidence is in sourceDiagnostics."
         result["issues"].append(issue)
     else:
         try:

@@ -14,10 +14,11 @@ SOURCE_DIAGNOSTICS_SCHEMA = "evidence-cad-source-diagnostics/v1"
 
 
 def write_source_diagnostics(payload: Mapping[str, Any]) -> None:
-    """Keep diagnostics outside truncated tool output, bound to one compile run."""
+    """Keep diagnostics outside truncated tool output, bound to one managed run."""
     destination = os.environ.get("AMAGINE3D_SOURCE_DIAGNOSTICS_PATH")
-    run_id = os.environ.get("AMAGINE3D_COMPILE_RUN_ID")
-    if os.environ.get("AMAGINE3D_SOURCE_PHASE") != "compile" or not destination or not run_id:
+    phase = os.environ.get("AMAGINE3D_SOURCE_PHASE")
+    run_id = os.environ.get("AMAGINE3D_DRAFT_RUN_ID" if phase == "draft" else "AMAGINE3D_COMPILE_RUN_ID")
+    if phase not in {"compile", "draft"} or not destination or not run_id:
         return
     path = Path(destination)
     prior = {}

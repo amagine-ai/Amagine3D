@@ -325,3 +325,7 @@ v6 口缘 **1.55602 mm** 是有效的材料弦，退出点位于 z=95 的顶部�
 - **入口调整为先主体，再合同，再按需专题。** 主入口从 215 行 / 12,307 字节变为 169 行 / 9,423 字节；保留实用功能、打印体积、装入/支撑/保留、独立实物测量和意图版本要求。这个尺寸变化只是上下文成本数据，不作为质量提高证据。
 
 确定性证据：[布尔失败重放](../workspace/quality-v7-audit/connection-audit/verification.json)、[连续两次无手工 marker 编译](../workspace/flow-audit/hash-provenance-01/summary.json)。公共示例回归验证单件草模→同源正式编译，以及已有 intent 的两件模块装配预览→正式安装、螺钉和打印验收；正式源码字节保持一致。
+
+草模与正式源统一后，又发现原 `compile` 专用诊断在 `draft` 中丢失实测间隙。候选补齐同一诊断路径：草模立即记录本次 runId 的失败并抛出，复用已有摘要保留首个实测原因及完整证据路径；正式编译的延迟收集逻辑保持。真实草模 union/cut 测得 0.05 / 2 mm 间隙，捕获操作异常继续导出、或替换成旧诊断载荷也不能获得可用草模状态。没有新增失败预览框架。
+
+本轮实现相关 **131 项独立回归通过**：53 compiler、5 freshness、8 CAD diagnostics、4 source diagnostics、17 BuildSession、12 draft、12 capability、4 shared-files、4 公共真实编译示例、12 CLI。重跑不重复累计，也不与上一轮 158 项简单相加。评测 harness 的无模型自检另记，不能替代模型结果。

@@ -162,7 +162,7 @@ _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 def _collect_source_diagnostics() -> bool:
-    return os.environ.get("AMAGINE3D_SOURCE_PHASE") == "compile"
+    return os.environ.get("AMAGINE3D_SOURCE_PHASE") in {"compile", "draft"}
 
 
 def _defer_source_issue(issue: dict, message: str) -> bool:
@@ -175,6 +175,8 @@ def _defer_source_issue(issue: dict, message: str) -> bool:
             "message": message,
         }
     )
+    if os.environ.get("AMAGINE3D_SOURCE_PHASE") == "draft":
+        _raise_deferred_source_issues()
     return True
 
 
