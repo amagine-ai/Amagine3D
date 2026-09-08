@@ -1,56 +1,47 @@
 # Installed display components
 
-Read this reference only when the requested product contains an LED/LCD, screen,
-windowed module, or another non-manufactured component that must appear in the
-assembly display.
+Use this reference when a screen or other non-manufactured visible component is
+represented alongside the enclosure geometry. Match the engineering detail to
+the requested design.
 
-Derive the physical enclosure consequences before visual decoration: a visible
-aperture, a rear component keepout or seat with clearance, and any printable
-retention features. Use one component envelope and one screen datum for all of
-them. The full module keepout is not the visible opening, and the visual surface
-is not a cutting tool. Provide a feasible insertion path. When the module enters
-an enclosed volume or needs service access, use `a3d guide multipart` and read
-`multipart-connections.md` only if its serviceable-enclosure closure applies.
-Do not create a removable enclosure for an item that only passes through or
-follows a surface.
+A visual concept can define its visible outline and a real shallow seat or recess
+in the host surface, with proposed dimensions exposed as parameters. For a module
+whose installation matters to the request, derive the necessary aperture,
+keepout, support and retention from its component envelope. Develop insertion
+and service access when that assembly needs them; `design-review.md` covers those
+relationships and `a3d guide multipart` covers separately manufactured parts.
 
-Declare the aperture, module keepout/seat, and printed retainer as physical
-intent features owned by the receiving manufactured part. Represent the glass,
-active pixels, or transient content as a `display-only` `displayComponent`
-linked through `physicalFeatureRef` to the aperture feature. Include that node in
-the display GLB, but exclude it from STEP, STL, 3MF, manufacturing part counts,
-and manufacturing booleans. Use a physical part only for an explicitly printable
-dummy, lens, or bezel.
+Declare the modeled aperture, seat or cavity as a physical intent feature of the
+receiving part and apply its actual cutter. Represent the glass, active pixels or
+transient content as a `display-only` `displayComponent`, linked through
+`physicalFeatureRef` to that feature. The display node appears in GLB and stays
+out of STEP, STL, 3MF, manufacturing part counts and booleans. Any requested
+printable dummy, lens or bezel remains physical geometry.
 
-The physical cutters and display plane share their center, normal, and component
-envelope parameters in source. BRep `export_part(...)`, `export_assembly(...)`,
-and `color.export_regions(...)` consume the scene's display-only nodes for the
-display GLB without adding them to their physical parts argument. Bind the actual cutter
-objects rather than describing their dimensions again:
+Share the host-surface frame, outline and placement controls between the physical
+feature and visible surface. A flat module can use a tangent plane; a conforming
+surface can follow the host profile. Keep the component keepout distinct from
+the visible opening. Both the BRep helper and hybrid compile paths consume the
+scene's display-only nodes for GLB. This minimal binding uses a seat cutter;
+add a separate module keepout or retainer when the intended installation calls
+for one:
 
 ```python
 from geometry_binding import bind_brep_feature
 
 nodes = [
   bind_brep_feature(
-    node_id="screen-window-cutter",
-    feature_id="screen/window",
+    node_id="screen-seat-cutter",
+    feature_id="screen/seat",
     role="cutter",
-    shape=window_cutter,
-    path="screen-window-tool.stl",
-  ),
-  bind_brep_feature(
-    node_id="screen-module-keepout-cutter",
-    feature_id="screen/module-keepout",
-    role="cutter",
-    shape=module_keepout_cutter,
-    path="screen-module-keepout-tool.stl",
+    shape=seat_cutter,
+    path="screen-seat-tool.stl",
   ),
   {
     "id": "screen-active-surface",
     "featureId": "display/screen-active-surface",
     "role": "display-only",
-    "physicalFeatureRef": "screen/window",
+    "physicalFeatureRef": "screen/seat",
     "recipe": {
       "kind": "displayComponent",
       "parameters": {

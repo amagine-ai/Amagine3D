@@ -14,14 +14,18 @@ consumer enclosures and other appearance-led objects, read
 and integrating details. Choose the construction that gives this design useful
 freedom to evolve.
 
-## Build contract
+## Author and build
 
 Separate user requirements, functional necessities, and your proposed construction
-in the existing evidence, acceptance, and assumptions fields. Resolve the risky
-fit, assembly path, and controlling dimension relationships before committing an
-intent. A helper's name or successful compile is not proof of the product's function.
+in the existing evidence, acceptance, and assumptions fields. Match the detail
+to the request: a form concept can use proposed dimensions and simple physical
+seats; a fit- or assembly-dependent design needs the relevant component envelopes,
+controlling dimensions and installation relationships.
 
-For a new model, create its marker and profile before intent:
+For a new model, create its marker before authoring intent and build source.
+Use the user's or project's printer selection and reuse its valid profile when
+available. The profile command below illustrates an A1 mini with a 0.4 mm nozzle;
+when using it as a fallback, record that process assumption in intent.
 
 ```bash
 a3d mark --mark ".<name>.generation-start"
@@ -30,12 +34,22 @@ a3d profile --machine a1-mini --nozzle 0.4 --tool 0 \
 ```
 
 Run `<name>_intent.py` once to write `<name>_intent.json`; validate it with
-`a3d intent`. Create/update `<name>_build.py` from it. Build source owns scene
-and geometry but never rewrites intent. Use BRep helpers for dimension-controlled
-geometry and mesh binding only for freeform geometry. Keep key dimensions near the top.
-For the complete public authoring path, adapt `examples/assembly_intent.py` and
-`examples/assembly_build.py`; read `references/authoring-example.md` for their scope
-and invocation. Query individual signatures with `a3d capabilities --symbol NAME`.
+`a3d intent`. Keep contract creation separate from `<name>_build.py`, which owns
+the scene and geometry. Expose controlling dimensions near the top of the source.
+
+For a starting example, choose one that fits the construction and adapt its
+geometry to the brief:
+
+- One BRep part: `examples/simple_brep_intent.py` and `simple_brep_build.py`.
+- Separately manufactured BRep parts: `examples/assembly_intent.py` and `assembly_build.py`.
+- A mesh shell built from varying sections: `references/surface-shell.md`.
+
+`references/authoring-example.md` gives the BRep invocation. For an all-BRep
+scene, finish the build source with `write_scene(...)` and the appropriate
+`export_part(...)`, `export_assembly(...)` or `export_regions(...)` call. If any
+part has a mesh master, the source finishes at `write_scene(...)`; public compile
+handles hybrid export for the whole scene. Query individual signatures with
+`a3d capabilities --symbol NAME`.
 
 Compile, audit, package, and render through one public boundary:
 
@@ -50,33 +64,30 @@ a3d compile "<name>_scene.json" \
 The command prints a compact decision with actionable errors and paths. Full
 evidence remains in the reported compile-result and audit files. If the summary
 is insufficient, query only the relevant detail with `a3d diagnose RESULT.json
---id ID` (or `--code`/`--severity`). Fix shared source causes and compile again.
-Distinguish a wrong construction, missing proof, and a tool limitation from a
-conflict in the requirements. A packing heuristic failure does not prove that
-parts cannot fit. Preserve user-visible function when changing your construction;
-rebuilding intent to remove a failing target is not a repair. See
-`references/design-review.md` when resolving a failed fit or judging readiness.
+--id ID` (or `--code`/`--severity`). Group related findings by their source cause
+and make a coordinated edit. Use diagnostics to improve the construction while
+preserving the requested form and function. `references/design-review.md` helps
+with fit and assembly reasoning; `references/bambu-printability.md` explains which
+process advisories call for a change and which can remain disclosed limitations.
 
 ## Iterative edits
 
-Treat the paths referenced by the newest valid build report as the current model's
-canonical working set. For a follow-up change, update the same editable source and
-run the same build and compile path so generated scene, evidence, previews, and
-manufacturing outputs are republished at their canonical paths.
+Use the paths in the newest valid build report as the current working set. Keep
+source and output names stable for refinements and repairs. Create a separate
+model version when the user requests a snapshot, variant or additional model.
 
-Do not rename, move, or copy the current working set merely to preserve a prior
-revision. The compiler's staged publication is the rollback boundary, and the
-conversation is the change history. Create a separate version only when the user
-explicitly asks for a snapshot, fork, variant, or additional model. After a failed
-compile, repair the canonical source and compile again instead of creating an
-alternate set of artifact paths.
+Keep the existing intent for refinements that preserve its targets. When the user
+changes a target recorded there, write a new intent revision file with the updated
+request and compile with that path. For the same model, retain its part ID, source
+and output paths; the previous intent remains intact. Contract revision is a
+separate authoring step before compile.
 
-Before replying, read the newest five-view preview with the native `view_image`
-tool and compare it to the intended landmarks. Numeric image statistics establish
-neither appearance nor functional correctness. If the tool returns image content
-but you cannot interpret it, report visual review as incomplete; do not blame file
-access or start an unrelated viewer. Deliver the editable source and useful
-artifacts with the actual remaining limitations.
+Read the current result's `preview`, or its `diagnosticPreview` after a failed
+compile, with native `view_image`. Use the visible form to guide the next source
+edit. A failed run can leave the previous successful render pointer in place, so
+use the paths returned for this attempt. If the returned image cannot be
+interpreted, state that visual review is incomplete. Deliver useful editable and
+manufacturing files with specific observations and remaining limitations.
 
 ## Reference images
 
@@ -96,8 +107,8 @@ exact specification. Otherwise expose reversible assumptions as parameters.
 
 ## Pull details only when needed
 
-Choose one geometry master, then add applicable assembly, control, and
-manufactured-color concerns. Route by meaning, not keywords.
+Choose one geometry master for each manufactured part, then add applicable
+assembly, control, and manufactured-color concerns. Route by meaning, not keywords.
 
 - Unclear representation choice from the available evidence: `a3d guide strategy`.
 - Pressable or sliding mechanism: `a3d guide pressable-control`.
@@ -112,6 +123,9 @@ manufactured-color concerns. Route by meaning, not keywords.
 - Permanent printed color: `a3d guide color`; additionally read
   `color/BACKEND.md` for multiple regions inside one part or uncommon topology.
 - Uncertain helper signature: `a3d capabilities --symbol NAME`.
+- Intent field meaning after consulting its helper: `references/evidence-contract.md`.
+- Feature construction and binding: `references/construction-strategies.md`.
+- Compile lifecycle or evidence-path questions: `references/cad-compile.md`.
 
 Inspect internals only when the relevant guide, capability result, and reported
 error are insufficient.

@@ -1,7 +1,7 @@
 # Evidence contract
 
 The intent contract is the independent target used to judge the model. Write
-it before geometry and validate it with `intent_contract.py`. Never rewrite
+it before geometry and validate it with `a3d intent INTENT.json`. Never rewrite
 targets merely to match a generated artifact.
 
 ## Required structure
@@ -80,9 +80,15 @@ separate 0.05 mm tolerance.
 
 The parameter panel does not amend or regenerate this immutable intent. Direct
 parameter rebuilds are valid only while the complete semantic X/Y/Z envelope
-continues to satisfy `dimensions_mm`. A requested adjustment that changes that
-overall envelope starts a new CAD task with a new intent contract; do not hide
-it inside the existing report or consume the tolerance as a resize allowance.
+continues to satisfy `dimensions_mm`. For a user-requested change to the target
+envelope or required features, write a revised intent under a new filename in
+the same workspace. `write_intent` accepts identical existing content and
+requires a new filename for changed content. Keep the same model name
+and editable build source, pass the revised file through `a3d compile --intent`,
+and let `write_scene` refresh its intent binding. This is a requirement revision
+of the current model; it does not require a separate conversation or new
+manufacturing output set. Within each revision, repair geometry against that
+target rather than changing the target to match a failing artifact.
 
 When the user asks to replicate, reproduce, or exactly match a named real,
 catalog, branded, or fictional object, preserve that identity as the target.
@@ -91,9 +97,12 @@ If no reference evidence is supplied, choose `reference-inspired` or
 `recognizable-form`, record inferred landmarks and dimensions, and report that
 the result is inspired by the named object rather than an exact replica.
 
-The printability profile must come from this skill's `bambu_profile.py`; its hash
-binds the process assumptions used by the contract. Apply profile-driven design
-and repair rules from `bambu-printability.md` rather than duplicating them here.
+Reuse a tool-generated profile that matches the user's process, or resolve one
+with `a3d profile`; its hash binds the process assumptions used by the contract.
+When the printer is unspecified, record the selected catalog profile as a
+reversible process assumption. A profile can be reused across builds with the
+same process; generating new geometry does not require regenerating it.
+Apply profile-driven design and repair rules from `bambu-printability.md`.
 
 Matched visual views may be `front`, `side`, `top`, `bottom`, or `isometric`;
 use `bottom` when the appearance-bearing face is intentionally printed at Z0.
@@ -127,7 +136,10 @@ Use these semantic feature values:
 For a feature on a single outside face, the direction must follow the semantic
 normal or pass through that axis: bottom uses `-Z` or `through-Z`, front uses
 `-Y` or `through-Y`, and so on. Set `edge_crossing` to `forbidden` unless a
-feature is intentionally on an edge or corner.
+feature is intentionally on an edge or corner. `edge_crossing` describes the
+boundary between exterior faces, not whether a cutter passes through the skin.
+A top cavity contained inside its surrounding rim uses `forbidden`, even though
+it is open. A notch that reaches across the top/front edge uses `required`.
 
 ## Manufacturing structure
 
@@ -197,9 +209,12 @@ color-intent document. Every `color_regions[]` record requires `name`, owning
   regions while another part owns one whole-part region. Use
   `print_package_mode: "separate_parts"` for the physical-part package.
 
-When `color_regions` is present, `print_package_mode` is required explicitly.
-Writers, command-line entrypoints, and QA never infer it from manufacturing
-mode, archive topology, or a build report.
+Raw intent JSON with `color_regions` must include `print_package_mode`.
+The public `write_intent` helper records this field from the chosen
+`manufacturing_mode`: `co_print_body` for `single-part`, `separate_parts` for
+`multipart`. Its callers supply the color regions and palette decision, without
+adding a `print_package_mode` argument. CLI validation and QA require the field
+in the resulting document.
 
 ```json
 "color_regions": [
@@ -281,11 +296,13 @@ when routed there, `color/BACKEND.md`.
 - A photograph proves visible relationships, not hidden-side dimensions.
 - Landmarks describe identity-bearing relationships. “Looks similar” is not
   an acceptance criterion.
-- Critical functional features must be backed by named `observe()` or
-  checked-operation evidence. Natural-language acceptance alone is not proof.
-- For pixel art, use the structured `reference_analyze` tool's hash-bound cells
-  and colors directly. Do not invoke its Python backend through a shell or
-  redraw coordinates from memory.
+- Bind critical functional features to their actual geometry: use named
+  `observe()`/checked-operation evidence in the BRep helper path, or bound
+  feature nodes and compiler-produced evidence in the hybrid path.
+- For pixel art, run `a3d reference IMAGE --out REPORT.json`. When the report
+  supplies `pixel_grid`, use its cells and colors directly with the recorded
+  source-image hash. A `general-image` result calls for image-based interpretation
+  rather than an assumed pixel grid.
 - If a required target remains unknowable and changes function or identity,
   ask. Otherwise choose a reversible assumption and record it.
 

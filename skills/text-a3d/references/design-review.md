@@ -42,16 +42,15 @@ it, even if that element is purchased and excluded from print artifacts.
 
 ## Installed components
 
-Represent each component with a parameterized envelope and an installation datum.
-Derive its cavity/keepout, support, location, retention, and required access from
-those controls. Account for where loads go and how the item stays at the modeled
-height; a floating display-only block is not an installed assembly.
+For a component whose installation belongs in the request, use a parameterized
+envelope and installation datum to develop the needed clearance, support,
+retention and access. Relate its supported position to the surfaces that carry
+the load. A visual concept can keep unspecified hardware as proposed dimensions
+and focus on its modeled relationship to the enclosure.
 
-Keep purchased items out of manufactured part counts. If they appear as
-`displayComponent`, link `physicalFeatureRef` to the actual owning cavity or seat
-cutter, not an unrelated feature that happens to satisfy the schema. Declare that
-physical feature in intent and bind its real geometry. Use `installed-displays.md`
-for additional aperture and appearance details when visible displays are involved.
+Keep purchased items out of manufactured part counts. `installed-displays.md`
+shows how to bind a visible component to its actual physical aperture, seat or
+cavity and how to extend that construction for an installed module.
 
 ## Interpret evidence at the scale it measures
 
@@ -78,14 +77,10 @@ the product or weaken QA merely to satisfy the current packing implementation.
 The standard preview has five views: isometric, front, side, top, and bottom.
 Use them for silhouette, count, proportions, spacing, seams, and exposed openings.
 Read the current render named in the compile result, not an older matching glob.
-For occluded features, inspect a focused view of the same physical geometry with
-the obscuring part hidden, or a source-derived section/exploded view when useful.
-Supplemental views never replace the canonical assembly or its physical checks.
+Use available views of that same geometry to understand occluded or localized
+features. When the current tools support a focused, section or exploded view,
+use it as supplemental evidence while retaining the canonical assembly.
 
-Describe specific discrepancies and repair their source. Distinguish render
-generation, image delivery to the model, and visual interpretation: a returned
-image that the model cannot interpret is a model/provider capability issue to
-diagnose, not evidence that a port-bound viewer or image resize will fix it.
-When visual review remains unavailable, say so and preserve the compile result's
-`awaiting-visual-review` meaning. Color counts and file existence are not a visual
-acceptance substitute.
+Describe concrete discrepancies and tune the source controls responsible for
+them. Follow the main skill's image-reading instructions and report the visible
+evidence's limitations alongside the actual compile outcome.

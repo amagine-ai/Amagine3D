@@ -31,7 +31,7 @@ them through shared boundary curves.
 
 When this construction fits, `surface-shell.md` provides a small working example
 of varying sections with a real cavity. Adapt the section, end treatment and
-opening arrangement to the new design. For a freely blended volume,
+opening arrangement to the new design. For an SDF-defined hollow body,
 `organic_shell.build_organic_shell(...)` accepts an arbitrary signed-distance
 field in millimetres, positive inside; use a distance-valued field so its wall
 inset retains its physical meaning. Model near the local origin and use named
@@ -61,8 +61,9 @@ choose how the detail meets the skin: a tangent plane, a shaped seat or a
 conforming surface. `installed-displays.md` covers the physical and display-only
 relationships for installed screens.
 
-Develop the interior from the chosen outer form. Give the cavity, rim, floor and
-local supports dimensions tied to that form and the parts they serve. A surface
+Where the design includes an interior, develop it from the chosen outer form.
+Give the cavity, rim, floor and local supports dimensions tied to that form and
+the parts they serve. A surface
 offset, a distance-field inset or separately controlled inner profiles offer
 different ways to shape it; measure thickness in the direction the construction
 actually controls. Bind local BRep additions and cutters to the owning mesh body
@@ -72,7 +73,7 @@ to integrate precise interfaces into the material geometry.
 
 Use the current geometry's preview to continue designing. Look at the contour and
 the way light moves across the broad surfaces, then tune the source controls that
-create those effects. Choose additional views of that same geometry when they
-help you understand a grip, underside or rear detail. If a construction becomes
+create those effects. Use available views of that same geometry to understand
+the relevant grip, underside or rear detail. If a construction becomes
 awkward to adjust, revisit its profiles, surface boundaries or representation
 with the intended form in mind.

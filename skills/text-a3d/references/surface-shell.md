@@ -33,9 +33,6 @@ The intent is written once; the compiler executes the build source. This mesh
 example ends at `write_scene`; the public compiler handles hybrid export. Do not
 call `export_assembly` or run the build source separately.
 
-When geometry is available, compile provides a diagnostic preview before full QA
-finishes. Inspect that preview against the intended silhouette, opening and
-shoulders; it does not establish manufacturing readiness. On failure, distinguish
-the surface construction from tessellation, export and validation defects. Keep
-identity-defining curves and openings while fixing the cause; deleting them to
-silence a check is not an acceptable repair.
+Use the current geometry's preview to refine the silhouette, opening and shoulders
+through their source controls. The main skill describes current-run previews and
+how to continue after compile findings.
