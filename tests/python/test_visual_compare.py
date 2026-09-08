@@ -73,6 +73,19 @@ class RevisionComparisonTests(unittest.TestCase):
                 bad = subprocess.run([*command, *extra], cwd=root, capture_output=True, text=True)
                 self.assertNotEqual(bad.returncode, 0)
 
+    def test_unsupported_3mf_returns_actionable_error_before_optional_importer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Format rejection happens before invoking an optional 3MF loader.
+            (root / "part.3mf").write_bytes(b"not-needed-for-format-dispatch")
+            result = subprocess.run(
+                [sys.executable, str(SKILL / "visual_compare.py"), "part.3mf", "part.3mf"],
+                cwd=root, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("semantic display GLB", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
