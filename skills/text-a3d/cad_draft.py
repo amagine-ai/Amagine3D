@@ -1,4 +1,7 @@
-"""Run a provisional BRep source and render it without a final CAD contract.
+"""Run a draft source that calls export_draft(parts) to preview BRep geometry.
+
+Use a3d draft for sources that call export_draft. Run an existing BuildSession
+source through a3d compile with its intent, scene and marker.
 
 Drafts use the same managed Python, process deadline and workspace path boundary
 as compile. Author source is trusted Python, not an OS-sandboxed program. No
@@ -21,6 +24,8 @@ from cad_compile import CommandRunner, ConfigurationError, _positive_timeout, _w
 
 DRAFT_SCHEMA = "a3d-draft-result/v1"
 GEOMETRY_SCHEMA = "a3d-draft-geometry/v1"
+SOURCE_GUIDANCE = ("Use export_draft(parts) in a draft source. For an existing BuildSession source, "
+                   "use a3d compile with its intent, scene and marker.")
 
 
 def _binding(path: Path) -> dict[str, str]:
@@ -28,7 +33,9 @@ def _binding(path: Path) -> dict[str, str]:
 
 
 def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | None = None) -> dict:
-    """Preview named BRep parts and optional component envelopes via a3d draft.
+    """Call from a draft source run by a3d draft to preview named BRep parts.
+    Existing BuildSession sources use a3d compile with their intent, scene and
+    marker; draft sources call export_draft(parts).
 
     No intent, features or manufacturing claims are required. All geometry is
     display-only; blue parts and orange references retain their source placement
@@ -122,8 +129,11 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) 
     result["elapsedMs"] = command.elapsed_ms
     result["log"] = _binding(log)
     if command.timed_out or command.returncode != 0:
-        result["issues"].append({"code": "DRAFT.TIMEOUT" if command.timed_out else "DRAFT.SOURCE_FAILED",
-                                 "message": "draft exceeded its deadline" if command.timed_out else "draft source failed; inspect draft.log"})
+        issue = {"code": "DRAFT.TIMEOUT" if command.timed_out else "DRAFT.SOURCE_FAILED",
+                 "message": "draft exceeded its deadline" if command.timed_out else "draft source failed; inspect draft.log"}
+        if not command.timed_out:
+            issue.update(detail=command.output_tail[-1600:], repairHint=SOURCE_GUIDANCE)
+        result["issues"].append(issue)
     else:
         try:
             if _binding(source) != source_binding:
@@ -141,7 +151,10 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) 
             result.update(status="draft", artifacts=manifest["artifacts"], objects=manifest["objects"])
             result["geometry"] = _binding(output / "draft-geometry.json")
         except (OSError, ValueError, KeyError, TypeError) as error:
-            result["issues"].append({"code": "DRAFT.INCOMPLETE", "message": str(error)})
+            issue = {"code": "DRAFT.INCOMPLETE", "message": str(error)}
+            if not (output / "draft-geometry.json").exists():
+                issue["repairHint"] = SOURCE_GUIDANCE
+            result["issues"].append(issue)
     _write_json(Path(result["result"]), result)
     return result
 

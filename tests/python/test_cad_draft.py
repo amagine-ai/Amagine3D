@@ -57,6 +57,7 @@ class CadDraftTests(unittest.TestCase):
         result = json.loads(command.stdout)
         self.assertEqual(result["schema"], "a3d-draft-result/v1")
         self.assertEqual(result["status"], "draft")
+        self.assertEqual(result["issues"], [])
         self.assertFalse(result["deliveryReady"])
         self.assertNotIn("pass", result)
         self.assertNotIn("deliverables", result)
@@ -89,6 +90,8 @@ class CadDraftTests(unittest.TestCase):
         self.assertEqual(command.returncode, 1, command.stdout + command.stderr)
         result = json.loads(command.stdout)
         self.assertEqual(result["issues"][0]["code"], "DRAFT.TIMEOUT")
+        self.assertNotIn("repairHint", result["issues"][0])
+        self.assertNotIn("detail", result["issues"][0])
         self.assertFalse(result["deliveryReady"])
         self.assertEqual(result["artifacts"], {})
         pid = int((self.workspace / "child.pid").read_text())
@@ -116,7 +119,8 @@ class CadDraftTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
     def test_empty_source_and_non_solid_geometry_cannot_claim_preview(self):
-        for source in ("x = 1\n", "from build123d import Rectangle\nfrom cad_draft import export_draft\nexport_draft({'face': Rectangle(5, 5)})\n"):
+        for source in ("x = 1\n", "from build123d import Rectangle\nfrom cad_draft import export_draft\nexport_draft({'face': Rectangle(5, 5)})\n",
+                       (SKILL / "examples/simple_brep_build.py").read_text()):
             with self.subTest(source=source):
                 self.source(source)
                 command = self.cli("draft", "draft.py")
@@ -125,6 +129,19 @@ class CadDraftTests(unittest.TestCase):
                 self.assertEqual(result["status"], "failed")
                 self.assertFalse(result["deliveryReady"])
                 self.assertEqual(result["artifacts"], {})
+                hint = result["issues"][0]["repairHint"]
+                self.assertIn("export_draft(parts)", hint)
+                self.assertIn("BuildSession", hint)
+                self.assertIn("a3d compile", hint)
+                log = Path(result["log"]["path"])
+                self.assertEqual(sha256(log.read_bytes()).hexdigest(), result["log"]["sha256"])
+                if "BuildSession" in source:
+                    self.assertEqual(result["issues"][0]["code"], "DRAFT.SOURCE_FAILED")
+                    self.assertIn("AuthoringError", result["issues"][0]["detail"])
+                    self.assertIn("build session authoring failed", log.read_text())
+                elif source == "x = 1\n":
+                    self.assertEqual(result["issues"][0]["code"], "DRAFT.INCOMPLETE")
+                    self.assertIn("draft-geometry.json", result["issues"][0]["message"])
 
     def test_error_after_export_does_not_promote_partial_output(self):
         source = self.source()
@@ -133,6 +150,9 @@ class CadDraftTests(unittest.TestCase):
         result = json.loads(command.stdout)
         self.assertEqual(command.returncode, 1)
         self.assertEqual(result["issues"][0]["code"], "DRAFT.SOURCE_FAILED")
+        self.assertIn("RuntimeError: unfinished source", result["issues"][0]["detail"])
+        self.assertIn("For an existing BuildSession source", result["issues"][0]["repairHint"])
+        self.assertIn("RuntimeError: unfinished source", Path(result["log"]["path"]).read_text())
         self.assertEqual(result["artifacts"], {})
         self.assertTrue((Path(result["result"]).parent / "draft-preview.png").is_file())
 
@@ -143,6 +163,7 @@ class CadDraftTests(unittest.TestCase):
         result = json.loads(command.stdout)
         self.assertEqual(command.returncode, 1)
         self.assertEqual(result["issues"][0]["code"], "DRAFT.INCOMPLETE")
+        self.assertNotIn("repairHint", result["issues"][0])
         self.assertEqual(result["artifacts"], {})
 
     def test_draft_api_and_incomplete_contract_cannot_enter_final_compile(self):
@@ -172,9 +193,17 @@ class CadDraftTests(unittest.TestCase):
         self.assertTrue(any(issue["code"].startswith("CONTRACT.") for issue in result["issues"]))
 
     def test_draft_symbol_is_discoverable_and_direct_call_is_rejected(self):
+        help_result = self.cli("draft", "--help")
+        self.assertEqual(help_result.returncode, 0, help_result.stdout + help_result.stderr)
+        self.assertIn("export_draft", help_result.stdout)
+        self.assertIn("BuildSession", help_result.stdout)
+        self.assertIn("a3d compile", help_result.stdout)
         record = build_manifest(["export_draft"])["query"]["export_draft"]
         self.assertTrue(record["available"])
         self.assertEqual(record["provider"], "cad_draft")
+        self.assertIn("export_draft(parts)", record["description"])
+        self.assertIn("BuildSession", record["description"])
+        self.assertIn("a3d compile", record["description"])
         with self.assertRaisesRegex(RuntimeError, "a3d draft"):
             export_draft({})
 

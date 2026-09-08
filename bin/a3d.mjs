@@ -93,9 +93,10 @@ Usage:
   a3d compile SCENE.json --marker FILE --intent INTENT.json --source BUILD.py [--output-dir DIR]
 
 All paths are resolved inside the current session workspace. Run the generated
-build source through \`a3d compile\`; do not execute it separately. Concise CAD
-authoring guidance is at $AMAGINE3D_SKILL_DIR/SKILL.md. Use \`a3d draft\` for
-provisional BRep previews before intent and feature registration; draft files
+final build source through \`a3d compile\`; do not execute it separately. Concise CAD
+authoring guidance is at $AMAGINE3D_SKILL_DIR/SKILL.md. \`a3d draft\` runs a source
+calling \`export_draft(...)\` for provisional BRep previews before intent and
+feature registration; draft files
 are unvalidated and never replace final compile artifacts or publication.
 
 Diagnostics default to at most 5 issues and 12000 serialized characters.
