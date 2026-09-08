@@ -18,6 +18,7 @@ from typing import Any
 
 import trimesh
 import numpy as np
+from brep_tessellation import tessellate_brep
 
 from mesh_normalization import (
     MeshNormalizationError,
@@ -127,7 +128,7 @@ def shape_to_mesh(
     if solid_count < 1:
         raise GeometryBindingError(f"{context} contains no BRep solids")
     try:
-        vertices, faces = shape.tessellate(linear, angular)
+        vertices, faces = tessellate_brep(shape, linear, angular)
         mesh = trimesh.Trimesh(
             vertices=[[vertex.X, vertex.Y, vertex.Z] for vertex in vertices],
             faces=faces,
@@ -324,7 +325,7 @@ def bind_display_component(
             valid_value = shape.is_valid
             if not bool(valid_value() if callable(valid_value) else valid_value):
                 raise ValueError("invalid BRep")
-            vertices, faces = shape.tessellate(linear, angular)
+            vertices, faces = tessellate_brep(shape, linear, angular)
             mesh = trimesh.Trimesh(
                 vertices=[[vertex.X, vertex.Y, vertex.Z] for vertex in vertices],
                 faces=faces,
