@@ -102,7 +102,11 @@ def main():
             raise ValueError("compare expects STL, GLB or 3MF in the same coordinate frame and millimetres")
         destination = _workspace_path(args.out or f"{sources[1].stem}_{args.view}_comparison.png", workspace)
         report = _workspace_path(args.report or destination.with_suffix(".json"), workspace)
-        if destination == report or destination in sources or report in sources:
+        outputs = (destination, report)
+        aliases = any(output.exists() and source.exists() and output.samefile(source)
+                      for output in outputs for source in sources)
+        aliases |= destination.exists() and report.exists() and destination.samefile(report)
+        if aliases or destination == report or destination in sources or report in sources:
             raise ValueError("comparison outputs must differ from each other and both inputs")
         bindings = [{"path": str(path), "sha256": _digest(path)} for path in sources]
         inputs = [_render_inputs(path, (122, 163, 199)) for path in sources]

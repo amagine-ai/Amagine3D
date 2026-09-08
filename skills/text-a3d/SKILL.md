@@ -50,7 +50,13 @@ the export part list. Develop installation geometry independently of whether a
 reference component is shown. For required installation relationships, declare
 the applicable evidence using `references/installation-checks.md`.
 
-For a new model, create its marker before authoring intent and build source.
+When the main volume or component arrangement is still unresolved, use
+`a3d draft <name>_draft.py` for a provisional preview before full feature
+registration. Query `export_draft`; `examples/installed_module_draft.py` shows
+parts and component envelopes. Reuse the chosen construction in the final build;
+draft previews carry no installation, printability or delivery acceptance.
+
+For the final model, create its marker before authoring intent and build source.
 Use the user's or project's printer selection and reuse its valid profile when
 available. The profile command below illustrates an A1 mini with a 0.4 mm nozzle;
 when using it as a fallback, record that process assumption in intent.
@@ -103,7 +109,10 @@ does not require loading it into context. Default compile and diagnostic output
 have a total character budget. Follow diagnostic pagination for omitted blocking
 findings; use `a3d diagnose RESULT.json --id ID --field FIELD` for bounded chunks
 of a specific field. See `references/cad-compile.md` for query options. Group related findings by their source cause
-and make a coordinated edit. `references/design-review.md` helps with fit and
+and make a coordinated edit. Thickness findings include a location witness and,
+after repeated checks, a warning comparison; use its measurement and sampling
+scope to judge whether the change addressed that region.
+`references/design-review.md` helps with fit and
 assembly reasoning; `references/bambu-printability.md` explains which process
 advisories call for a change and which can remain disclosed limitations.
 
@@ -141,6 +150,13 @@ edit. A failed run can leave the previous successful render pointer in place, so
 use the paths returned for this attempt. If the returned image cannot be
 interpreted, state that visual review is incomplete. Deliver useful editable and
 manufacturing files with specific observations and remaining limitations.
+
+For requested dimensions at a particular location, measure the final STEP with
+`a3d measure MODEL.step --section-z HEIGHT`; repeat the section option as needed.
+For a shape edit, preserve the earlier display GLB before compiling, then use
+`a3d compare BEFORE.glb AFTER.glb --view front` for the same camera and scale.
+Both inputs must share units and coordinates. `references/design-review.md`
+explains the measurement and projected-change limits.
 
 ## Reference images
 

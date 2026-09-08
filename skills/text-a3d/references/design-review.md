@@ -90,6 +90,11 @@ Extract the relationships that shape the result: relative volume, silhouette,
 surface transitions, spacing and integration of secondary forms. Perspective
 references suggest proportions but do not establish exact dimensions.
 
+If full construction is still unresolved, `a3d draft <name>_draft.py` can render
+proposed parts and component envelopes before intent/feature registration. Its
+artifacts are explicitly provisional. Use the arrangement to develop the final
+source and declare the complete functional requirements for `a3d compile`.
+
 Inspect the primary-form preview as soon as it can be rendered. Compare it with
 those relationships and the brief, then change the responsible source parameters
 before adding dependent detail. A list of present components does not establish
@@ -106,3 +111,25 @@ use it as supplemental evidence while retaining the canonical assembly.
 Describe concrete discrepancies and tune the source controls responsible for
 them. Follow the main skill's image-reading instructions and report the visible
 evidence's limitations alongside the actual compile outcome.
+
+For a requested size at a particular location, read the actual STEP section:
+
+```bash
+a3d measure MODEL.step --section-z 0 --section-z 95 --out sections.json
+```
+
+Choose heights from the brief; the numbers above are illustrative. The report
+contains the plane, final outer width/depth, outer-bounds center, material islands
+and inner loops. A finishing operation can change a mouth's final width even when
+the source's end profile still has the requested width. Compare centers in a shared
+frame for lean or offset. A section hole does not prove an insertion path, and a
+finite set of sections does not establish global minimum wall thickness. Python
+callers can query `measure_section` or `measure_step` for other oriented planes.
+
+Preserve the previous display GLB before overwriting build outputs, then compare
+revisions with `a3d compare BEFORE.glb AFTER.glb --view side`. It uses a shared
+orthographic frame without aligning or independently scaling the objects. The
+image shows before/after surfaces and projected occupancy change. Red means
+visible projection present only before; teal means only after. Occluded changes
+may be invisible, and the overlap ratio is not a quality score. Use matching
+semantic assembly GLBs; independently placed print layouts are different frames.

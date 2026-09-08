@@ -68,7 +68,8 @@ class RevisionComparisonTests(unittest.TestCase):
             record = json.loads(result.stdout)
             self.assertEqual(record["before"]["sha256"], hashlib.sha256((root / "before.stl").read_bytes()).hexdigest())
             self.assertEqual(record["preview"]["sha256"], hashlib.sha256(Path(record["preview"]["path"]).read_bytes()).hexdigest())
-            for extra in (["--out", "before.stl"], ["--out", "../escaped.png"], ["--out", "same", "--report", "same"]):
+            (root / "alias.png").hardlink_to(root / "before.stl")
+            for extra in (["--out", "before.stl"], ["--out", "alias.png"], ["--out", "../escaped.png"], ["--out", "same", "--report", "same"]):
                 bad = subprocess.run([*command, *extra], cwd=root, capture_output=True, text=True)
                 self.assertNotEqual(bad.returncode, 0)
 
