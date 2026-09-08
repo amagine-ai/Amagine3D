@@ -50,7 +50,7 @@ the export part list. Develop installation geometry independently of whether a
 reference component is shown. For required installation relationships, declare
 the applicable evidence using `references/installation-checks.md`.
 
-When the main volume or component arrangement is still unresolved, use
+For a new model whose main volume or component arrangement is unresolved, use
 `a3d draft <name>_draft.py` for a provisional preview before full feature
 registration. Query `export_draft`; `examples/installed_module_draft.py` shows
 parts and component envelopes. Reuse the chosen construction in the final build;

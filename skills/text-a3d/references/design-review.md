@@ -90,7 +90,7 @@ Extract the relationships that shape the result: relative volume, silhouette,
 surface transitions, spacing and integration of secondary forms. Perspective
 references suggest proportions but do not establish exact dimensions.
 
-If full construction is still unresolved, `a3d draft <name>_draft.py` can render
+For a new model with unresolved construction, `a3d draft <name>_draft.py` can render
 proposed parts and component envelopes before intent/feature registration. Its
 artifacts are explicitly provisional. Use the arrangement to develop the final
 source and declare the complete functional requirements for `a3d compile`.
