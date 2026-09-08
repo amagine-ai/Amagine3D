@@ -87,17 +87,20 @@ Usage:
   a3d layout BOUNDS.json --profile PROFILE.json [--max-plates N --spacing-mm N --edge-margin-mm N --out PLAN.json]
   a3d scene SCENE.json
   a3d reference IMAGE [--out REPORT.json]
-  a3d draft SOURCE.py [--timeout-seconds 120]
+  a3d draft SOURCE.py [--intent INTENT.json] [--timeout-seconds 120]
   a3d measure MODEL.step [--section-z MM] [--section-x MM] [--section-y MM] [--out FILE]
   a3d compare BEFORE AFTER --view front [--out FILE] [--report FILE]
-  a3d compile SCENE.json --marker FILE --intent INTENT.json --source BUILD.py [--output-dir DIR]
+  a3d compile SCENE.json --intent INTENT.json --source BUILD.py [--output-dir DIR] [--marker FILE]
 
 All paths are resolved inside the current session workspace. Run the generated
 final build source through \`a3d compile\`; do not execute it separately. Concise CAD
-authoring guidance is at $AMAGINE3D_SKILL_DIR/SKILL.md. \`a3d draft\` runs a source
-calling \`export_draft(...)\` for provisional BRep previews before intent and
-feature registration; draft files
-are unvalidated and never replace final compile artifacts or publication.
+authoring guidance is at $AMAGINE3D_SKILL_DIR/SKILL.md. \`a3d draft\` previews a
+BuildSession source before complete intent and feature registration. Use --intent
+for an existing contract-bound source; low-level export_draft remains available.
+Draft files are unvalidated and never replace final artifacts or publication.
+Compile records stable input hashes for each run and owns output freshness.
+No generation marker is required. Optional --marker keeps an existing legacy
+file as provenance only; its timestamp does not authorize or reject inputs.
 
 Diagnostics default to at most 5 issues and 12000 serialized characters.
 Field pages contain JSON text in data (default 2000 UTF-16 code units); follow

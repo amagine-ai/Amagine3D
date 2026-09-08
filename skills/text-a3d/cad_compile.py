@@ -79,7 +79,7 @@ class ConfigurationError(ValueError):
 @dataclass(frozen=True)
 class CompileOptions:
     workspace: Path
-    marker: Path
+    marker: Path | None
     intent: Path
     scene: Path
     source: Path
@@ -331,6 +331,9 @@ def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
     detail_order = ("featureId", "nodeId", "interfaceId", "ownerPartId", "field", "blockedBy",
                     "repairHint", "observed", "expected", "actual")
     for issue, item in shown:
+        boolean_witness = _boolean_witness(issue)
+        if boolean_witness:
+            item["summaryTruncated"] |= not add(item, "booleanWitness", boolean_witness)
         witness = _thickness_witness(issue)
         if witness:
             projected, cut = _project_summary_value(witness)
@@ -379,6 +382,29 @@ def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
             add(summary, key, projected)
             diagnostics["truncated"] |= cut
     return summary
+
+
+def _boolean_witness(issue: dict[str, Any]) -> dict[str, Any]:
+    """Keep one actionable boolean measurement ahead of generic depth limits."""
+    observed = issue.get("observed")
+    witness = observed.get("booleanWitness") if isinstance(observed, dict) else None
+    if not isinstance(witness, dict) or witness.get("operation") not in {"union", "cut"}:
+        return {}
+    keys = ("operation", "coordinateFrame", "units", "ownerPartId", "bodySolidCount",
+            "operandSolidCount", "unconnectedComponentCount", "unresolvedComponentCount",
+            "intersectionVolumeMm3", "removedMm3", "operandInsideOwnerBounds")
+    compact = {key: _project_summary_value(witness[key])[0] for key in keys if key in witness}
+    raw_components = witness.get("components")
+    components = [item for item in raw_components if isinstance(item, dict)] if isinstance(raw_components, list) else []
+    if components:
+        component = components[0]
+        if witness["operation"] == "union":
+            component = next((item for item in components if item.get("connectedToOwner") is False), component)
+        keys = ("solidIndex", "connectedToOwner", "relation", "gapMm", "surfaceDistanceMm",
+                "ownerPointMm", "operandPointMm", "intersectionVolumeMm3", "measurementError")
+        compact["component"] = {key: _project_summary_value(component[key])[0]
+                                for key in keys if key in component}
+    return compact
 
 
 def _thickness_witness(issue: dict[str, Any]) -> dict[str, Any]:
@@ -1424,6 +1450,34 @@ def _current_file_binding(path: Path) -> dict[str, Any] | None:
     }
 
 
+def _compile_input_binding(path: Path, label: str) -> dict[str, Any]:
+    snapshot = _current_file_binding(path)
+    if snapshot is None:
+        raise ConfigurationError(f"{label} input must be a stable regular file: {path}")
+    return {"path": str(path), **snapshot}
+
+
+def _record_changed_inputs(result: dict[str, Any], *, stage: str) -> set[str]:
+    """Bind the run to the bytes selected before execution, not a later rewrite."""
+    changed = set()
+    for label, expected in result["inputBindings"].items():
+        path = Path(expected["path"])
+        current = _current_file_binding(path)
+        before = {key: value for key, value in expected.items() if key != "path"}
+        if current == before:
+            continue
+        changed.add(label)
+        if label == "intent":
+            result["intentRevision"]["verified"] = False
+        _issue(
+            result, code="CONTRACT.INTENT_MUTATED" if label == "intent" else "BUILD.INPUT_CHANGED",
+            stage=stage, message=f"{label} input changed or became unstable during this compile: {path}",
+            repair_hint="Keep the selected inputs unchanged while compile runs, then rerun with the intended files.",
+            details={"field": label, "expected": before, "observed": current},
+        )
+    return changed
+
+
 def _validate_diagnostic_candidate(
     candidate: Any, *, workspace: Path, run_id: str, marker_path: Path,
     expected_inputs: dict[str, tuple[Path, dict | None]], scene_path: Path,
@@ -2093,9 +2147,10 @@ def compile_cad(
     intent_path = _workspace_path(
         workspace, options.intent, "intent", must_exist=True
     )
-    marker_path = _workspace_path(
-        workspace, options.marker, "generation marker", must_exist=True
-    )
+    # Retain old CLI invocations as provenance only. Input timestamps do not
+    # establish authorship; the compiler owns its separate output-attempt marker.
+    marker_path = (_workspace_path(workspace, options.marker, "legacy generation marker", must_exist=True)
+                   if options.marker is not None else None)
     source_path = _workspace_path(
         workspace, options.source, "source", must_exist=True
     )
@@ -2115,6 +2170,8 @@ def compile_cad(
     if not output_dir.is_dir():
         raise ConfigurationError(f"output directory is not a directory: {output_dir}")
 
+    input_bindings = {label: _compile_input_binding(path, label)
+                      for label, path in (("intent", intent_path), ("source", source_path))}
     try:
         intent = _load_json(intent_path, "intent contract")
     except ValueError:
@@ -2136,12 +2193,6 @@ def compile_cad(
         Path(f"{model}_report.json"),
         "build report",
     )
-    marker_mtime_ns = marker_path.stat().st_mtime_ns
-    for label, input_path in (("intent", intent_path), ("source", source_path)):
-        if marker_mtime_ns > input_path.stat().st_mtime_ns:
-            raise ConfigurationError(
-                f"generation marker must predate the {label} input"
-            )
     run_id = str(uuid4())
     attempt_marker_path = output_dir / f".{model}-compile-{run_id}.start"
     attempt_marker_path.write_text(f"compileRunId={run_id}\n", encoding="utf-8")
@@ -2153,11 +2204,13 @@ def compile_cad(
         "inputs": {
             "workspace": str(workspace),
             "intent": str(intent_path),
-            "marker": str(marker_path),
+            "marker": str(marker_path) if marker_path is not None else None,
             "attemptMarker": str(attempt_marker_path),
             "scene": str(scene_path),
             "source": str(source_path),
         },
+        "inputBindings": input_bindings,
+        "inputBindingPolicy": "stable-inputs-per-compile/v1",
         "issues": [],
         "model": model,
         "omittedErrorCount": 0,
@@ -2219,7 +2272,21 @@ def compile_cad(
             )
         return _finish(result, result_path=result_path, log_path=log_path)
 
-    result["intentRevision"] = {"verified": False}
+    diagnostic_input_paths = {"intent": intent_path, "source": source_path,
+                              "profile": _resolve_reference(intent["printability"]["profile"], intent_path.parent, "profile")}
+    profile_path = diagnostic_input_paths["profile"]
+    try:
+        input_bindings["profile"] = _compile_input_binding(profile_path, "profile")
+    except ConfigurationError as error:
+        _issue(result, code="BUILD.INPUT_CHANGED", stage="input-binding", message=error)
+        return _finish(result, result_path=result_path, log_path=log_path)
+    if input_bindings["profile"]["sha256"] != intent["printability"]["profile"]["sha256"]:
+        _issue(result, code="BUILD.INPUT_CHANGED", stage="input-binding",
+               message="profile bytes no longer match the validated intent binding")
+        return _finish(result, result_path=result_path, log_path=log_path)
+    if _record_changed_inputs(result, stage="input-binding"):
+        return _finish(result, result_path=result_path, log_path=log_path)
+
     try:
         history, revision_audit = audit_lineage(workspace, intent_path, intent)
         _write_json(history_path(workspace, model), history)
@@ -2251,10 +2318,10 @@ def compile_cad(
             )
         return _finish(result, result_path=result_path, log_path=log_path)
 
-    intent_digest = _digest(intent_path)
-    diagnostic_input_paths = {"intent": intent_path, "source": source_path,
-                              "profile": _resolve_reference(intent["printability"]["profile"], intent_path.parent, "profile")}
-    diagnostic_inputs = {name: (path, _current_file_binding(path)) for name, path in diagnostic_input_paths.items()}
+    if _record_changed_inputs(result, stage="input-binding"):
+        return _finish(result, result_path=result_path, log_path=log_path)
+    diagnostic_inputs = {name: (path, {key: value for key, value in input_bindings[name].items() if key != "path"})
+                         for name, path in diagnostic_input_paths.items()}
     report_path.unlink(missing_ok=True)
     source_diagnostics_path = output_dir / f".{model}-source-diagnostics-{run_id}.json"
     source_command = _run_with_deadline(
@@ -2280,11 +2347,8 @@ def compile_cad(
         },
     )
     _stage_record(result, "source", source_command)
-    intent_unchanged = intent_path.is_file() and _digest(intent_path) == intent_digest
-    if not intent_unchanged:
-        result["intentRevision"]["verified"] = False
-        _issue(result, code="CONTRACT.INTENT_MUTATED", stage="source",
-               message="Agent-authored source changed the immutable intent contract")
+    changed_inputs = _record_changed_inputs(result, stage="source")
+    intent_unchanged = "intent" not in changed_inputs
     if source_command.timed_out or source_command.returncode != 0:
         structured_errors = 0
         if source_diagnostics_path.exists():
@@ -2332,7 +2396,7 @@ def compile_cad(
             )
         if not _is_deferred_source_failure(source_command, report_path):
             return _finish(result, result_path=result_path, log_path=log_path)
-    if not intent_unchanged:
+    if changed_inputs:
         return _finish(result, result_path=result_path, log_path=log_path)
     if not scene_path.is_file():
         _issue(
@@ -2784,6 +2848,8 @@ def compile_cad(
             message=warning,
         )
 
+    if _record_changed_inputs(result, stage="input-binding"):
+        return _finish(result, result_path=result_path, log_path=log_path)
     freshness_path = output_dir / f"{model}_freshness-audit.json"
     freshness_inputs = _freshness_candidates(
         report_path=report_path,
@@ -2842,6 +2908,7 @@ def compile_cad(
                 stage="freshness",
                 message="; ".join(freshness_errors),
             )
+    _record_changed_inputs(result, stage="input-binding")
     if (
         not any(issue["severity"] == "error" for issue in result["issues"])
         and result.get("omittedErrorCount", 0) == 0
@@ -2896,7 +2963,8 @@ def _positive_timeout(value: str) -> float:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scene", type=Path, help="semantic scene produced by source")
-    parser.add_argument("--marker", required=True, type=Path)
+    parser.add_argument("--marker", type=Path,
+                        help="optional legacy provenance file; its timestamp is not an input freshness requirement")
     parser.add_argument("--intent", required=True, type=Path)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--workspace", type=Path, default=Path("."))

@@ -730,6 +730,48 @@ class CadCompileTests(unittest.TestCase):
             self.assertEqual(summary["issues"][0]["id"], persisted["issues"][0]["id"])
             self.assertEqual(result["issues"][0]["message"], traceback)
 
+    def test_agent_summary_preserves_real_boolean_gap_points_and_component_selection(self):
+        from build123d import Box, Compound, Pos
+        import cad_helpers
+
+        body = Box(10, 10, 10)
+        cases = (
+            (cad_helpers.checked_union, body,
+             Compound(children=[Pos(0, 4.5, 0) * Box(2, 2, 2), Pos(6.05, 0, 0) * Box(2, 2, 2)]),
+             "SOURCE.UNION_DISCONNECTED", 0.05, 1),
+            (cad_helpers.checked_cut, body - Box(6, 6, 6), Box(2, 2, 2),
+             "SOURCE.CUT_MISSED_OWNER", 2.0, 0),
+        )
+        for operation, owner, operand, code, gap, index in cases:
+            with self.subTest(code=code):
+                evidence = cad_helpers._EvidenceState()
+                with cad_helpers._evidence_scope(evidence), mock.patch.dict(
+                        os.environ, {"AMAGINE3D_SOURCE_PHASE": "compile"}):
+                    operation(owner, operand, "feature", part_name="owner")
+                issue = next(item for item in evidence.issues if item["code"] == code)
+                original = json.dumps(issue, sort_keys=True)
+                summary = cad_compile._agent_summary({"issues": [issue], "runId": "boolean-test"})
+                compact = summary["issues"][0]["booleanWitness"]
+                self.assertNotIn("witness", summary["issues"][0])
+                self.assertEqual(compact["coordinateFrame"], "operation-input")
+                self.assertEqual(compact["units"], "mm")
+                self.assertEqual(compact["unconnectedComponentCount"], 1)
+                self.assertEqual(compact["unresolvedComponentCount"], 0)
+                component = compact["component"]
+                self.assertEqual(component["solidIndex"], index)
+                self.assertAlmostEqual(component["gapMm"], gap)
+                self.assertEqual(component["relation"], "disjoint")
+                self.assertFalse(component["connectedToOwner"])
+                points = (component["ownerPointMm"], component["operandPointMm"])
+                self.assertTrue(all(len(point) == 3 for point in points))
+                self.assertAlmostEqual(sum((a-b)**2 for a, b in zip(*points))**0.5, gap)
+                if operation is cad_helpers.checked_cut:
+                    self.assertEqual(compact["removedMm3"], 0)
+                    self.assertEqual(compact["intersectionVolumeMm3"], 0)
+                    self.assertTrue(compact["operandInsideOwnerBounds"])
+                self.assertLessEqual(len(cad_compile._summary_json(summary)), cad_compile.MAX_SUMMARY_CHARS)
+                self.assertEqual(json.dumps(issue, sort_keys=True), original)
+
     def test_agent_summary_preserves_errors_and_groups_repeated_warnings(self) -> None:
         result = {
             "artifacts": {
@@ -2072,10 +2114,11 @@ class CadCompileTests(unittest.TestCase):
                 self.assertEqual(old_pointer.read_bytes(), b"previous successful render")
                 self.assertNotIn("renderEvidence", result["artifacts"])
                 self.assertNotIn("preview", result["artifacts"])
+                expected = ("BUILD.INPUT_CHANGED", "input-binding") if target == "source" else (
+                    "VISUAL.RENDER_EVIDENCE_INVALID", "render")
                 self.assertTrue(
                     any(
-                        issue["code"] == "VISUAL.RENDER_EVIDENCE_INVALID"
-                        and issue["stage"] == "render"
+                        (issue["code"], issue["stage"]) == expected
                         for issue in result["issues"]
                     ),
                     result,
@@ -2315,7 +2358,7 @@ class CadCompileTests(unittest.TestCase):
             result = compile_cad(
                 CompileOptions(
                     workspace=root,
-                    marker=marker,
+                    marker=None,
                     intent=intent,
                     scene=scene,
                     source=source,
@@ -2586,6 +2629,115 @@ class WarningFeedbackTests(unittest.TestCase):
         other.mkdir()
         result, _ = self.run_measurement(self.payload(), workspace=other)
         self.assertEqual(result["warningComparisons"][0]["status"], "first_measurement")
+
+
+class InputProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.intent, _ = write_intent(self.root, part="part", feature_owners={"part-body": "part"},
+                                      dimensions_mm=(40, 30, 20))
+        _localize_profile(self.intent, self.root)
+        self.scene = _write_scene(self.root, self.intent)
+        self.source = self.root / "build.py"
+        self.source.write_text("# test runner supplies real protocol outputs\n")
+        self.profile = self.root / "printer-profile.json"
+        self.report_path, self.report = _minimal_report(
+            self.root, intent_path=self.intent, scene_path=self.scene, source_path=self.source)
+
+    def compile(self, *, marker=None, runner_class=_PassingRunner):
+        self.runner = runner_class(self.root / "part_compile.log", self.report_path, self.report)
+        return compile_cad(CompileOptions(workspace=self.root, marker=marker, intent=self.intent,
+                                         scene=self.scene, source=self.source, output_dir=Path(".")),
+                           runner_factory=lambda _: self.runner)
+
+    def test_old_unchanged_inputs_compile_without_marker_or_with_late_legacy_marker(self):
+        before = {p: cad_compile._current_file_binding(p) for p in (self.intent, self.source, self.profile)}
+        for marker in (None, self.root / ".legacy-marker"):
+            with self.subTest(marker=marker):
+                if marker is not None:
+                    marker.write_text("legacy provenance only")
+                    future = max(p.stat().st_mtime_ns for p in before) + 1_000_000_000
+                    os.utime(marker, ns=(future, future))
+                result = self.compile(marker=marker)
+                self.assertTrue(result["pass"], result)
+                full = json.loads((self.root / "part_compile-result.json").read_text())
+                self.assertEqual(full["inputs"]["marker"], str(marker.resolve()) if marker else None)
+                self.assertNotEqual(full["inputs"]["attemptMarker"], full["inputs"]["marker"])
+                for name, path in (("source", self.source), ("intent", self.intent), ("profile", self.profile)):
+                    self.assertEqual(full["inputBindings"][name], {"path": str(path.resolve()), **before[path]})
+                    self.assertEqual(cad_compile._current_file_binding(path), before[path])
+
+    def test_source_rewrite_cannot_rebind_report_to_different_executed_bytes(self):
+        source = self.source
+        before = _bound(source)
+
+        class MutatingRunner(_PassingRunner):
+            def run(self, stage, argv, **kwargs):
+                if stage == "source":
+                    source.write_text("# replaced after the source began\n")
+                    self.report["inputs"]["source"] = _bound(source, schema="python-source/v1")
+                return super().run(stage, argv, **kwargs)
+
+        result = self.compile(runner_class=MutatingRunner)
+        self.assertFalse(result["pass"])
+        self.assertIn("BUILD.INPUT_CHANGED", [x["code"] for x in result["issues"]])
+        self.assertNotIn("build-check", self.runner.calls)
+        full = json.loads((self.root / "part_compile-result.json").read_text())
+        self.assertEqual(full["inputBindings"]["source"]["sha256"], before["sha256"])
+
+    def test_intent_changed_after_validation_is_rejected_before_lineage_and_source(self):
+        validate = cad_compile.validate_intent
+
+        def validate_then_change(*args, **kwargs):
+            errors = validate(*args, **kwargs)
+            self.assertEqual(errors, [])
+            self.intent.write_bytes(self.intent.read_bytes() + b"\n")
+            return errors
+
+        with mock.patch.object(cad_compile, "validate_intent", side_effect=validate_then_change), \
+                mock.patch.object(cad_compile, "audit_lineage") as audit:
+            result = self.compile()
+        self.assertFalse(result["pass"])
+        issue = next(item for item in result["issues"] if item["code"] == "CONTRACT.INTENT_MUTATED")
+        self.assertEqual(issue["stage"], "input-binding")
+        full = json.loads((self.root / "part_compile-result.json").read_text())
+        self.assertFalse(full["intentRevision"]["verified"])
+        self.assertEqual(self.runner.calls, [])
+        audit.assert_not_called()
+
+    def test_input_changes_during_final_freshness_cannot_publish(self):
+        for name in ("source", "profile"):
+            with self.subTest(input=name):
+                path = getattr(self, name)
+                original = path.read_bytes()
+                pointer = self.root / "part_render.json"
+                pointer.write_text("previous successful preview")
+
+                class MutatingRunner(_PassingRunner):
+                    def run(self, stage, argv, **kwargs):
+                        result = super().run(stage, argv, **kwargs)
+                        if stage == "freshness":
+                            path.write_bytes(original + b"\n")
+                        return result
+
+                result = self.compile(runner_class=MutatingRunner)
+                self.assertFalse(result["pass"])
+                self.assertIn("BUILD.INPUT_CHANGED", [x["code"] for x in result["issues"]])
+                self.assertEqual(pointer.read_text(), "previous successful preview")
+                path.write_bytes(original)
+
+    def test_public_cli_without_marker_reaches_selected_source(self):
+        self.source.write_text("raise RuntimeError('selected source reached')\n")
+        command = subprocess.run(["node", str(ROOT / "bin/a3d.mjs"), "compile", self.scene.name,
+                                  "--intent", self.intent.name, "--source", self.source.name],
+                                 cwd=self.root, text=True, capture_output=True, timeout=30)
+        self.assertEqual(command.returncode, 1)
+        full = json.loads((self.root / "part_compile-result.json").read_text())
+        self.assertIsNone(full["inputs"]["marker"])
+        self.assertIn("SOURCE.EXECUTION_FAILED", [x["code"] for x in full["issues"]])
+        self.assertIn("selected source reached", (self.root / "part_compile.log").read_text())
 
 
 if __name__ == "__main__":
