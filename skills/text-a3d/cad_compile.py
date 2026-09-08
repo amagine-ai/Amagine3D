@@ -30,8 +30,11 @@ import time
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
+import numpy as np
+
 from capability_manifest import build_manifest as build_capability_manifest
 from build_manifest import file_binding_errors
+from coordinate_frames import transform_bounds, validated_rigid_matrix
 from freshness_check import stable_file_snapshot
 from intent_contract import validate as validate_intent
 from intent_revision import IntentRevisionError, audit_lineage, history_path, load_history, semantic_diff
@@ -1704,6 +1707,47 @@ def _capture_thickness_measurements(
         })
 
 
+def _warning_coordinate_matrix(record: dict[str, Any]):
+    context = record.get("context") or {}
+    if not isinstance(context, dict):
+        return None
+    frame = context.get("coordinate_frame") or {}
+    if not isinstance(frame, dict):
+        return None
+    if (frame.get("status") != "bound" or frame.get("part") != record.get("part")
+            or frame.get("name") not in {"part-print", "plate-print"}
+            or not frame.get("artifact_key")):
+        return None
+    # The v1 thickness context uses mm and a unit-scale rigid matrix. Keep any
+    # explicit unit/scale metadata subject to that same contract.
+    if any(item.get("units", "mm") != "mm" or item.get("scale", 1) != 1
+           for item in (context, frame)):
+        return None
+    matrix, _ = validated_rigid_matrix(frame.get("semantic_to_mesh"))
+    if matrix is not None and not np.allclose(matrix[:3, :3].T @ matrix[:3, :3], np.eye(3), rtol=0, atol=1e-7):
+        return None
+    return matrix
+
+
+def _warning_semantic_risk(record: dict[str, Any], matrix):
+    """Normalize the measured point and all risk-AABB corners, never a claimed location."""
+    if matrix is None:
+        return None
+    try:
+        point = np.asarray((record.get("minimumSample") or {}).get("point_mm"), dtype=float)
+        if point.shape != (3,) or not np.isfinite(point).all():
+            return None
+        inverse = np.eye(4)
+        inverse[:3, :3] = matrix[:3, :3].T
+        inverse[:3, 3] = -inverse[:3, :3] @ matrix[:3, 3]
+        values = [inverse[:3, :3] @ point + inverse[:3, 3]]
+        if record.get("riskBoundsMm") is not None:
+            values.append(transform_bounds(record["riskBoundsMm"], inverse).ravel())
+        return np.concatenate(values)
+    except (TypeError, ValueError):
+        return None
+
+
 def _warning_measurement_history(
     result: dict[str, Any], previous: dict[str, Any] | None, *,
     intent_hash: str | None, workspace: str,
@@ -1725,13 +1769,25 @@ def _warning_measurement_history(
         assert record is not None
         old_context = (old or {}).get("context") or {}
         context = (new or {}).get("context") or {}
-        frame = context.get("coordinate_frame", {})
+        old_context = old_context if isinstance(old_context, dict) else {}
+        context = context if isinstance(context, dict) else {}
+        frame = context.get("coordinate_frame") or {}
+        old_frame = old_context.get("coordinate_frame") or {}
+        frame = frame if isinstance(frame, dict) else {}
+        old_frame = old_frame if isinstance(old_frame, dict) else {}
+        old_matrix, matrix = (_warning_coordinate_matrix(item or {}) for item in (old, new))
+        basis_changed = ({key: value for key, value in old_context.items() if key != "coordinate_frame"}
+                         != {key: value for key, value in context.items() if key != "coordinate_frame"})
         reasons = []
         if old and new:
-            if not context or context != old_context:
+            if (not context or basis_changed
+                    or {key: value for key, value in old_frame.items() if key != "semantic_to_mesh"}
+                    != {key: value for key, value in frame.items() if key != "semantic_to_mesh"}):
                 reasons.append("measurement context changed or missing")
-            if frame.get("status") != "bound":
-                reasons.append("coordinate frame is unbound")
+            if old_matrix is None or matrix is None:
+                reasons.append("coordinate frame binding is missing or not a unit-scale rigid mm transform")
+            elif not np.allclose(old_matrix[:3, :3], matrix[:3, :3], rtol=0, atol=1e-8):
+                reasons.append("print rotation changed")
             if (not new.get("part") or frame.get("part") != new.get("part")
                     or not new.get("profileHash") or new.get("expected") is None):
                 reasons.append("part, profile or target binding is missing")
@@ -1742,6 +1798,13 @@ def _warning_measurement_history(
                   else "measured" if comparable else "not_comparable")
         before = (old or {}).get("measurements", {})
         after = (new or {}).get("measurements", {})
+        old_risk, risk = (_warning_semantic_risk(item or {}, transform)
+                          for item, transform in ((old, old_matrix), (new, matrix)))
+        risk_changed = None
+        if comparable and old_risk is not None and risk is not None:
+            # QA reports risk bounds to five decimal places; this is comparison
+            # precision, not a change to any physical audit threshold.
+            risk_changed = old_risk.shape != risk.shape or not np.allclose(old_risk, risk, rtol=0, atol=1e-5)
         comparisons.append({
             "id": identity, "part": record.get("part"), "check": record["check"],
             "status": status, "previousRunId": (old or {}).get("runId"),
@@ -1752,16 +1815,15 @@ def _warning_measurement_history(
             },
             "changes": {
                 "samplingChanged": old.get("sampling") != new.get("sampling") if old and new else None,
-                "riskLocationChanged": ((old.get("minimumSample") or {}).get("point_mm") != (new.get("minimumSample") or {}).get("point_mm")
-                                        or old.get("riskBoundsMm") != new.get("riskBoundsMm")) if old and new else None,
+                "riskLocationChanged": risk_changed,
                 "meshChanged": old["meshHash"] != new["meshHash"] if old and new and old.get("meshHash") and new.get("meshHash") else None,
-                "coordinateFrameChanged": old_context.get("coordinate_frame") != frame if old and new else None,
-                "measurementBasisChanged": ({key: value for key, value in old_context.items() if key != "coordinate_frame"}
-                                            != {key: value for key, value in context.items() if key != "coordinate_frame"}) if old and new else None,
+                "coordinateFrameChanged": old_frame != frame if old and new else None,
+                "translationNormalized": bool(comparable and not np.array_equal(old_matrix[:3, 3], matrix[:3, 3])) if old and new else None,
+                "measurementBasisChanged": basis_changed if old and new else None,
                 "currentCheckStatus": (new or {}).get("status", "not_remeasured"),
                 "notComparableReasons": reasons,
             },
-            "basis": "values=[previous,current,delta]; independent samples, not causal evidence",
+            "basis": "values=[previous,current,delta]; riskLocationChanged uses assembly-semantic (1e-5 mm precision); independent samples, not causal evidence",
         })
     result["warningComparisons"] = comparisons
     # A source/QA failure must not erase the last measured warning or mark it resolved.

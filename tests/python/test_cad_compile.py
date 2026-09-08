@@ -2465,26 +2465,113 @@ class WarningFeedbackTests(unittest.TestCase):
         self.assertEqual(comparison["measurements"]["minimum_mm"], [0.5, 2.5, 2.0])
 
     def test_changed_frame_method_target_profile_or_sampling_policy_is_not_comparable(self):
-        for field in ("frame", "method", "sample_limit", "target", "profile", "unbound"):
+        for field in ("rotation", "matrix_scale", "small_anisotropic_scale", "scale_metadata", "units", "missing_matrix",
+                      "invalid_matrix", "missing_artifact", "missing_frame", "old_missing_matrix",
+                      "malformed_context", "malformed_frame", "method", "sample_limit", "target", "profile", "unbound"):
             with self.subTest(field=field):
-                self.run_measurement(self.payload())
+                previous = self.payload()
+                if field == "old_missing_matrix":
+                    del previous["checks"][0]["observed"]["measurement_context"]["coordinate_frame"]["semantic_to_mesh"]
+                self.run_measurement(previous)
                 changed = self.payload(0.1)
                 context = changed["checks"][0]["observed"]["measurement_context"]
-                if field == "frame":
-                    context["coordinate_frame"]["semantic_to_mesh"][0][3] = 5
+                frame = context["coordinate_frame"]
+                if field == "rotation":
+                    frame["semantic_to_mesh"] = [[0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+                elif field == "matrix_scale":
+                    frame["semantic_to_mesh"][0][0] = 2
+                elif field == "small_anisotropic_scale":
+                    frame["semantic_to_mesh"][0][0] = 1.000001
+                    frame["semantic_to_mesh"][1][1] = 1 / 1.000001
+                elif field == "scale_metadata":
+                    frame["scale"] = 2
+                elif field == "units":
+                    frame["units"] = "m"
+                elif field == "missing_matrix":
+                    del frame["semantic_to_mesh"]
+                elif field == "invalid_matrix":
+                    frame["semantic_to_mesh"][0][3] = float("nan")
+                elif field == "missing_artifact":
+                    del frame["artifact_key"]
+                elif field == "missing_frame":
+                    del context["coordinate_frame"]
+                elif field == "malformed_context":
+                    changed["checks"][0]["observed"]["measurement_context"] = ["invalid"]
+                elif field == "malformed_frame":
+                    context["coordinate_frame"] = ["invalid"]
                 elif field == "unbound":
-                    context["coordinate_frame"]["status"] = "unbound"
+                    frame["status"] = "unbound"
                 elif field in {"method", "sample_limit"}:
                     context[field] = "different"
                 elif field == "target":
                     changed["checks"][0]["expected"]["minimum_local_wall_mm"] = 1.0
-                else:
+                elif field == "profile":
                     changed["printer_profile"]["sha256"] = "other-profile"
                 result, _ = self.run_measurement(changed)
                 comparison = result["warningComparisons"][0]
                 self.assertEqual(comparison["status"], "not_comparable")
                 self.assertIsNone(comparison["measurements"]["minimum_mm"][2])
                 self.assertTrue(comparison["changes"]["notComparableReasons"])
+                self.assertFalse(comparison["changes"]["translationNormalized"])
+                self.assertIsNone(comparison["changes"]["riskLocationChanged"])
+
+    def translate_payload(self, payload, offset):
+        observed = payload["checks"][0]["observed"]
+        matrix = observed["measurement_context"]["coordinate_frame"]["semantic_to_mesh"]
+        point = observed["sampling"]["minimum_sample"]["point_mm"]
+        for axis, distance in enumerate(offset):
+            matrix[axis][3] += distance
+            point[axis] += distance
+            for bound in observed["risk_bounds_mm"]:
+                bound[axis] += distance
+
+    def test_print_translation_preserves_scalar_comparison_and_semantic_risk_location(self):
+        self.run_measurement(self.payload(0.02))
+        changed = self.payload(0.004)
+        self.translate_payload(changed, [-0.00745, -0.00440, 3.0])
+        result, _ = self.run_measurement(changed)
+        comparison = result["warningComparisons"][0]
+        self.assertEqual(comparison["status"], "measured")
+        self.assertEqual(comparison["measurements"]["minimum_mm"], [0.02, 0.004, -0.016])
+        self.assertTrue(comparison["changes"]["coordinateFrameChanged"])
+        self.assertTrue(comparison["changes"]["translationNormalized"])
+        self.assertFalse(comparison["changes"]["measurementBasisChanged"])
+        self.assertFalse(comparison["changes"]["riskLocationChanged"])
+        self.assertEqual(comparison["changes"]["notComparableReasons"], [])
+        compact = cad_compile._agent_summary(result)
+        self.assertEqual(compact["warningComparisons"], result["warningComparisons"])
+        self.assertLessEqual(len(cad_compile._summary_json(compact)), 12000)
+
+    def test_translation_with_same_nonidentity_rotation_uses_semantic_point_and_bounds(self):
+        previous = self.payload()
+        observed = previous["checks"][0]["observed"]
+        observed["measurement_context"]["coordinate_frame"]["semantic_to_mesh"] = [
+            [0, -1, 0, 10], [1, 0, 0, 20], [0, 0, 1, 0], [0, 0, 0, 1]]
+        observed["sampling"]["minimum_sample"]["point_mm"] = [-23.5, 37.2, 94.6]
+        observed["risk_bounds_mm"] = [[-52, 20, 0], [10, 102, 95]]
+        first, _ = self.run_measurement(previous)
+        record = first["warningMeasurements"][0]
+        semantic = cad_compile._warning_semantic_risk(record, cad_compile._warning_coordinate_matrix(record))
+        for actual, expected in zip(semantic, [17.2, 33.5, 94.6, 0, 0, 0, 82, 62, 95]):
+            self.assertAlmostEqual(actual, expected)
+        changed = json.loads(json.dumps(previous))
+        self.translate_payload(changed, [13, -7, 2])
+        result, _ = self.run_measurement(changed)
+        self.assertEqual(result["warningComparisons"][0]["status"], "measured")
+        self.assertFalse(result["warningComparisons"][0]["changes"]["riskLocationChanged"])
+        self.assertTrue(result["warningComparisons"][0]["changes"]["translationNormalized"])
+
+    def test_missing_or_invalid_risk_location_is_unknown_without_hiding_scalar_measurements(self):
+        for point in (None, [1, 2], [float("nan"), 2, 3]):
+            with self.subTest(point=point):
+                self.run_measurement(self.payload())
+                changed = self.payload(0.1)
+                changed["checks"][0]["observed"]["sampling"]["minimum_sample"]["point_mm"] = point
+                result, _ = self.run_measurement(changed)
+                comparison = result["warningComparisons"][0]
+                self.assertEqual(comparison["status"], "measured")
+                self.assertEqual(comparison["measurements"]["minimum_mm"], [0.5, 0.1, -0.4])
+                self.assertIsNone(comparison["changes"]["riskLocationChanged"])
 
     def test_no_cross_model_intent_part_or_workspace_comparison(self):
         self.run_measurement(self.payload())
