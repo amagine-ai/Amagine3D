@@ -158,7 +158,11 @@ def measure_step(path: str | Path, sections: Mapping[str, Plane] | None = None) 
     caller's chosen planes and labels. STEP is imported in millimetres. Python
     build source and intent parameters are never read or executed.
     """
-    path = Path(path).resolve(strict=True)
+    # The session sandbox can allow this file while denying metadata on its
+    # ancestors. Match cad_compile's non-strict resolution, then check the file.
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise ValueError(f"measurement input is not an existing file: {path}")
     if path.suffix.lower() not in {".step", ".stp"}:
         raise ValueError("measurement input must be a STEP/STP file")
     if sections is not None and not isinstance(sections, Mapping):
@@ -196,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Full report path (default: <model-stem>_measurements.json in workspace)")
     args = parser.parse_args(argv)
     try:
-        workspace = args.workspace.resolve(strict=True)
+        workspace = args.workspace.resolve()
         model = _workspace_path(workspace, args.model, "model", must_exist=True)
         output = _workspace_path(workspace, args.out or Path(f"{model.stem}_measurements.json"),
                                  "output", must_exist=False)

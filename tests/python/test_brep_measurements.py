@@ -5,6 +5,7 @@ import io
 import json
 import math
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -235,6 +236,41 @@ class BrepMeasurementsTests(unittest.TestCase):
         full = json.loads(Path(summary["fullResult"]["path"]).read_text())
         self.assertEqual(len(full["sections"]), 10)
         self.assertEqual(full["sections"][-1]["plane"]["origin_mm"][2], 9)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS sandbox")
+    def test_cli_measures_when_sandbox_denies_sessions_parent_metadata(self):
+        sessions = self.work / "sessions"
+        current = sessions / "current"
+        current.mkdir(parents=True)
+        path = current / "box.step"
+        export_step(Box(20, 12, 10), path)
+        (current / "alias.step").symlink_to("box.step")
+        profile = self.work / "sandbox.sb"
+        profile.write_text("\n".join([
+            "(version 1)", "(allow default)",
+            f"(deny file-read-metadata (literal {json.dumps(str(sessions.resolve()))}))",
+        ]))
+        sandbox = ["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable, "-B"]
+        # Prove the sandbox denies the ancestor metadata that strict realpath
+        # needs; a permissive local run would not reproduce this failure.
+        for target in (current, path):
+            probe = subprocess.run(sandbox + ["-c",
+                "from pathlib import Path; import sys; Path(sys.argv[1]).resolve(strict=True)", str(target)],
+                cwd=current, capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(probe.returncode, 0)
+            self.assertIn("PermissionError", probe.stderr)
+            self.assertIn("Operation not permitted", probe.stderr)
+        for value in ("box.step", str(path), "alias.step"):
+            with self.subTest(input=value):
+                result = subprocess.run(sandbox + [measurements.__file__, value, "--workspace", str(current),
+                    "--section-z", "0", "--out", "measurements.json"],
+                    cwd=current, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = json.loads(result.stdout)
+                self.assertEqual(summary["input"]["sha256"], sha256(path.read_bytes()).hexdigest())
+                self.assertAlmostEqual(summary["sections"][0]["outer_envelope"]["width_u_mm"], 20)
+                full_path = Path(summary["fullResult"]["path"])
+                self.assertEqual(summary["fullResult"]["sha256"], sha256(full_path.read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":
