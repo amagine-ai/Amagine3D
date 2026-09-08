@@ -11,8 +11,10 @@ sibling sessions. Use public `a3d` commands and keep source beside artifacts.
 Develop the primary form from the requested product character and use. For
 consumer enclosures and other appearance-led objects, read
 `references/surface-design.md` for shaping volumes, choosing surface controls,
-and integrating details. Choose the construction that gives this design useful
-freedom to evolve.
+and integrating details. Describe the defining contours, surface transitions and
+functional datums in the existing landmarks and acceptance fields. Choose the
+construction that gives these relationships useful freedom to evolve, and carry
+them through changes of representation.
 
 ## Author and build
 

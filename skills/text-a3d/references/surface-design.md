@@ -22,6 +22,10 @@ Guided sections, surface patches or a distance field can give a freeform body
 more local control. `a3d guide strategy` connects these constructions to the
 available BRep and mesh authoring paths.
 
+For one physical part combining a freeform mesh surface with precise interfaces,
+use a mesh master with directly bound BRep additions and cutters. Separate
+dimension-controlled parts can retain their own BRep masters.
+
 For a section-driven surface, let width, depth and section shape develop
 independently along its path. Section centers and orientations can follow a lean,
 an asymmetric grip or a curved spine. Choose the path direction to suit the
@@ -63,11 +67,9 @@ relationships for installed screens.
 
 Where the design includes an interior, develop it from the chosen outer form.
 Give the cavity, rim, floor and local supports dimensions tied to that form and
-the parts they serve. A surface
-offset, a distance-field inset or separately controlled inner profiles offer
-different ways to shape it; measure thickness in the direction the construction
-actually controls. Bind local BRep additions and cutters to the owning mesh body
-to integrate precise interfaces into the material geometry.
+the parts they serve. A surface offset, a distance-field inset or separately
+controlled inner profiles offer different ways to shape it; measure thickness in
+the direction the construction actually controls.
 
 ## Let the preview inform the next edit
 
@@ -76,4 +78,6 @@ the way light moves across the broad surfaces, then tune the source controls tha
 create those effects. Use available views of that same geometry to understand
 the relevant grip, underside or rear detail. If a construction becomes
 awkward to adjust, revisit its profiles, surface boundaries or representation
-with the intended form in mind.
+with the intended form in mind. After a failed operation or change of construction,
+use the original landmarks to develop another way to express the requested form
+and function.

@@ -132,10 +132,11 @@ export class RunSupervisor<T> {
     this.phase = 'finishing';
     this.outcomeValue = outcome;
     this.clearTimers();
+    // A reported failure has already settled the runtime. Aborting afterward can
+    // race with Codex SDK child-process cleanup and emit an unhandled ABORT_ERR.
     if (
       outcome.status === 'cancelled' ||
-      outcome.status === 'timed_out' ||
-      outcome.status === 'failed'
+      outcome.status === 'timed_out'
     ) {
       this.controller.abort(outcome);
     }

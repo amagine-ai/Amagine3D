@@ -59,6 +59,33 @@ test('runtime lifecycle and item events count as progress', () => {
   );
 });
 
+test('reported runtime failures do not abort the settled Codex signal', async () => {
+  const supervisor = new RunSupervisor<string>({
+    hardTimeoutMs: 0,
+    idleTimeoutMs: 0,
+    timeoutMessages: { hard: 'hard', idle: 'idle' },
+  });
+  let runSignal: AbortSignal | undefined;
+
+  await assert.rejects(
+    supervisor.run((signal) => {
+      runSignal = signal;
+      return Promise.reject(new Error('provider failed'));
+    }),
+    /provider failed/u,
+  );
+
+  assert.equal(supervisor.fail('codex_error', 'provider failed'), true);
+  assert.equal(runSignal?.aborted, false);
+  await supervisor.finalize({ status: 'cancelled' }, ({ outcome }) => {
+    assert.deepEqual(outcome, {
+      code: 'codex_error',
+      message: 'provider failed',
+      status: 'failed',
+    });
+  });
+});
+
 test('idle timeout aborts the Codex signal and finalizes once', async () => {
   const supervisor = new RunSupervisor<string>({
     hardTimeoutMs: 500,

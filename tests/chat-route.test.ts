@@ -224,3 +224,75 @@ test('does not require Python for a plain Codex chat turn', async () => {
     await rm(root, { force: true, recursive: true });
   }
 });
+
+test('streams Codex failures without aborting the settled runtime', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-codex-failure-'));
+  await mkdir(join(root, 'workspace', 'sessions', SESSION_ID), {
+    recursive: true,
+  });
+  let signalWasAborted = false;
+  const runtime: CodexRuntimeLike = {
+    configured: true,
+    modelName: 'openai/test-model',
+    runtimeReady: true,
+    skillDiagnostics: [],
+    skills: [],
+    stateRoot: join(root, 'state'),
+    workspaceRoot: join(root, 'workspace'),
+    runTurn: async (request) => {
+      request.signal?.addEventListener(
+        'abort',
+        () => {
+          signalWasAborted = true;
+        },
+        { once: true },
+      );
+      throw new Error(
+        'exceeded retry limit, last status: 429 Too Many Requests',
+      );
+    },
+  };
+  const app = express();
+  app.use(express.json());
+  registerChatRoute(app, {
+    python: { executable: null, ready: false, version: null },
+    runtime,
+    runtimeError: undefined,
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+
+  try {
+    const { port } = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${String(port)}/api/chat`, {
+      body: JSON.stringify({
+        message: '解释 BRep',
+        sessionId: SESSION_ID,
+        taskType: 'chat',
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    });
+    const events = (await response.text())
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as AgentEvent);
+
+    assert.equal(response.status, 200);
+    assert.equal(signalWasAborted, false);
+    const terminal = events.at(-1);
+    assert.equal(terminal?.type, 'error');
+    if (terminal?.type !== 'error') throw new Error('Expected error event.');
+    assert.equal(terminal.code, 'codex_error');
+    assert.equal(
+      terminal.message,
+      'exceeded retry limit, last status: 429 Too Many Requests',
+    );
+    assert.equal(typeof terminal.finishedAt, 'number');
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    await rm(root, { force: true, recursive: true });
+  }
+});
