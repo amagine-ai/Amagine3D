@@ -59,9 +59,11 @@ class CapabilityManifestTests(unittest.TestCase):
             self.assertEqual(item["provider"], "build_session")
             self.assertTrue(item["description"])
         self.assertEqual(manifest["query"]["BuildSession.add"]["parameters"],
-                         ["self", "feature_id", "shape", "min_added_mm3"])
+                         ["self", "feature_id", "shape", "min_added_mm3", "part_name"])
         self.assertEqual(manifest["query"]["BuildSession.cut"]["parameters"],
-                         ["self", "feature_id", "tool", "min_removed_mm3"])
+                         ["self", "feature_id", "tool", "min_removed_mm3", "part_name"])
+        self.assertIn("part_names", manifest["query"]["BuildSession"]["parameters"])
+        self.assertIn("draft_references", manifest["query"]["BuildSession.export"]["parameters"])
         self.assertIn("interfaces", manifest["query"]["BuildSession.export"]["parameters"])
         self.assertEqual({item["name"] for item in manifest["authoring"]["buildSessionHelpers"]}, set(names))
 

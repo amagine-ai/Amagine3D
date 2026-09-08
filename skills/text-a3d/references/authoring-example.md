@@ -25,19 +25,30 @@ at an existing valid profile.
 
 ```bash
 example_name=simple_brep
-a3d mark --mark ".${example_name}.generation-start"
+cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
 a3d profile --machine a1-mini --nozzle 0.4 --tool 0 --out "${example_name}_printer-profile.json"
 cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_intent.py" .
-cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
 python3 "${example_name}_intent.py"
 a3d intent "${example_name}_intent.json"
-a3d compile "${example_name}_scene.json" --marker ".${example_name}.generation-start" --intent "${example_name}_intent.json" --source "${example_name}_build.py" --output-dir .
+a3d compile "${example_name}_scene.json" --intent "${example_name}_intent.json" --source "${example_name}_build.py" --output-dir .
 ```
 
 The intent source writes the target separately. The compiler executes the build
 with the bound intent, scene and output paths in environment variables. The build
 constructs physical objects; its session derives feature evidence and scene nodes
 from those objects, then exports. Inspect the returned preview with `view_image`.
+
+`simple_brep_build.py` declares `part_names`: after copying it, you can already
+run `a3d draft simple_brep_build.py` before creating the intent or profile.
+For the other examples, or any source that reads intent parameters, create the
+intent first and use `a3d draft SOURCE.py --intent INTENT.json`. Draft export is
+isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the same
+geometry source for final compile. A source without intent can declare
+`BuildSession(__file__, part_names=("housing", "cover"))` and use
+`build.add("cover-body", solid, part_name="cover")` (also on `cut`/`observe`).
+Final intent must declare these same parts, features and owners. Pass optional
+preview component envelopes as `build.export(draft_references={"module": solid})`;
+they do not become manufactured parts or final installation evidence.
 
 ## Reuse one feature identity
 

@@ -1,4 +1,4 @@
-"""Build only through a3d compile; intent is authored separately."""
+"""Preview with a3d draft --intent, then compile; intent is authored separately."""
 from build123d import Align, Box, Cylinder, Pos
 from authoring import paired_interface
 from build_session import BuildSession

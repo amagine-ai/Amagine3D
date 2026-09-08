@@ -6,7 +6,7 @@ or geometry.
 
 ## Invocation
 
-Call `a3d compile` with session-relative `marker`, `intent`, `scene`, `source`,
+Call `a3d compile` with session-relative `intent`, `scene`, `source`,
 and `output-dir` paths. This is the only normal compilation entry point. The
 CLI fixes the workspace to the current session directory and invokes the
 managed Python driver without shell interpolation.
@@ -29,15 +29,18 @@ exports `<intent.part>_report.json`: use `export_part` for one printed body,
 color regions inside a body. Genuine STEP masters and their derived STL, GLB
 and 3MF outputs pass through the same public compile boundary.
 
-The external marker must predate the immutable intent and build source. The
-driver creates a separate UUID-bound attempt marker immediately before the
+The driver snapshots the selected source, intent and printer profile by SHA-256,
+size and timestamp before execution, and rejects changes during the run. It
+creates a separate UUID-bound attempt marker immediately before the
 attempt's outputs. After unified build validation, it renders the current
 hash-bound GLB for visual diagnosis. It then runs declared installation checks
 against the final semantic STEP parts, applicable multipart assembly
 checks, per-part and plate STL QA, STEP QA for every genuine STEP, 3MF
 color/package QA, and a final freshness audit over this attempt's outputs.
-Input files are verified by their report SHA-256 bindings and can retain their
-existing timestamps.
+Input files can retain their existing timestamps. There is no manual marker
+step. Optional `--marker FILE` records an existing legacy provenance file without
+using its age to accept or reject inputs. Imported Python dependencies are not
+included in this input snapshot; keep required editable dependencies with source.
 
 The driver has one 5,400-second (90-minute) aggregate compile deadline. Every
 source, QA, render, and freshness subprocess receives the smaller of

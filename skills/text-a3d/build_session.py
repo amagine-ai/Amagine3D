@@ -22,28 +22,64 @@ from intent_contract import feature_owner_map, physical_part_names, validate
 
 
 class BuildSession:
-    """Own intent-defined parts; use finish() to commit edits to copies returned by add/cut/part."""
+    """Build parts in draft or compile; finish() commits edits to returned copies.
+
+    Before intent, declare part_names and pass part_name to multipart add/cut
+    calls. The same source runs through compile after its intent is supplied.
+    """
 
     def __init__(self, source_path: str | Path, *, intent_path: str | Path | None = None,
-                 scene_path: str | Path | None = None, out_dir: str | Path | None = None):
+                 scene_path: str | Path | None = None, out_dir: str | Path | None = None,
+                 part_names: Sequence[str] | None = None):
         self.source_path = Path(source_path).expanduser().resolve()
-        intent = intent_path or os.environ.get("AMAGINE3D_INTENT_PATH")
-        if intent is None:
+        self.is_draft = os.environ.get("AMAGINE3D_SOURCE_PHASE") == "draft"
+        declared = None
+        if part_names is not None:
+            if (isinstance(part_names, (str, bytes)) or not isinstance(part_names, Sequence)
+                    or not part_names or any(not isinstance(name, str) or not name.strip() for name in part_names)
+                    or len(set(part_names)) != len(part_names)):
+                raise AuthoringError("build parts", ["part_names must contain distinct, nonempty part names"])
+            declared = set(part_names)
+        managed_intent = os.environ.get("AMAGINE3D_INTENT_PATH") or None
+        if self.is_draft and intent_path is not None and (
+                managed_intent is None or Path(intent_path).expanduser().resolve() != Path(managed_intent).resolve()):
+            raise AuthoringError("draft intent", [
+                "explicit intent_path must match a3d draft --intent; select the used contract with --intent"])
+        intent = intent_path or managed_intent
+        self.intent_path = None
+        self._intent = None
+        if intent is None and not self.is_draft:
             raise AuthoringError("build session", ["supply intent_path or run through a3d compile"])
-        self.intent_path = Path(intent).expanduser().resolve()
-        try:
-            self._intent = json.loads(self.intent_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            raise AuthoringError("build session", [f"cannot read {self.intent_path}: {error}"]) from error
-        errors = validate(self._intent, self.intent_path.parent)
-        if errors:
-            raise AuthoringError("build session intent", errors)
-        self.name = self._intent["part"]
-        self.out_dir = Path(out_dir or os.environ.get("AMAGINE3D_OUTPUT_DIR", self.source_path.parent)).resolve()
-        self.scene_path = Path(scene_path or os.environ.get(
-            "AMAGINE3D_SCENE_PATH", self.out_dir / f"{self.name}_scene.json")).resolve()
-        self._owners = feature_owner_map(self._intent)
-        self._part_names = physical_part_names(self._intent)
+        if intent is not None:
+            self.intent_path = Path(intent).expanduser().resolve()
+            try:
+                self._intent = json.loads(self.intent_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise AuthoringError("build session", [f"cannot read {self.intent_path}: {error}"]) from error
+            errors = validate(self._intent, self.intent_path.parent)
+            if errors:
+                raise AuthoringError("build session intent", errors)
+            self.name = self._intent["part"]
+            self._owners = feature_owner_map(self._intent)
+            self._part_names = physical_part_names(self._intent)
+            if declared is not None and declared != self._part_names:
+                raise AuthoringError("build parts", [f"part_names must match intent parts: {sorted(self._part_names)}"])
+        else:
+            if declared is None:
+                raise AuthoringError("build session", [
+                    "draft needs BuildSession(..., part_names=(...)); for an existing intent-bound source use a3d draft SOURCE.py --intent INTENT.json"])
+            self.name = self.source_path.stem
+            self._owners, self._part_names = {}, declared
+        if self.is_draft:
+            directory = os.environ.get("AMAGINE3D_DRAFT_DIR")
+            if not directory:
+                raise AuthoringError("build session", ["draft output requires the managed a3d draft run directory"])
+            self.out_dir = Path(directory).resolve()
+            self.scene_path = self.out_dir / "draft-scene.json"
+        else:
+            self.out_dir = Path(out_dir or os.environ.get("AMAGINE3D_OUTPUT_DIR", self.source_path.parent)).resolve()
+            self.scene_path = Path(scene_path or os.environ.get(
+                "AMAGINE3D_SCENE_PATH", self.out_dir / f"{self.name}_scene.json")).resolve()
         self._parts: dict[str, Shape] = {}
         self._features: dict[str, dict[str, Any]] = {}
         self._evidence = cad_helpers._EvidenceState()
@@ -92,13 +128,25 @@ class BuildSession:
             cad_helpers._raise_deferred_source_issues()
         self._commit_evidence(working)
 
-    def _owner_for_new_feature(self, feature_id: str) -> str:
+    def _owner_for_new_feature(self, feature_id: str, part_name: str | None = None) -> str:
         self._check_mutation()
-        if feature_id not in self._owners:
-            raise AuthoringError("build feature", [f"feature {feature_id!r} is not declared in intent"])
+        if part_name is not None and (not isinstance(part_name, str) or not part_name.strip()):
+            raise AuthoringError("build feature", ["part_name must be a nonempty string"])
+        if not isinstance(feature_id, str) or not feature_id.strip():
+            raise AuthoringError("build feature", ["feature ID must be a nonempty string"])
         if feature_id in self._features or feature_id in self._evidence.features:
             raise AuthoringError("build feature", [f"feature {feature_id!r} is already bound"])
-        return self._owners[feature_id]
+        if self._intent is None:
+            owner = part_name or (next(iter(self._part_names)) if len(self._part_names) == 1 else None)
+            if owner not in self._part_names:
+                raise AuthoringError("build feature", [f"supply part_name from {sorted(self._part_names)} for feature {feature_id!r}"])
+            return owner
+        if feature_id not in self._owners:
+            raise AuthoringError("build feature", [f"feature {feature_id!r} is not declared in intent"])
+        owner = self._owners[feature_id]
+        if part_name is not None and part_name != owner:
+            raise AuthoringError("build feature", [f"feature {feature_id!r} belongs to {owner!r} in intent, not {part_name!r}"])
+        return owner
 
     @staticmethod
     def _solid(shape, *, single: bool = False) -> None:
@@ -110,9 +158,10 @@ class BuildSession:
     def _remember(self, feature_id: str, owner: str, role: str, shape: Shape) -> None:
         self._features[feature_id] = {"owner": owner, "role": role, "shape": deepcopy(shape)}
 
-    def add(self, feature_id: str, shape: Shape, *, min_added_mm3: float = 0.001) -> Shape:
+    def add(self, feature_id: str, shape: Shape, *, min_added_mm3: float = 0.001,
+            part_name: str | None = None) -> Shape:
         """Add actual material to its owning part. Returns a copy; submit further edits with finish()."""
-        owner = self._owner_for_new_feature(feature_id)
+        owner = self._owner_for_new_feature(feature_id, part_name)
         snapshot = deepcopy(shape)
         self._solid(snapshot)
         with self._transaction():
@@ -124,9 +173,10 @@ class BuildSession:
         self._parts[owner] = deepcopy(result)
         return self.part(owner)
 
-    def cut(self, feature_id: str, tool: Shape, *, min_removed_mm3: float = 0.001) -> Shape:
+    def cut(self, feature_id: str, tool: Shape, *, min_removed_mm3: float = 0.001,
+            part_name: str | None = None) -> Shape:
         """Cut the owning part and record its effect. Returns a copy; submit further edits with finish()."""
-        owner = self._owner_for_new_feature(feature_id)
+        owner = self._owner_for_new_feature(feature_id, part_name)
         body, snapshot = self.part(owner), deepcopy(tool)
         with self._transaction():
             result = cad_helpers.checked_cut(
@@ -141,7 +191,8 @@ class BuildSession:
             raise AuthoringError("build part", [f"part {part_name!r} has no body; add its solid feature first"])
         return deepcopy(self._parts[part_name])
 
-    def observe(self, feature_id: str, shape: Shape | None = None, *, role: str = "separate") -> None:
+    def observe(self, feature_id: str, shape: Shape | None = None, *, role: str = "separate",
+                part_name: str | None = None) -> None:
         """Bind one solid observation, without adding or removing material.
 
         Omit shape to observe the owning part at this point in construction.
@@ -150,7 +201,7 @@ class BuildSession:
         role="solid" identifies existing material (such as a contained boss)
         for an existing scene contract; it still performs no material union.
         """
-        owner = self._owner_for_new_feature(feature_id)
+        owner = self._owner_for_new_feature(feature_id, part_name)
         if role not in {"separate", "solid"}:
             raise AuthoringError("build observation", ["role must be separate or solid; use cut() for cutters"])
         snapshot = self.part(owner) if shape is None else deepcopy(shape)
@@ -230,14 +281,21 @@ class BuildSession:
                interfaces: Sequence[Mapping[str, Any]] = (), materials: Sequence[Mapping[str, Any]] = (),
                installation_checks: Sequence[Mapping[str, Any]] = (),
                part_options: Mapping[str, Mapping[str, Any]] | None = None,
-               max_overlap_mm3: float = 0.01, part_colors: dict[str, str] | None = None) -> dict[str, Any]:
+               max_overlap_mm3: float = 0.01, part_colors: dict[str, str] | None = None,
+               draft_references: Mapping[str, Shape] | None = None) -> dict[str, Any]:
         """Export the committed parts; submit final shape edits with finish() before this call.
 
         Raw interfaces, installations and part options retain write_scene's
         contract. Final manufactured-part observations are export-local, so
         repeated export neither duplicates evidence nor rewrites cut evidence.
+        In a3d draft, export only the current geometry to its isolated preview.
+        draft_references are preview-only component envelopes; final component
+        display and installation evidence still use the normal scene contracts.
         """
         self._check_mutation()
+        if self.is_draft:
+            from cad_draft import export_draft
+            return export_draft(self._parts, references=draft_references)
         missing = self._part_names - set(self._parts)
         if missing:
             raise AuthoringError("build parts", [f"parts have no geometry: {sorted(missing)}"])

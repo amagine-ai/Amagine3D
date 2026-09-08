@@ -1,4 +1,4 @@
-"""Build only through a3d compile; a BRep loft owns the complete hollow shell."""
+"""Preview with a3d draft --intent, then compile; a BRep loft owns the shell."""
 from build123d import Pos, RectangleRounded, loft
 from build_session import BuildSession
 

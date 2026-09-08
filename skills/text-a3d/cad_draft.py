@@ -1,7 +1,8 @@
-"""Run a draft source that calls export_draft(parts) to preview BRep geometry.
+"""Preview BRep geometry from a BuildSession source before final acceptance.
 
-Use a3d draft for sources that call export_draft. Run an existing BuildSession
-source through a3d compile with its intent, scene and marker.
+Before intent, use BuildSession(..., part_names=(...)) and its normal export().
+For an existing intent-bound source, supply --intent INTENT.json. The same source
+can later run through a3d compile; export_draft(parts) also remains available.
 
 Drafts use the same managed Python, process deadline and workspace path boundary
 as compile. Author source is trusted Python, not an OS-sandboxed program. No
@@ -24,8 +25,9 @@ from cad_compile import CommandRunner, ConfigurationError, _positive_timeout, _w
 
 DRAFT_SCHEMA = "a3d-draft-result/v1"
 GEOMETRY_SCHEMA = "a3d-draft-geometry/v1"
-SOURCE_GUIDANCE = ("Use export_draft(parts) in a draft source. For an existing BuildSession source, "
-                   "use a3d compile with its intent, scene and marker.")
+SOURCE_GUIDANCE = ("Before intent, use BuildSession(..., part_names=(...)) and export(); "
+                   "for an existing intent-bound source, supply --intent INTENT.json. "
+                   "export_draft(parts) is also supported. Final acceptance uses a3d compile.")
 
 
 def _binding(path: Path) -> dict[str, str]:
@@ -33,9 +35,9 @@ def _binding(path: Path) -> dict[str, str]:
 
 
 def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | None = None) -> dict:
-    """Call from a draft source run by a3d draft to preview named BRep parts.
-    Existing BuildSession sources use a3d compile with their intent, scene and
-    marker; draft sources call export_draft(parts).
+    """Call export_draft(parts) from a3d draft to preview named BRep parts.
+    BuildSession.export() uses this same preview path under a3d draft. Neither
+    form bypasses the final intent, source or manufacturing checks in a3d compile.
 
     No intent, features or manufacturing claims are required. All geometry is
     display-only; blue parts and orange references retain their source placement
@@ -97,7 +99,8 @@ def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | No
     return result
 
 
-def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) -> dict:
+def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0,
+              intent: Path | None = None) -> dict:
     """Execute source once in a unique draft directory; never promote its files."""
     workspace = workspace.resolve()
     if not workspace.is_dir():
@@ -106,6 +109,9 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) 
     source = _workspace_path(workspace, source, "draft source", must_exist=True)
     if source.suffix.lower() != ".py":
         raise ConfigurationError("draft source must be a Python file")
+    if intent is not None:
+        intent = _workspace_path(workspace, intent, "draft intent", must_exist=True)
+    intent_binding = _binding(intent) if intent is not None else None
     drafts = _workspace_path(workspace, Path(".amagine3d-drafts"), "draft output", must_exist=False)
     run_id = str(uuid4())
     output = drafts / run_id
@@ -116,12 +122,14 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) 
               "runId": run_id, "source": source_binding, "result": str(output / "draft-result.json"),
               "artifacts": {}, "issues": [],
               "limitations": ["Provisional geometry only; intent, feature acceptance, installation and print QA have not run."]}
+    if intent_binding is not None:
+        result["intent"] = intent_binding
     runner = CommandRunner(log)
     command = runner.run(
         "draft-source", [sys.executable, str(source)], cwd=workspace, timeout_seconds=timeout_seconds,
         env_extra={"AMAGINE3D_SOURCE_PHASE": "draft", "AMAGINE3D_DRAFT_DIR": str(output),
                    "AMAGINE3D_DRAFT_RUN_ID": run_id, "AMAGINE3D_OUTPUT_DIR": str(output),
-                   "AMAGINE3D_INTENT_PATH": "", "AMAGINE3D_SCENE_PATH": "",
+                   "AMAGINE3D_INTENT_PATH": str(intent) if intent is not None else "", "AMAGINE3D_SCENE_PATH": "",
                    "AMAGINE3D_COMPILE_RUN_ID": "", "AMAGINE3D_SOURCE_DIAGNOSTICS_PATH": "",
                    "PYTHONDONTWRITEBYTECODE": "1",
                    "PYTHONPATH": str(Path(__file__).resolve().parent) + os.pathsep + os.environ.get("PYTHONPATH", "")},
@@ -138,6 +146,8 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) 
         try:
             if _binding(source) != source_binding:
                 raise ValueError("draft source changed during execution")
+            if intent is not None and _binding(intent) != intent_binding:
+                raise ValueError("draft intent changed during execution")
             manifest = json.loads((output / "draft-geometry.json").read_text())
             if (not isinstance(manifest, dict) or manifest.get("schema") != GEOMETRY_SCHEMA
                     or manifest.get("status") != "draft" or manifest.get("runId") != run_id
@@ -162,11 +172,13 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0) 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
+    parser.add_argument("--intent", type=Path, help="Existing contract for an intent-bound BuildSession source")
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--timeout-seconds", type=_positive_timeout, default=120.0)
     args = parser.parse_args(argv)
     try:
-        result = run_draft(args.source, workspace=args.workspace, timeout_seconds=args.timeout_seconds)
+        result = run_draft(args.source, workspace=args.workspace, timeout_seconds=args.timeout_seconds,
+                           intent=args.intent)
     except (ConfigurationError, OSError) as error:
         print(json.dumps({"schema": DRAFT_SCHEMA, "status": "failed", "deliveryReady": False, "error": str(error)}))
         return 2

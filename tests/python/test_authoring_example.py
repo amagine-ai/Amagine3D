@@ -31,15 +31,29 @@ class PublicAuthoringExampleTests(unittest.TestCase):
             def run(*args):
                 result = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, timeout=120)
                 self.assertEqual(result.returncode, 0, result.stdout[-5000:] + result.stderr[-1000:])
+                return result
 
             cli = str(ROOT / "bin" / "a3d")
-            run(cli, "mark", "--mark", f".{example_name}.generation-start")
             run(cli, "profile", "--machine", "a1-mini", "--nozzle", "0.4", "--tool", "0", "--out", f"{example_name}_printer-profile.json")
             for name in (f"{example_name}_intent.py", f"{example_name}_build.py"):
                 shutil.copyfile(SKILL / "examples" / name, work / name)
+            source = work / f"{example_name}_build.py"
+            source_hash = sha256(source.read_bytes()).hexdigest()
+            draft = None
+            if example_name == "simple_brep":
+                draft = json.loads(run(cli, "draft", source.name).stdout)
+                self.assertFalse((work / f"{example_name}_intent.json").exists())
             run(sys.executable, f"{example_name}_intent.py")
             run(cli, "intent", f"{example_name}_intent.json")
-            run(cli, "compile", f"{example_name}_scene.json", "--marker", f".{example_name}.generation-start", "--intent", f"{example_name}_intent.json", "--source", f"{example_name}_build.py", "--output-dir", ".")
+            if example_name == "installed_module":
+                draft = json.loads(run(cli, "draft", source.name, "--intent", f"{example_name}_intent.json").stdout)
+            if draft is not None:
+                self.assertEqual(draft["status"], "draft")
+                self.assertFalse(draft["deliveryReady"])
+                self.assertFalse(list(work.glob("*_report.json")))
+                self.assertFalse(list(work.glob("*_scene.json")))
+            run(cli, "compile", f"{example_name}_scene.json", "--intent", f"{example_name}_intent.json", "--source", source.name, "--output-dir", ".")
+            self.assertEqual(sha256(source.read_bytes()).hexdigest(), source_hash)
             yield work
 
     def test_example_compiles_with_measured_interface_and_five_views(self):
@@ -198,7 +212,7 @@ class PublicAuthoringExampleTests(unittest.TestCase):
             self.assertEqual(sha256(intent_path.read_bytes()).hexdigest(), intent_hash)
             result = subprocess.run(
                 [str(ROOT / "bin" / "a3d"), "compile", scene_path.name,
-                 "--marker", ".surface_shell.generation-start", "--intent", intent_path.name,
+                 "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
                 capture_output=True, text=True, timeout=120,

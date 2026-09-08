@@ -120,7 +120,7 @@ class CadDraftTests(unittest.TestCase):
 
     def test_empty_source_and_non_solid_geometry_cannot_claim_preview(self):
         for source in ("x = 1\n", "from build123d import Rectangle\nfrom cad_draft import export_draft\nexport_draft({'face': Rectangle(5, 5)})\n",
-                       (SKILL / "examples/simple_brep_build.py").read_text()):
+                       "from build_session import BuildSession\nbuild = BuildSession(__file__)\n"):
             with self.subTest(source=source):
                 self.source(source)
                 command = self.cli("draft", "draft.py")
@@ -151,7 +151,6 @@ class CadDraftTests(unittest.TestCase):
         self.assertEqual(command.returncode, 1)
         self.assertEqual(result["issues"][0]["code"], "DRAFT.SOURCE_FAILED")
         self.assertIn("RuntimeError: unfinished source", result["issues"][0]["detail"])
-        self.assertIn("For an existing BuildSession source", result["issues"][0]["repairHint"])
         self.assertIn("RuntimeError: unfinished source", Path(result["log"]["path"]).read_text())
         self.assertEqual(result["artifacts"], {})
         self.assertTrue((Path(result["result"]).parent / "draft-preview.png").is_file())
@@ -165,6 +164,57 @@ class CadDraftTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["code"], "DRAFT.INCOMPLETE")
         self.assertNotIn("repairHint", result["issues"][0])
         self.assertEqual(result["artifacts"], {})
+
+    def test_intent_option_is_bounded_and_input_mutation_rejects_preview(self):
+        intent, _ = write_intent(self.workspace, part="body", feature_owners={"body": "body"})
+        source = self.source('''from build123d import Box
+from build_session import BuildSession
+from pathlib import Path
+import os
+build = BuildSession(__file__)
+build.add("body", Box(10, 10, 10))
+build.export()
+p = Path(os.environ["AMAGINE3D_INTENT_PATH"])
+p.write_text(p.read_text() + " ")
+''')
+        before = sha256(intent.read_bytes()).hexdigest()
+        command = self.cli("draft", source.name, "--intent", intent.name)
+        self.assertEqual(command.returncode, 1, command.stdout + command.stderr)
+        result = json.loads(command.stdout)
+        self.assertEqual(result["intent"]["sha256"], before)
+        self.assertEqual(result["issues"][0]["code"], "DRAFT.INCOMPLETE")
+        self.assertIn("intent changed", result["issues"][0]["message"])
+        self.assertEqual(result["artifacts"], {})
+        outside = self.workspace.parent / f"{self.workspace.name}-intent.json"
+        outside.write_text(intent.read_text())
+        self.addCleanup(outside.unlink)
+        (self.workspace / "outside-intent.json").symlink_to(outside)
+        count = len(list((self.workspace / ".amagine3d-drafts").iterdir()))
+        for path in (outside, "outside-intent.json"):
+            command = self.cli("draft", source.name, "--intent", path)
+            self.assertEqual(command.returncode, 2, command.stdout + command.stderr)
+        self.assertEqual(len(list((self.workspace / ".amagine3d-drafts").iterdir())), count)
+
+    def test_explicit_session_intent_must_match_the_managed_binding(self):
+        intent, _ = write_intent(self.workspace, part="body", feature_owners={"body": "body"})
+        (self.workspace / "different.json").write_bytes(intent.read_bytes())
+        self.source('''from build123d import Box
+from build_session import BuildSession
+build = BuildSession(__file__, intent_path="different.json")
+build.add("body", Box(10, 10, 10))
+build.export()
+''')
+        for arguments in ((), ("--intent", intent.name)):
+            command = self.cli("draft", "draft.py", *arguments)
+            self.assertEqual(command.returncode, 1, command.stdout + command.stderr)
+            result = json.loads(command.stdout)
+            self.assertEqual(result["artifacts"], {})
+            self.assertIn("explicit intent_path must match", result["issues"][0]["detail"])
+        command = self.cli("draft", "draft.py", "--intent", "different.json")
+        self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
+        result = json.loads(command.stdout)
+        self.assertEqual(result["status"], "draft")
+        self.assertEqual(result["intent"]["path"], str((self.workspace / "different.json").resolve()))
 
     def test_draft_api_and_incomplete_contract_cannot_enter_final_compile(self):
         marker = self.workspace / ".start"

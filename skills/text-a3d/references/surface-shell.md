@@ -22,13 +22,12 @@ construction when profiles become unstable.
 Copy the two files into the current session workspace, then use the public path:
 
 ```bash
-a3d mark --mark .surface_shell.generation-start
 a3d profile --machine a1-mini --nozzle 0.4 --tool 0 --out surface_shell_printer-profile.json
 cp "$AMAGINE3D_SKILL_DIR/examples/surface_shell_intent.py" .
 cp "$AMAGINE3D_SKILL_DIR/examples/surface_shell_build.py" .
 python3 surface_shell_intent.py
 a3d intent surface_shell_intent.json
-a3d compile surface_shell_scene.json --marker .surface_shell.generation-start --intent surface_shell_intent.json --source surface_shell_build.py --output-dir .
+a3d compile surface_shell_scene.json --intent surface_shell_intent.json --source surface_shell_build.py --output-dir .
 ```
 
 The intent is written once; the compiler executes the build source. Its

@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import runpy
 import sys
 import tempfile
 import unittest
@@ -140,6 +141,85 @@ class BuildSessionTests(unittest.TestCase):
                     self.assertEqual(json.loads(output.getvalue())["issues"][0]["code"], "SOURCE.CUT_MISSED_OWNER")
                 build.cut("pocket", self.pocket())
                 self.assertAlmostEqual(build.part("unit-q").volume, 992)
+
+    def test_same_source_previews_without_intent_then_exports_with_contract(self):
+        from cad_draft import run_draft
+
+        source = self.work / "geometry.py"
+        source.write_text('''from build123d import Box, Pos
+from build_session import BuildSession
+build = BuildSession(__file__, part_names=("unit-q",))
+build.add("body", Box(10, 10, 10))
+build.cut("pocket", Pos(0, 0, 5) * Box(2, 2, 4))
+build.export()
+''')
+        source_bytes = source.read_bytes()
+        draft = run_draft(source, workspace=self.work)
+        self.assertEqual((draft["status"], draft["deliveryReady"]), ("draft", False))
+        self.assertNotIn("intent", draft)
+        self.assertAlmostEqual(import_step(draft["artifacts"]["step"]["path"]).volume, 992, places=5)
+        self.assertFalse((self.work / "unit-q_report.json").exists())
+        final = self.session("final")
+        with patch.dict(os.environ, {
+            "AMAGINE3D_INTENT_PATH": str(final.intent_path),
+            "AMAGINE3D_OUTPUT_DIR": str(final.out_dir),
+        }), redirect_stdout(io.StringIO()):
+            runpy.run_path(str(source), run_name="__main__")
+        self.assertEqual(source.read_bytes(), source_bytes)
+        self.assertAlmostEqual(import_step(final.out_dir / "unit-q.step").volume, 992, places=5)
+        self.assertTrue((final.out_dir / "unit-q_report.json").is_file())
+
+    def test_draft_multipart_owners_and_incomplete_layout_remain_provisional(self):
+        from cad_draft import run_draft
+
+        source = self.work / "layout.py"
+        source.write_text('''from build123d import Box, Pos
+from build_session import BuildSession
+build = BuildSession(__file__, part_names=("base", "lid"))
+build.add("plate", Box(20, 12, 3), part_name="base")
+build.cut("slot", Pos(0, 0, 1) * Box(2, 4, 4), part_name="base")
+build.add("lid-body", Pos(0, 0, 8) * Box(20, 12, 2), part_name="lid")
+build.export(draft_references={"module": Pos(0, 0, 4) * Box(4, 4, 2)})
+''')
+        result = run_draft(source, workspace=self.work)
+        self.assertEqual(result["status"], "draft")
+        self.assertEqual({o["name"] for o in result["objects"]}, {"base", "lid", "module"})
+        self.assertEqual(len(import_step(result["artifacts"]["step"]["path"]).solids()), 3)
+        with self.assertRaises(AuthoringError):
+            BuildSession(source, part_names=("base", "lid"))
+        with patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": "draft", "AMAGINE3D_DRAFT_DIR": str(self.work / "manual")}):
+            build = BuildSession(source, part_names=("base", "lid"))
+            with self.assertRaises(AuthoringError):
+                build.add("ambiguous", Box(1, 1, 1))
+            with self.assertRaises(AuthoringError):
+                build.add("unknown", Box(1, 1, 1), part_name="other")
+            self.assertFalse(build._parts)
+
+    def test_intent_bound_source_draft_forces_isolated_output_and_final_owner_is_strict(self):
+        from cad_draft import run_draft
+
+        fixture = self.session("bound")
+        source = fixture.out_dir / "build.py"
+        source.write_text(f'''from build123d import Box, Pos
+from build_session import BuildSession
+build = BuildSession(__file__, out_dir={str(fixture.out_dir)!r}, scene_path={str(fixture.scene_path)!r})
+build.add("body", Box(10, 10, 10))
+build.cut("pocket", Pos(0, 0, 5) * Box(2, 2, 4))
+build.export()
+''')
+        final_paths = [fixture.scene_path, fixture.out_dir / "unit-q.step", fixture.out_dir / "unit-q_report.json"]
+        for p in final_paths:
+            p.write_bytes(b"existing-final")
+        result = run_draft(source, workspace=fixture.out_dir, intent=fixture.intent_path)
+        self.assertEqual(result["status"], "draft")
+        self.assertEqual(result["intent"]["path"], str(fixture.intent_path))
+        self.assertTrue(all(p.read_bytes() == b"existing-final" for p in final_paths))
+        self.assertFalse((Path(result["result"]).parent / "draft-scene.json").exists())
+        with self.assertRaises(AuthoringError):
+            BuildSession(source, intent_path=fixture.intent_path, part_names=("different",))
+        with self.assertRaises(AuthoringError):
+            fixture.add("body", Box(10, 10, 10), part_name="different")
+        self.assertFalse(fixture._parts)
 
     def test_implementation_finish_id_keeps_real_evidence_without_new_contract_feature(self):
         build = self.session()

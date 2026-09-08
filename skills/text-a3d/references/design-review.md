@@ -90,10 +90,11 @@ Extract the relationships that shape the result: relative volume, silhouette,
 surface transitions, spacing and integration of secondary forms. Perspective
 references suggest proportions but do not establish exact dimensions.
 
-For a new model with unresolved construction, `a3d draft <name>_draft.py` can render
-proposed parts and component envelopes before intent/feature registration. Its
-artifacts are explicitly provisional. Use the arrangement to develop the final
-source and declare the complete functional requirements for `a3d compile`.
+For a new model with unresolved construction, `a3d draft <name>_build.py` previews
+the same BuildSession source before intent/feature registration when it declares
+part names. For an existing contract-bound source, supply `--intent INTENT.json`.
+Draft artifacts are provisional; retain the chosen geometry and declare the
+complete functional requirements for final `a3d compile`.
 
 Inspect the primary-form preview as soon as it can be rendered. Compare it with
 those relationships and the brief, then change the responsible source parameters

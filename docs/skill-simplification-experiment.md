@@ -253,7 +253,7 @@
 - 另做每臂 840 条 BRep 法向材料弦检查。基线最短 **0.68133 mm** 位于脚部；候选 839 条有效、1 条跳过，其中 **26 条低于 2 mm**，最短 **1.55602 mm** 位于口缘。已在最短点的进入和退出前后做独立实体分类，确认是真实短材料跨度；不能用 X 向外/内宽差的一半约 5.58 mm 将它否定。
 - 中央及附近 5 条竖线量得腔底由 **3.5** 变为 **4.0 mm**，这些位置上方到杯口没有材料阻挡。它们是有限通路检查，截面一个孔也不是全腔贯通证明。
 
-因此本轮不能把“脚缘修好”推广成“模型质量已提升并合格”：口宽仍有误差，新的口缘短材料段不满足 2 mm 要求，两臂都没有完成交付。证据：[最终执行流程](../workspace/skill-ab-v6/inspection/cup-process-final.md)、[调用、反馈采用及工件绑定](../workspace/skill-ab-v6/inspection/cup-process-conclusions.json)、[独立成品复核](../workspace/skill-ab-v6/inspection/cup-independent-review.md)、[口缘最短点实体核验](../workspace/skill-ab-v6/inspection/measurements/desk-cup-d144c98d6e4c/rim-minimum-verification.json)。
+当时据此判定口缘不满足 2 mm；**本轮方法审计撤回这一单凭短材料弦作出的壁厚判定**，见下文第 7 轮的方法更正。口宽误差及未完成交付的结论不变，仍不能把“脚缘修好”推广成“模型质量已提升并合格”。证据：[最终执行流程](../workspace/skill-ab-v6/inspection/cup-process-final.md)、[调用、反馈采用及工件绑定](../workspace/skill-ab-v6/inspection/cup-process-conclusions.json)、[独立成品复核](../workspace/skill-ab-v6/inspection/cup-independent-review.md)、[口缘最短点实体核验](../workspace/skill-ab-v6/inspection/measurements/desk-cup-d144c98d6e4c/rim-minimum-verification.json)。
 
 ### 后冻结修正：允许一致口径下的纯打印平移
 
@@ -305,3 +305,23 @@ v6 修形前后的打印变换只从平移 **[41.06244, 31.05869, 0]** 变为 **
 主 SKILL 由 199 行变为 215 行，工具代码及维护成本增加。新增功能保留为按需调用的实验能力；关键修复放在确定性工具及就近帮助中。当前证据仍显示，合同/时序返工、实体连接、装配构造与对测量含义的判断会决定最终结果，增加规则条目不能替代这些判断。
 
 全部实现与说明保留在 `codex/skill-simplification` 的独立 worktree，相关工具修复、接口说明和评估报告分别提交，原工作区未合并。可根据这些证据分别取用和回退，无须一次接受全部实验接口。
+
+
+## 第 7 轮：先修复已复现的建模阻碍，再做冻结验证（进行中）
+
+本轮基线固定为 `b8486d110ce9d8c6cd681b6982a3d641bb4a37a9`。开发只使用已经暴露的杯子和外壳；新的四任务、每任务两次重复的配对验收在候选冻结前封存，主指标、失败处理与停止规则见 [预注册](../workspace/quality-evaluation-v1/preregistration.md)。尚未取得新一轮模型质量提升证据。
+
+### 测量解释更正
+
+v6 口缘 **1.55602 mm** 是有效的材料弦，退出点位于 z=95 的顶部端面；它没有证明射线两端是一对相对内外壁。独立已知 **3 mm** 的平行斜壁加 0.5 mm 端口圆角，也会在靠近开口处产生 **1.83848 / 1.41421 mm** 的端面截断弦，而中部实测为 3 mm。因此不能把所有短弦直接判成侧壁不达 2 mm。
+
+真实 1.5 mm 薄斜壁和外伸薄楔的阳性对照仍被测出。这里修正的是物理量解释，**2 mm 壁厚与 3 mm 底板要求未变**；所有 v6 原始 STEP、点位和测量数值保留。该更正也不自动证明 v6 候选口缘或全局壁厚合格。应区分相对壁、底板、端口终止与外薄片，结合实际面片和材料见证段判断；无法分类的项记未定。证据：[方法审计及解析 BRep 对照](../workspace/quality-evaluation-v1/method-audit/measurement-review.md)。
+
+### 本轮候选干预
+
+- **同一份几何源从预览进入正式编译。** `BuildSession(part_names=...)` 可在完整 intent 之前建实体并 `export()` 预览；已有合同的源码使用 `draft --intent`。正式编译仍核对完整部件/特征/所有者及全部验收。显式 intent 必须与托管草模选择一致，预览输出强制隔离，草模不能替代正式交付。
+- **去掉手工输入时间戳门槛。** 编译按本次 runId 记录 source/intent/profile 的稳定 SHA、大小和时间，并在执行、QA 后复核；输出仍使用本次自动 marker 和完整绑定核验。旧 `--marker` 可作为出处保留，其年龄不决定输入有效性。任意 Python 导入依赖尚不在输入快照覆盖范围。
+- **布尔失败返回实际空间证据。** 对 union 的每个 operand 组件区分连接/交集/表面距离/间隙，返回最近点和 bounds；compact 优先显示断开的组件。相同失败源码重放仍保留原错误码，分别测得 21.9、0.05、0.7 mm 间隙。不会用包围盒或零移除量冒称某个历史切刀的归因。
+- **入口调整为先主体，再合同，再按需专题。** 主入口从 215 行 / 12,307 字节变为 169 行 / 9,423 字节；保留实用功能、打印体积、装入/支撑/保留、独立实物测量和意图版本要求。这个尺寸变化只是上下文成本数据，不作为质量提高证据。
+
+确定性证据：[布尔失败重放](../workspace/quality-v7-audit/connection-audit/verification.json)、[连续两次无手工 marker 编译](../workspace/flow-audit/hash-provenance-01/summary.json)。公共示例回归验证单件草模→同源正式编译，以及已有 intent 的两件模块装配预览→正式安装、螺钉和打印验收；正式源码字节保持一致。
