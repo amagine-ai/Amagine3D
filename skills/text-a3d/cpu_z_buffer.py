@@ -414,11 +414,19 @@ def _render_internal(
     height: int,
     pool: BufferPool,
     background: tuple[int, int, int],
+    frame_bounds: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> ViewRender:
     started = time.perf_counter()
     right, up, eye = _camera_basis(view)
     basis = np.column_stack((right, up, eye))
     bounds = np.asarray([item.mesh.bounds for item in meshes], dtype=np.float64)
+    if frame_bounds is not None:
+        frame = np.asarray(frame_bounds, dtype=np.float64)
+        if frame.shape != (2, 3) or not np.isfinite(frame).all() or np.any(frame[1] < frame[0]):
+            raise ValueError("frame bounds must be finite ordered 3D corners")
+        if np.any(bounds[:, 0] < frame[0] - 1e-8) or np.any(bounds[:, 1] > frame[1] + 1e-8):
+            raise ValueError("frame bounds must contain every rendered mesh")
+        bounds = frame[None, :, :]
     world_center = (bounds[:, 0].min(axis=0) + bounds[:, 1].max(axis=0)) / 2.0
     camera_vertices = [
         np.einsum(
@@ -434,6 +442,15 @@ def _render_internal(
     camera_high = np.max(
         np.asarray([vertices.max(axis=0) for vertices in camera_vertices]), axis=0
     )
+    if frame_bounds is not None:
+        # Both revisions use these same world-space corners. Never independently
+        # recenter or rescale them: that would conceal size and placement edits.
+        corners = np.asarray([
+            (x, y, z)
+            for x in frame[:, 0] for y in frame[:, 1] for z in frame[:, 2]
+        ])
+        projected_frame = (corners - world_center) @ basis
+        camera_low, camera_high = projected_frame.min(axis=0), projected_frame.max(axis=0)
     screen_low = camera_low[:2]
     screen_high = camera_high[:2]
     screen_center = (screen_low + screen_high) / 2.0
@@ -580,6 +597,7 @@ def render_view(
     limits: RenderLimits = RenderLimits(),
     pool: BufferPool | None = None,
     background: tuple[int, int, int] = BACKGROUND,
+    frame_bounds: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> ViewRender:
     output_height = height if height is not None else width
     _validate_request(meshes, width, output_height, supersample, limits)
@@ -591,6 +609,7 @@ def render_view(
         output_height * supersample,
         render_pool,
         background,
+        frame_bounds,
     )
     if supersample == 1:
         return result
