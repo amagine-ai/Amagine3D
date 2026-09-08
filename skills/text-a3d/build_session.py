@@ -22,7 +22,7 @@ from intent_contract import feature_owner_map, physical_part_names, validate
 
 
 class BuildSession:
-    """Build intent-owned parts with copy isolation and explicit final edits."""
+    """Own intent-defined parts; use finish() to commit edits to copies returned by add/cut/part."""
 
     def __init__(self, source_path: str | Path, *, intent_path: str | Path | None = None,
                  scene_path: str | Path | None = None, out_dir: str | Path | None = None):
@@ -111,7 +111,7 @@ class BuildSession:
         self._features[feature_id] = {"owner": owner, "role": role, "shape": deepcopy(shape)}
 
     def add(self, feature_id: str, shape: Shape, *, min_added_mm3: float = 0.001) -> Shape:
-        """Start an owning part or measure an actual connected material union."""
+        """Add actual material to its owning part. Returns a copy; submit further edits with finish()."""
         owner = self._owner_for_new_feature(feature_id)
         snapshot = deepcopy(shape)
         self._solid(snapshot)
@@ -125,7 +125,7 @@ class BuildSession:
         return self.part(owner)
 
     def cut(self, feature_id: str, tool: Shape, *, min_removed_mm3: float = 0.001) -> Shape:
-        """Bind the actual cutter and retain checked_cut's measured effect."""
+        """Cut the owning part and record its effect. Returns a copy; submit further edits with finish()."""
         owner = self._owner_for_new_feature(feature_id)
         body, snapshot = self.part(owner), deepcopy(tool)
         with self._transaction():
@@ -231,7 +231,7 @@ class BuildSession:
                installation_checks: Sequence[Mapping[str, Any]] = (),
                part_options: Mapping[str, Mapping[str, Any]] | None = None,
                max_overlap_mm3: float = 0.01, part_colors: dict[str, str] | None = None) -> dict[str, Any]:
-        """Derive scene bindings and export copies through the existing backend.
+        """Export the committed parts; submit final shape edits with finish() before this call.
 
         Raw interfaces, installations and part options retain write_scene's
         contract. Final manufactured-part observations are export-local, so
