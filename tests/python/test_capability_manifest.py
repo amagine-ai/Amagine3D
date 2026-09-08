@@ -18,6 +18,7 @@ if str(SKILL) not in sys.path:
 
 import capability_manifest  # noqa: E402
 import capability_registry  # noqa: E402
+import intent_contract  # noqa: E402
 
 
 class CapabilityManifestTests(unittest.TestCase):
@@ -25,7 +26,7 @@ class CapabilityManifestTests(unittest.TestCase):
         completed = subprocess.run(
             [sys.executable, "-c", (
                 "import json, sys; import capability_manifest; "
-                "result = capability_manifest.build_manifest(['Cylinder', 'RectangleRounded', 'extrude', 'Pos', 'Rot', 'MM']); "
+                "result = capability_manifest.build_manifest(['Cylinder', 'RectangleRounded', 'extrude', 'Pos', 'Rot', 'MM', 'write_intent']); "
                 "assert 'build123d' not in sys.modules; "
                 "assert not any(name.startswith('OCP') for name in sys.modules); "
                 "print(json.dumps(result['query']))"
@@ -43,6 +44,34 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertTrue(all(item.startswith("Rot(") for item in query["Rot"]["overloadSignatures"]))
         self.assertTrue(query["MM"]["available"])
         self.assertNotIn("signature", query["MM"])
+        self.assertIn("inputConstraints", query["write_intent"])
+
+    def test_intent_query_exposes_nested_constraints_without_growing_other_queries(self):
+        manifest = capability_manifest.build_manifest(["write_intent", "write_scene"])
+        helper = manifest["query"]["write_intent"]
+        constraints = helper["inputConstraints"]
+        feature = constraints["parts.*.features[]"]
+        self.assertEqual(feature["required"], ["id", "evidence", "acceptance"])
+        self.assertEqual(feature["optionalEnums"]["kind"], sorted(intent_contract.FEATURE_KINDS))
+        self.assertEqual(feature["optionalEnums"]["face"], sorted(intent_contract.FACES))
+        self.assertIn("port", feature["optionalEnums"]["kind"])
+        self.assertNotIn("passage", feature["optionalEnums"]["kind"])
+        self.assertIn("back", feature["optionalEnums"]["face"])
+        self.assertNotIn("rear", feature["optionalEnums"]["face"])
+        self.assertEqual(feature["openingFields"]["whenKind"], sorted(intent_contract.PLACED_OPENING_KINDS))
+        self.assertEqual(feature["faceDirections"]["back"], sorted(intent_contract.FACE_DIRECTIONS["back"]))
+        self.assertIn("parts.*.features[].id", constraints["critical_features"])
+        self.assertEqual(constraints["parts"]["multipart"]["minimumInterfaces"], 1)
+        self.assertNotIn("inputConstraints", manifest["query"]["write_scene"])
+        self.assertLess(len(json.dumps(helper, indent=2)), 8_000)
+
+    def test_intent_constraints_follow_validator_changes_and_participate_in_fingerprint(self):
+        baseline = capability_manifest.build_manifest(["write_intent"])
+        self.assertEqual(baseline["fingerprint"], capability_manifest.build_manifest()["fingerprint"])
+        with mock.patch.object(intent_contract, "FACES", intent_contract.FACES | {"test-face"}):
+            changed = capability_manifest.build_manifest(["write_intent"])
+        self.assertIn("test-face", changed["query"]["write_intent"]["inputConstraints"]["parts.*.features[]"]["optionalEnums"]["face"])
+        self.assertNotEqual(changed["fingerprint"], baseline["fingerprint"])
 
     def test_source_signatures_follow_export_aliases_and_inherited_constructor(self):
         with tempfile.TemporaryDirectory() as directory:

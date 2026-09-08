@@ -45,6 +45,71 @@ def _intent_kwargs() -> dict:
 
 
 class AuthoringTests(unittest.TestCase):
+    def test_loose_parts_still_need_a_multipart_interface(self):
+        parts = {
+            name: {"role": name, "acceptance": "intentionally loose", "installation": "loose",
+                   "features": [{"id": name, "evidence": "requested part", "acceptance": "separate solid"}]}
+            for name in ("body", "lid")
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "intent.json"
+            kwargs = dict(_intent_kwargs(), part="device", manufacturing_mode="multipart",
+                          parts=parts, critical_features=["body", "lid"])
+            with self.assertRaises(authoring.AuthoringError) as failure:
+                authoring.write_intent(path, **kwargs)
+            self.assertTrue(any("interfaces" in error for error in failure.exception.errors))
+            self.assertFalse(path.exists())
+
+    def test_intent_enum_errors_give_valid_values_and_allow_a_corrected_write(self):
+        feature = {
+            "id": "usb-port", "kind": "port", "face": "back", "direction": "+Y",
+            "edge_crossing": "forbidden", "evidence": "rear connector",
+            "acceptance": "opening reaches the internal component space",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for field, invalid, allowed in (
+                ("kind", "passage", intent_contract.FEATURE_KINDS),
+                ("face", "rear", intent_contract.FACES),
+                ("direction", "outward", intent_contract.DIRECTIONS),
+                ("edge_crossing", "automatic", intent_contract.EDGE_CROSSING),
+            ):
+                with self.subTest(field=field):
+                    path = Path(directory) / f"{field}.json"
+                    kwargs = dict(_intent_kwargs(), part="device", manufacturing_mode="single-part",
+                                  critical_features=["usb-port"])
+                    with self.assertRaises(authoring.AuthoringError) as failure:
+                        authoring.write_intent(path, parts={"device": {"features": [{**feature, field: invalid}]}}, **kwargs)
+                    error = next(e for e in failure.exception.errors if e.startswith(f"features[0].{field} is invalid"))
+                    self.assertIn(str(sorted(allowed)), error)
+                    self.assertIn(repr(invalid), error)
+                    self.assertFalse(path.exists())
+                    document = authoring.write_intent(path, parts={"device": {"features": [feature]}}, **kwargs)
+                    self.assertEqual(intent_contract.validate(document, path.parent), [])
+
+    def test_critical_interface_id_reports_feature_choices_without_requiring_feature_kind(self):
+        parts = {
+            name: {"role": name, "acceptance": "separate physical part", "features": [{
+                "id": f"{name}-seat", "evidence": "shared mating surface", "acceptance": "faces meet",
+            }]}
+            for name in ("body", "lid")
+        }
+        interface = {
+            "id": "lid-fit", "connection": "glue-face", "assembly_axis": "+Z",
+            "features": ["body-seat", "lid-seat"], "acceptance": "the two seats contact",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "intent.json"
+            kwargs = dict(_intent_kwargs(), part="device", manufacturing_mode="multipart", parts=parts,
+                          interfaces=[interface])
+            with self.assertRaises(authoring.AuthoringError) as failure:
+                authoring.write_intent(path, critical_features=["lid-fit"], **kwargs)
+            error = next(e for e in failure.exception.errors if e.startswith("printability.critical_features"))
+            self.assertIn("valid feature IDs: ['body-seat', 'lid-seat']", error)
+            self.assertFalse(path.exists())
+            document = authoring.write_intent(path, critical_features=["body-seat", "lid-seat"], **kwargs)
+            self.assertEqual(intent_contract.validate(document, path.parent), [])
+            self.assertEqual(document["manufacturing"]["interfaces"][0]["between"], ["body", "lid"])
+
     def test_paired_interface_derives_independent_named_clearances(self):
         compact = authoring.paired_interface(
             id="pin-fit",

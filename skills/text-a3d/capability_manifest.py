@@ -145,6 +145,62 @@ def _function_signatures(path: Path, public_names: set[str]) -> list[dict[str, A
     return sorted(signatures, key=lambda item: item["name"])
 
 
+def _intent_input_constraints() -> dict[str, Any]:
+    """Describe compact writer inputs using the validator's live vocabulary."""
+    import intent_contract as contract
+
+    return {
+        "task_mode": sorted(contract.MODES),
+        "representation": sorted(contract.REPRESENTATIONS),
+        "manufacturing_mode": sorted(contract.MANUFACTURING_MODES),
+        "dimensions_mm": {
+            "axes": ["x", "y", "z"],
+            "perAxisRequired": ["value", "source", "confidence"],
+            "value": "finite positive number; complete physical assembly envelope",
+            "source": sorted(contract.SOURCES),
+            "confidence": sorted(contract.CONFIDENCE),
+            "constraint": "optional {kind: fixed} or {kind: range, min_mm, max_mm}; omitted means fixed",
+        },
+        "parts": {
+            "shape": "{part_id: {features: [...], ...}}; at least one feature overall",
+            "single-part": "exactly one key equal to part; its definition accepts only features",
+            "multipart": {
+                "minimumParts": 2,
+                "minimumInterfaces": 1,
+                "requiredPartFields": ["role", "acceptance"],
+                "installation": sorted(contract.PART_INSTALLATIONS),
+                "defaultInstallation": "interface",
+                "installationExemptions": "loose/adhesive exempts a part from interface coverage; multipart still requires at least one interface",
+            },
+            "featureOwner": "derived from nesting; an explicit feature.part must match its owner",
+        },
+        "parts.*.features[]": {
+            "required": ["id", "evidence", "acceptance"],
+            "id": "unique across all parts; " + contract.FEATURE_ID_PATTERN.pattern,
+            "optionalEnums": {
+                "kind": sorted(contract.FEATURE_KINDS),
+                "face": sorted(contract.FACES),
+                "direction": sorted(contract.DIRECTIONS),
+                "edge_crossing": sorted(contract.EDGE_CROSSING),
+            },
+            "openingFields": {
+                "whenKind": sorted(contract.PLACED_OPENING_KINDS),
+                "required": ["face", "direction", "edge_crossing"],
+            },
+            "faceDirections": {face: sorted(directions) for face, directions in sorted(contract.FACE_DIRECTIONS.items())},
+            "directionRules": "direction or edge_crossing requires face; none and surface-normal are also valid for any face",
+        },
+        "critical_features": "IDs from parts.*.features[].id; interface IDs do not qualify unless also declared as features",
+        "interfaces[]": {
+            "features": "existing feature IDs owned by exactly two distinct parts",
+            "between": "derived from feature ownership; omit rather than repeat it",
+            "connection": sorted(contract.INTERFACE_CONNECTIONS),
+            "assembly_axis": sorted(contract.ASSEMBLY_AXES),
+        },
+        "details": ["references/evidence-contract.md", "references/multipart-connections.md"],
+    }
+
+
 class _ManagedSignatures:
     """Resolve installed Python exports without importing build123d or OCCT.
 
@@ -392,6 +448,9 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
         root / "authoring.py",
         {"write_intent", "write_scene", "paired_dimensions", "paired_interface"},
     )
+    for helper in authoring_helpers:
+        if helper["name"] == "write_intent":
+            helper["inputConstraints"] = _intent_input_constraints()
     geometry_helpers = _function_signatures(
         root / "cad_helpers.py",
         {

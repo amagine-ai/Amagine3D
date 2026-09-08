@@ -692,13 +692,13 @@ def validate_feature_semantics(feature: dict, index: int) -> list[str]:
     edge_crossing = feature.get("edge_crossing")
 
     if kind is not None and kind not in FEATURE_KINDS:
-        errors.append(f"{feature_id}.kind is invalid")
+        errors.append(f"{feature_id}.kind is invalid; expected one of {sorted(FEATURE_KINDS)}, received {kind!r}")
     if face is not None and face not in FACES:
-        errors.append(f"{feature_id}.face is invalid")
+        errors.append(f"{feature_id}.face is invalid; expected one of {sorted(FACES)}, received {face!r}")
     if direction is not None and direction not in DIRECTIONS:
-        errors.append(f"{feature_id}.direction is invalid")
+        errors.append(f"{feature_id}.direction is invalid; expected one of {sorted(DIRECTIONS)}, received {direction!r}")
     if edge_crossing is not None and edge_crossing not in EDGE_CROSSING:
-        errors.append(f"{feature_id}.edge_crossing is invalid")
+        errors.append(f"{feature_id}.edge_crossing is invalid; expected one of {sorted(EDGE_CROSSING)}, received {edge_crossing!r}")
     if direction is not None and face is None:
         errors.append(f"{feature_id}.direction requires face")
     if edge_crossing is not None and face is None:
@@ -956,7 +956,8 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             errors.append("printability.critical_features must be a list of feature IDs")
         elif feature_ids and not set(critical).issubset(feature_ids):
             errors.append(
-                "printability.critical_features must reference declared feature IDs"
+                "printability.critical_features must reference declared feature IDs; "
+                f"valid feature IDs: {sorted(feature_ids)}"
             )
         if data.get("color_regions") is not None:
             manufacturing_mode = (
