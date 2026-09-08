@@ -3,20 +3,19 @@
 Choose the example that demonstrates the API structure you need:
 
 - `simple_brep_intent.py` and `simple_brep_build.py`: one rounded body with a
-  blind pocket, showing physical feature binding and `export_part()`.
+  blind pocket, showing `BuildSession.add`, `finish`, `cut` and `export`.
 - `assembly_intent.py` and `assembly_build.py`: a removable pin and blind socket
-  coupon, showing two manufactured parts, a locating fit and `export_assembly()`.
+  coupon, showing two manufactured parts and a locating fit.
 - `surface_shell_intent.py` and `surface_shell_build.py`: an outer BRep loft and
-  an inner loft cutter, showing a section-controlled shell and `export_part()`.
+  an inner loft cutter, showing a section-controlled shell.
 - `installed_module_intent.py` and `installed_module_build.py`: a configurable
   module installation with a real window, support, access, optional preview
   reference and installation evidence against final manufactured parts.
 
 These are API examples. Develop the actual shape, dimensions, features and part
-boundaries from the user's request. Keep manufactured parts as valid BRep solids,
-bind their features with `write_scene()` and export genuine STEP masters with
-the matching exporter. `surface-shell.md` explains the loft example's controls
-and wall-thickness checks.
+boundaries from the user's request. `BuildSession` binds the authored BRep solids
+through the existing `write_scene` and STEP exporters. `surface-shell.md` explains
+the loft example's controls and wall-thickness checks.
 
 Run in the current session workspace (the runtime supplies `AMAGINE3D_SKILL_DIR`).
 Set `example_name=assembly` for the two-part example or `surface_shell` for the
@@ -37,42 +36,53 @@ a3d compile "${example_name}_scene.json" --marker ".${example_name}.generation-s
 
 The intent source writes the target separately. The compiler executes the build
 with the bound intent, scene and output paths in environment variables. The build
-constructs physical objects, records features, binds those same objects into scene
-nodes, then exports. `checked_cut` records the actual cutter used in the body;
-`observe` records additive features. Inspect the returned preview with `view_image`.
+constructs physical objects; its session derives feature evidence and scene nodes
+from those objects, then exports. Inspect the returned preview with `view_image`.
 
 ## Reuse one feature identity
 
-`BrepFeature` carries one feature ID, physical owner, role, and actual BRep
-object. Use its checked operation and binding methods together so that renaming
-a feature or changing its placement cannot leave a second hand-written label
-behind in operation evidence:
+Declare feature IDs once in intent. `BuildSession` obtains their physical owners
+from that contract; `add` and `cut` use each ID once for geometry, scene and evidence:
 
 ```python
-from pathlib import Path
 from build123d import Box
-from geometry_binding import BrepFeature
+from build_session import BuildSession
 
-body = Box(30, 20, 5)
-slot = BrepFeature("service-slot", "housing", "cutter", Box(8, 4, 8))
-body = slot.cut_from(body)
-slot_node = slot.bind(Path("service-slot.stl"))
-body_node = BrepFeature("housing-body", "housing", "solid", body).bind(
-    Path("housing-body.stl")
-)
-# Pass [body_node, slot_node] as the housing's nodes to write_scene().
+build = BuildSession(__file__)
+build.add("housing-body", Box(30, 20, 5))
+build.cut("service-slot", Box(8, 4, 8))
+build.export()
 ```
 
-`cut_from()` returns the changed solid; retain that return value. `bind()`
-records the feature observation and returns a scene node containing the same
-ID and owner. The handle does not contain acceptance dimensions or prove that
-an installation works: final-part geometry checks remain independent. A cutter
-that misses the body still fails its checked operation.
+For a final fillet, use `build.finish("housing", lambda body:
+checked_fillet(body, body.edges(), RADIUS, "edge-rounding"))`. `finish` commits
+the returned solid and checked evidence; if the operation ID names an intent
+feature, it also binds that feature. Implementation-only operation IDs need no
+additional intent feature. In either case,
+selectors must come from the callback's body. `build.part("housing")` returns a
+copy for inspection, so changing that copy alone does not change exported geometry.
+
+`observe(id, shape)` binds a physical observation without a material operation;
+omitting shape observes the current owning part. Naming a whole-part observation
+"floor" does not measure floor thickness. Use `role="solid"` to identify a solid
+feature already contained in the part, such as a screw boss within a thick corner.
+A missed cut still fails, and final
+geometry, interface and installation checks remain independent. Paired interfaces,
+raw screw interfaces and installation checks pass through `export`; screw recipe
+nodes are derived from the interface's feature IDs. See the installed-module example.
+
+For explicit bindings or regional color exports, the existing `BrepFeature`,
+`write_scene` and exporters remain available. Use `with build.capture():` if
+additional existing helper parameters or observations need the session's evidence.
 
 ## Stable targets and explicit revisions
 
 Repair source geometry and scene bindings against the existing intent. A new
-filename alone does not establish a changed target. For an allowed parameter
+filename alone does not establish a changed target. Intent records final targets
+and acceptance, while build source owns implementation parameters such as section
+count, cutter overshoot and loft mode. An inset may change to meet an unchanged
+minimum wall requirement; a user-requested dimension or form must remain satisfied.
+For an allowed target parameter
 adjustment, record the range before modeling in `dimensions_mm`, for example:
 
 ```python
@@ -113,17 +123,10 @@ describe the socket and pin; the female diameter is derived from the pin and a
 per-side gap. Purchased hardware would remain outside the export part dictionary,
 with its required seat or keepout modeled on the receiving part.
 
-For a signature with required/optional arguments, query just that function:
+Query the signatures needed for the next operation together:
 
 ```bash
-a3d capabilities --symbol write_intent
-a3d capabilities --symbol write_scene
-a3d capabilities --symbol export_part
-a3d capabilities --symbol export_assembly
-a3d capabilities --symbol BrepFeature
-a3d capabilities --symbol BrepFeature.bind
-a3d capabilities --symbol BrepFeature.cut_from
-a3d capabilities --symbol plan_plates
+a3d capabilities --symbol BuildSession --symbol BuildSession.add --symbol BuildSession.cut --symbol BuildSession.finish --symbol BuildSession.export
 ```
 
 `plan_plates(bboxes, profile, *, spacing_mm=5, edge_margin_mm=0, max_plates=1)`

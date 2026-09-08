@@ -26,8 +26,9 @@ class CapabilityManifestTests(unittest.TestCase):
         completed = subprocess.run(
             [sys.executable, "-c", (
                 "import json, sys; import capability_manifest; "
-                "result = capability_manifest.build_manifest(['Cylinder', 'RectangleRounded', 'extrude', 'Pos', 'Rot', 'MM', 'write_intent']); "
+                "result = capability_manifest.build_manifest(['Cylinder', 'RectangleRounded', 'extrude', 'Pos', 'Rot', 'MM', 'write_intent', 'BuildSession', 'BuildSession.finish']); "
                 "assert 'build123d' not in sys.modules; "
+                "assert 'build_session' not in sys.modules; "
                 "assert not any(name.startswith('OCP') for name in sys.modules); "
                 "print(json.dumps(result['query']))"
             )],
@@ -45,6 +46,24 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertTrue(query["MM"]["available"])
         self.assertNotIn("signature", query["MM"])
         self.assertIn("inputConstraints", query["write_intent"])
+        self.assertEqual(query["BuildSession"]["provider"], "build_session")
+        self.assertIn("operation", query["BuildSession.finish"]["parameters"])
+
+    def test_session_operations_are_discoverable_without_extra_contract_inputs(self):
+        names = ["BuildSession", *[f"BuildSession.{method}" for method in
+                                  ("add", "cut", "part", "observe", "finish", "capture", "export")]]
+        manifest = capability_manifest.build_manifest(names)
+        for name in names:
+            item = manifest["query"][name]
+            self.assertTrue(item["available"])
+            self.assertEqual(item["provider"], "build_session")
+            self.assertTrue(item["description"])
+        self.assertEqual(manifest["query"]["BuildSession.add"]["parameters"],
+                         ["self", "feature_id", "shape", "min_added_mm3"])
+        self.assertEqual(manifest["query"]["BuildSession.cut"]["parameters"],
+                         ["self", "feature_id", "tool", "min_removed_mm3"])
+        self.assertIn("interfaces", manifest["query"]["BuildSession.export"]["parameters"])
+        self.assertEqual({item["name"] for item in manifest["authoring"]["buildSessionHelpers"]}, set(names))
 
     def test_intent_query_exposes_nested_constraints_without_growing_other_queries(self):
         manifest = capability_manifest.build_manifest(["write_intent", "write_scene"])

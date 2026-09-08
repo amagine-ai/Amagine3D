@@ -7,6 +7,8 @@ the source and intent contract used in the current run.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from hashlib import sha256
 import importlib.util
 import json
@@ -122,6 +124,40 @@ _EVENTS: list[dict] = []
 _FEATURES: dict[str, dict] = {}
 _PARAMETERS: dict[str, dict] = {}
 _DEFERRED_ISSUES: list[dict] = []
+
+
+class _EvidenceState:
+    """Operation records belonging to one build, independent of other builds."""
+
+    def __init__(self, events=None, features=None, parameters=None, issues=None):
+        self.events = [] if events is None else events
+        self.features = {} if features is None else features
+        self.parameters = {} if parameters is None else parameters
+        self.issues = [] if issues is None else issues
+
+
+_ACTIVE_EVIDENCE: ContextVar[_EvidenceState | None] = ContextVar(
+    "cad_build_evidence", default=None
+)
+
+
+def _evidence() -> _EvidenceState:
+    active = _ACTIVE_EVIDENCE.get()
+    if active is not None:
+        return active
+    # Keep legacy helpers and callers that reset the process-local records.
+    return _EvidenceState(_EVENTS, _FEATURES, _PARAMETERS, _DEFERRED_ISSUES)
+
+
+@contextmanager
+def _evidence_scope(state: _EvidenceState):
+    token = _ACTIVE_EVIDENCE.set(state)
+    try:
+        yield
+    finally:
+        _ACTIVE_EVIDENCE.reset(token)
+
+
 _ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 _MODEL_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -132,7 +168,7 @@ def _collect_source_diagnostics() -> bool:
 def _defer_source_issue(issue: dict, message: str) -> bool:
     if not _collect_source_diagnostics():
         raise BuildInvariantError(message)
-    _DEFERRED_ISSUES.append(
+    _evidence().issues.append(
         {
             "severity": "error",
             **issue,
@@ -143,10 +179,10 @@ def _defer_source_issue(issue: dict, message: str) -> bool:
 
 
 def _raise_deferred_source_issues() -> None:
-    if not _DEFERRED_ISSUES:
+    if not _evidence().issues:
         return
-    issues = list(_DEFERRED_ISSUES)
-    _DEFERRED_ISSUES.clear()
+    issues = list(_evidence().issues)
+    _evidence().issues.clear()
     write_source_diagnostics(source_diagnostics_payload(issues))
     print(
         json.dumps(
@@ -221,7 +257,7 @@ def parameter(
     affects: tuple[str, ...] | list[str] = (),
 ) -> int | float:
     """Declare one bounded user-adjustable driving value."""
-    if not _ID_PATTERN.fullmatch(parameter_id) or parameter_id in _PARAMETERS:
+    if not _ID_PATTERN.fullmatch(parameter_id) or parameter_id in _evidence().parameters:
         raise BuildInvariantError(f"invalid or duplicate parameter id: {parameter_id!r}")
     numbers = (default, min_value, max_value, step)
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in numbers):
@@ -259,7 +295,7 @@ def parameter(
         descriptor["label_zh"] = label_zh.strip()
     if isinstance(group_zh, str) and group_zh.strip():
         descriptor["group_zh"] = group_zh.strip()
-    _PARAMETERS[parameter_id] = descriptor
+    _evidence().parameters[parameter_id] = descriptor
     return value
 
 
@@ -924,9 +960,9 @@ def observe(
     part_name: str | None = None,
 ) -> None:
     """Capture evidence before a feature disappears into a boolean result."""
-    if feature_id in _FEATURES:
+    if feature_id in _evidence().features:
         raise BuildInvariantError(f"duplicate feature id: {feature_id}")
-    _FEATURES[feature_id] = {
+    _evidence().features[feature_id] = {
         "role": role,
         **({"part": part_name} if part_name is not None else {}),
         **_stats(shape),
@@ -969,7 +1005,7 @@ def checked_cut(
             return body
         raise BuildInvariantError(message) from error
     removed = before - float(result.volume)
-    _EVENTS.append({
+    _evidence().events.append({
         "id": feature_id,
         "kind": "cut",
         "removed_mm3": round(removed, 6),
@@ -1111,7 +1147,7 @@ def checked_union(
             message,
         ):
             return body
-    _EVENTS.append(
+    _evidence().events.append(
         {
             "added_mm3": round(added, 6),
             "id": feature_id,
@@ -1159,7 +1195,7 @@ def _finish(
             )
             if not _valid(result):
                 raise ValueError("operation returned invalid geometry")
-            _EVENTS.append({
+            _evidence().events.append({
                 "actual_mm": round(actual, 6),
                 "degraded": actual != requested,
                 "id": feature_id,
@@ -1264,7 +1300,7 @@ def _validate_assembly_intent(
 
 def _validate_assembly_evidence(part_names: set[str]) -> None:
     observed_parts: set[str] = set()
-    for feature_id, record in _FEATURES.items():
+    for feature_id, record in _evidence().features.items():
         owner = record.get("part")
         if owner not in part_names:
             raise BuildInvariantError(
@@ -1276,7 +1312,7 @@ def _validate_assembly_evidence(part_names: set[str]) -> None:
         raise BuildInvariantError(
             f"every assembly part must have observed evidence; missing {missing}"
         )
-    for event in _EVENTS:
+    for event in _evidence().events:
         owner = event.get("part")
         if owner not in part_names:
             raise BuildInvariantError(
@@ -1292,8 +1328,8 @@ def _validate_interface_evidence(manufacturing: dict) -> None:
         for feature_id in interface.get("features", [])
         if isinstance(feature_id, str)
     }
-    observed = set(_FEATURES) | {
-        event.get("id") for event in _EVENTS if isinstance(event.get("id"), str)
+    observed = set(_evidence().features) | {
+        event.get("id") for event in _evidence().events if isinstance(event.get("id"), str)
     }
     missing = sorted(required - observed)
     if missing:
@@ -1491,7 +1527,7 @@ def export_part(
         "backend": "brep-part",
         "backendData": {
             "exportAudit": export_audit,
-            "parameters": dict(_PARAMETERS),
+            "parameters": dict(_evidence().parameters),
             "printOrientation": print_orientation,
             "semanticAssembly": semantic_assembly,
             **color_backend_data,
@@ -1515,11 +1551,11 @@ def export_part(
             },
         },
         "events": [
-            {**event, "part": event.get("part", name)} for event in _EVENTS
+            {**event, "part": event.get("part", name)} for event in _evidence().events
         ],
         "features": {
             feature_id: {**record, "part": record.get("part", name)}
-            for feature_id, record in _FEATURES.items()
+            for feature_id, record in _evidence().features.items()
         },
         "inputs": inputs,
         "part": name,
@@ -1700,7 +1736,7 @@ def export_assembly(
                  "severity": "error", "message": str(error),
                  "observed": {"kind": error.__cause__.kind, "scale": 1.0},
                  "repairHint": "Review orientation, packing, or a3d layout plate grouping within the bound printer; do not change design targets to silence packing failure."}
-        payload = source_diagnostics_payload([*_DEFERRED_ISSUES, issue])
+        payload = source_diagnostics_payload([*_evidence().issues, issue])
         try:
             payload["diagnosticCandidate"] = _packing_diagnostic_candidate(
                 normalized, name, output, normalized_colors, inputs, scene_data, scene_path)
@@ -1968,7 +2004,7 @@ def export_assembly(
             },
             "overlapsMm3": overlaps,
             "exportAudit": export_audit,
-            "parameters": dict(_PARAMETERS),
+            "parameters": dict(_evidence().parameters),
             "printPlate": {
                 **_manifest_geometry_record(print_plate_stats),
                 "layout": plate_layout,
@@ -1996,8 +2032,8 @@ def export_assembly(
                 "units": "mm",
             },
         },
-        "events": list(_EVENTS),
-        "features": dict(_FEATURES),
+        "events": list(_evidence().events),
+        "features": dict(_evidence().features),
         "inputs": inputs,
         "materialPlan": material_plan,
         "part": name,

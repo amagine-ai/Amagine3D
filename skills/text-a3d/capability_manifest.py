@@ -451,6 +451,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
     for helper in authoring_helpers:
         if helper["name"] == "write_intent":
             helper["inputConstraints"] = _intent_input_constraints()
+    session_helpers = _function_signatures(root / "build_session.py", {"BuildSession"})
     geometry_helpers = _function_signatures(
         root / "cad_helpers.py",
         {
@@ -477,6 +478,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
         item["name"]: {**item, "provider": provider}
         for provider, helpers in (
             ("authoring", authoring_helpers),
+            ("build_session", session_helpers),
             ("cad_helpers", geometry_helpers),
             ("geometry_binding", binding_helpers),
             ("installation_check", installation_helpers),
@@ -533,6 +535,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
                 "compile": "cad_compile is the single build and audit boundary",
             },
             "authoringHelpers": authoring_helpers,
+            "buildSessionHelpers": session_helpers,
             "geometryHelpers": geometry_helpers,
             "geometryBindingHelpers": binding_helpers,
             "manufacturingPlanningHelpers": planning_helpers,

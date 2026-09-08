@@ -1,16 +1,6 @@
 """Build only through a3d compile; a BRep loft owns the complete hollow shell."""
-import os
-from pathlib import Path
-
 from build123d import Pos, RectangleRounded, loft
-from authoring import write_scene
-from cad_helpers import checked_cut, export_part, observe
-from geometry_binding import bind_brep_feature
-
-ROOT = Path(__file__).resolve().parent
-OUT = Path(os.environ.get("AMAGINE3D_OUTPUT_DIR", ROOT))
-INTENT = os.environ["AMAGINE3D_INTENT_PATH"]
-SCENE = os.environ.get("AMAGINE3D_SCENE_PATH", str(ROOT / "surface_shell_scene.json"))
+from build_session import BuildSession
 
 # Millimetres. Each station independently controls z, width, depth, corner
 # radius, centre x and centre y. Keep their rounded-rectangle edge ordering.
@@ -55,8 +45,9 @@ inner_stations = [station_at(FLOOR)]
 inner_stations += [station for station in STATIONS if station[0] > FLOOR]
 inner_stations += [(HEIGHT + CUTTER_OVERSHOOT, *STATIONS[-1][1:])]
 cavity = loft([section(station, WALL_INSET) for station in inner_stations], ruled=RULED)
-observe(outer, "shell-surface", role="solid", part_name="surface-shell")
-shell = checked_cut(outer, cavity, "shell-cavity", part_name="surface-shell")
+build = BuildSession(__file__)
+build.add("shell-surface", outer)
+shell = build.cut("shell-cavity", cavity)
 
 # Section inset is not normal wall thickness on a sloping 3D surface. Public
 # compile checks wall thickness and overhangs after any station or inset edit.
@@ -65,11 +56,4 @@ assert shell.is_inside((0, 0, FLOOR / 2)), "The base must remain closed"
 assert not shell.is_inside((0, 0, FLOOR + 0.1)), "The cavity must reach its floor"
 assert not shell.is_inside((*STATIONS[-1][4:], HEIGHT - 0.1)), "The top must remain open"
 
-nodes = [bind_brep_feature(node_id=f"{feature}-node", feature_id=feature, role=role,
-                           shape=shape, path=OUT / f"surface_shell-{feature}-geometry.stl")
-         for feature, shape, role in (("shell-surface", outer, "solid"),
-                                      ("shell-cavity", cavity, "cutter"))]
-write_scene(SCENE, intent_path=INTENT,
-            parts={"surface-shell": {"representationMaster": "brep", "nodes": nodes}})
-export_part(shell, "surface-shell", out_dir=str(OUT), intent_path=INTENT,
-            scene_path=SCENE, source_path=str(Path(__file__).resolve()))
+build.export()

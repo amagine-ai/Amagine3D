@@ -31,9 +31,9 @@ a3d intent surface_shell_intent.json
 a3d compile surface_shell_scene.json --marker .surface_shell.generation-start --intent surface_shell_intent.json --source surface_shell_build.py --output-dir .
 ```
 
-The intent is written once; the compiler executes the build source. The source
-records the outer solid and cavity cutter, binds their BRep feature nodes with
-`write_scene`, and calls `export_part` for the final valid solid. STEP is the
+The intent is written once; the compiler executes the build source. Its
+`BuildSession.add` and `cut` retain the outer solid and actual cavity cutter;
+`export` derives their scene bindings and exports the final valid solid. STEP is the
 manufacturing master; STL, GLB and 3MF are derived outputs. Run the build through
 the compiler so its geometry, wall checks and artifacts remain bound together.
 

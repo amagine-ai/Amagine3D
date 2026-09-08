@@ -79,10 +79,13 @@ geometry to the brief:
 - Separately manufactured BRep parts: `examples/assembly_intent.py` and `assembly_build.py`.
 - A BRep shell lofted through key sections: `references/surface-shell.md`.
 
-`references/authoring-example.md` gives the invocation. Finish the build source
-with `write_scene(...)` and the appropriate `export_part(...)`,
-`export_assembly(...)` or `export_regions(...)` call. Query individual signatures
-with `a3d capabilities --symbol NAME`.
+`references/authoring-example.md` gives the invocation. Its `BuildSession` examples
+derive scene bindings and operation evidence from `add`/`cut`, then submit final
+edits with `finish` and write artifacts with `export`. Keep construction choices
+(section stations, cutter overshoot, loft mode) in build source; intent records
+the required final dimensions, function and form. The existing `write_scene` and
+`export_part`/`export_assembly`/`export_regions` path remains available for explicit
+bindings and color partitioning. Query signatures with `a3d capabilities --symbol NAME`.
 
 Compile, audit, package, and render through one public boundary:
 

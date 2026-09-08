@@ -1,4 +1,4 @@
-"""Run once before compiling surface_shell_build.py; proposed example dimensions."""
+"""Proposed final dimensions; section count and inset remain build parameters."""
 import os
 from pathlib import Path
 import sys
@@ -21,16 +21,16 @@ write_intent(
              "acceptance": "100 x 80 x 90 mm envelope with rounded rectangular sections and narrower upper/lower shoulders; ruled transitions are acceptable"},
             {"id": "shell-cavity", "kind": "cavity", "face": "top", "direction": "+Z",
              "edge_crossing": "forbidden",
-             "evidence": "Proposed open-top hollow-shell construction using a separate inner loft",
-             "acceptance": "Real top opening with an annular rim, 3 mm horizontal section inset and a closed 3 mm floor"},
+             "evidence": "Proposed open-top hollow shell with a closed base",
+             "acceptance": "Real top opening with an annular rim, at least 1.6 mm walls and a closed 3 mm floor"},
         ],
     }},
     support_policy="support-free", minimum_wall_target_mm=1.6,
     critical_features=["shell-surface", "shell-cavity"], reference_view="isometric",
-    landmarks=["rounded rectangular plan", "six sections with independent width and depth",
+    landmarks=["rounded rectangular plan", "wider middle body",
                "narrower upper and lower shoulders", "slightly offset upper sections", "visible top cavity"],
     assumptions=["Example dimensions are proposed; no installed hardware, closure, drainage or sealing is specified.",
                  "A1 mini with a 0.4 mm nozzle is the proposed fallback printing process.",
-                 "Ruled BRep loft transitions prioritize stable solid geometry; tangent continuity is not required.",
-                 "Wall control is a 3 mm horizontal section inset, not an exact normal offset of the 3D surface; measured minimum wall thickness must be checked after shape edits."],
+                 "Tangent continuity is not required in this demonstration.",
+                 "Measured minimum wall thickness must be checked after shape edits; section inset alone is not proof of normal wall thickness."],
 )
