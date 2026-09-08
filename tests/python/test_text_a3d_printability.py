@@ -361,6 +361,72 @@ class PrintabilityGeometryTests(unittest.TestCase):
         self.assertLess(observed["p05_mm"], 0.87)
         self.assertAlmostEqual(observed["minimum_mm"], 0.5, places=4)
 
+    def test_wall_thickness_sampling_keeps_nearly_planar_box_stable(self):
+        mesh = trimesh.creation.box(extents=[20, 20, 10])
+        reference = qa_check.thickness_observation(
+            mesh, target_mm=2.0, sample_limit=128, report=None
+        )
+        perturbed = mesh.copy()
+        corner = np.flatnonzero(
+            np.all(perturbed.vertices == [10.0, 10.0, 5.0], axis=1)
+        )
+        self.assertEqual(len(corner), 1)
+        perturbed.vertices[corner[0], 2] -= 0.001
+        observed = qa_check.thickness_observation(
+            perturbed, target_mm=2.0, sample_limit=128, report=None
+        )
+
+        # Near-coplanar facet averages can lie just outside their triangles,
+        # producing a micrometre-scale hit on the same wall. A slight corner
+        # perturbation must not collapse either thickness statistic. These
+        # are local max-sphere estimates, not a measurement of box height.
+        for statistic in ("minimum_mm", "p05_mm"):
+            with self.subTest(statistic=statistic):
+                self.assertGreater(reference[statistic], 6.0)
+                self.assertGreater(observed[statistic], 6.0)
+                self.assertAlmostEqual(
+                    observed[statistic], reference[statistic], delta=0.01
+                )
+        self.assertEqual(observed["violating_count"], 0)
+
+    def test_wall_thickness_sampling_includes_ungrouped_faces(self):
+        box = trimesh.creation.box(extents=[20, 20, 10])
+        sphere = trimesh.creation.icosphere(subdivisions=0, radius=3.0)
+        sphere.apply_translation([30.0, 0.0, 0.0])
+        self.assertEqual(len(box.facets), 6)
+        self.assertEqual(len(sphere.facets), 0)
+        mesh = trimesh.util.concatenate([box, sphere])
+
+        observed = qa_check.thickness_observation(
+            mesh, target_mm=2.0, sample_limit=128, report=None
+        )
+        sampling = observed["sampling"]
+        # Six planar box faces and twenty independent icosahedron triangles
+        # must all be eligible even though the combined mesh has facets.
+        self.assertEqual(sampling["candidate_region_count"], 26)
+        self.assertEqual(sampling["ungrouped_face_count"], 20)
+        self.assertEqual(sampling["selected_region_count"], 26)
+        self.assertEqual(observed["sample_count"], 26)
+        self.assertAlmostEqual(sampling["surface_area_mm2"], mesh.area, places=4)
+        self.assertAlmostEqual(
+            sampling["sampled_region_area_mm2"], mesh.area, places=4
+        )
+        self.assertEqual(sampling["sampled_region_area_ratio"], 1.0)
+        self.assertEqual(sampling["area_ratio_scope"], "sampled-region-area")
+
+    def test_wall_thickness_sampling_respects_one_sample_budget(self):
+        mesh = trimesh.creation.box(extents=[20, 20, 10])
+        observed = qa_check.thickness_observation(
+            mesh, target_mm=2.0, sample_limit=1, report=None
+        )
+        sampling = observed["sampling"]
+        self.assertEqual(sampling["sample_limit"], 1)
+        self.assertEqual(sampling["candidate_region_count"], 6)
+        self.assertEqual(sampling["selected_region_count"], 1)
+        self.assertEqual(observed["sample_count"], 1)
+        self.assertGreater(sampling["sampled_region_area_ratio"], 0.0)
+        self.assertLess(sampling["sampled_region_area_ratio"], 1.0)
+
     def test_local_thin_region_is_not_hidden_by_area_weighted_p05(self):
         profile = bambu_profile.resolve_profile(
             self.catalog, machine_name="a1-mini", nozzle=0.4, tool_index=0

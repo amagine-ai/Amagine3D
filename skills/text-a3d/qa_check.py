@@ -794,31 +794,65 @@ def thickness_observation(
     artifact_key: str | None = None,
     part_name: str | None = None,
 ) -> dict:
+    if sample_limit < 1:
+        raise ValueError("thickness sample limit must be positive")
     triangle_centers = np.asarray(mesh.triangles_center, dtype=float)
     face_areas = np.asarray(mesh.area_faces, dtype=float)
     facets = list(mesh.facets)
-    if facets:
-        centers = np.asarray([
-            np.average(triangle_centers[facet], axis=0, weights=face_areas[facet])
-            for facet in facets
-        ])
-        normals = np.asarray(mesh.facets_normal, dtype=float)
-        weights = np.asarray(mesh.facets_area, dtype=float)
-    else:
-        centers = triangle_centers
-        normals = np.asarray(mesh.face_normals, dtype=float)
-        weights = face_areas
+    grouped = np.zeros(len(face_areas), dtype=bool)
+    representative_faces: list[int] = []
+    region_points: list[np.ndarray] = []
+    region_areas: list[float] = []
+    roundoff = np.finfo(float).eps * max(float(np.abs(mesh.vertices).max()), 1.0) * 64
+    for facet in facets:
+        grouped[facet] = True
+        representative = int(facet[np.argmax(face_areas[facet])])
+        point = triangle_centers[representative]
+        centroid = np.average(triangle_centers[facet], axis=0, weights=face_areas[facet])
+        closest = trimesh.triangles.closest_point(
+            mesh.triangles[facet], np.broadcast_to(centroid, (len(facet), 3))
+        )
+        distances = np.linalg.norm(closest - centroid, axis=1)
+        nearest = int(np.argmin(distances))
+        # Retain an existing planar-face sample only when it is already on a
+        # member triangle to floating-point roundoff. Use the projected point
+        # and that triangle's normal, never the facet's unrelated normal.
+        if distances[nearest] <= roundoff:
+            representative = int(facet[nearest])
+            point = closest[nearest]
+        representative_faces.append(representative)
+        region_points.append(point)
+        region_areas.append(float(face_areas[facet].sum()))
+    ungrouped_faces = np.flatnonzero(~grouped)
+    representative_faces.extend(ungrouped_faces.tolist())
+    region_points.extend(triangle_centers[ungrouped_faces])
+    region_areas.extend(face_areas[ungrouped_faces].tolist())
+    face_ids = np.asarray(representative_faces, dtype=int)
+    weights = np.asarray(region_areas, dtype=float)
+
+    # A facet is only approximately coplanar and can surround a hole. Its
+    # averaged center need not be on the mesh. Starting max_sphere there can
+    # measure the gap back to that same surface instead of the wall. Use an
+    # actual triangle point and its matching normal: the starting-face ray
+    # hit is then zero-distance, handled by the existing library self-hit rule.
+    centers = np.asarray(region_points, dtype=float)
+    normals = np.asarray(mesh.face_normals, dtype=float)[face_ids]
     if not len(centers):
         raise ValueError("mesh has no surface regions")
+    candidate_region_count = len(centers)
     if len(centers) > sample_limit:
         small_count = max(1, sample_limit // 4)
+        large_count = sample_limit - small_count
         ordered = np.argsort(weights)
+        large_indices = ordered[-large_count:] if large_count else ordered[:0]
         indices = np.unique(
-            np.concatenate((ordered[:small_count], ordered[-(sample_limit - small_count):]))
+            np.concatenate((ordered[:small_count], large_indices))
         )
         centers = centers[indices]
         normals = normals[indices]
         weights = weights[indices]
+        face_ids = face_ids[indices]
+    selected_region_count = len(centers)
     values = np.asarray(
         trimesh.proximity.thickness(
             mesh, centers, normals=normals, method="max_sphere"
@@ -831,6 +865,7 @@ def thickness_observation(
     values = values[valid]
     points = centers[valid]
     weights = weights[valid]
+    face_ids = face_ids[valid]
     violating = values < target_mm
     risk_bounds = None
     if violating.any():
@@ -858,6 +893,27 @@ def thickness_observation(
         "violating_area_ratio": round(
             float(weights[violating].sum() / max(weights.sum(), 1e-12)), 6
         ),
+        "sampling": {
+            "method": "max-sphere-at-triangle-surface-points",
+            "region_policy": "one on-surface point per facet or ungrouped face",
+            "selection": "smallest-quarter-and-largest-remaining-regions",
+            "sample_limit": sample_limit,
+            "candidate_region_count": candidate_region_count,
+            "ungrouped_face_count": int(len(ungrouped_faces)),
+            "selected_region_count": selected_region_count,
+            "valid_sample_count": int(len(values)),
+            "invalid_sample_count": selected_region_count - int(len(values)),
+            "surface_area_mm2": round(float(face_areas.sum()), 5),
+            "sampled_region_area_mm2": round(float(weights.sum()), 5),
+            "sampled_region_area_ratio": round(
+                float(weights.sum() / max(face_areas.sum(), 1e-12)), 6
+            ),
+            "area_ratio_scope": "sampled-region-area",
+            "minimum_sample": {
+                "face_index": int(face_ids[order[0]]),
+                "point_mm": points[order[0]].round(8).tolist(),
+            },
+        },
     }
 
 
@@ -1315,6 +1371,7 @@ def main() -> int:
                         "minimum_mm": thickness["minimum_mm"],
                         "risk_bounds_mm": thickness["risk_bounds_mm"],
                         "sample_count": thickness["sample_count"],
+                        "sampling": thickness["sampling"],
                         "violating_area_ratio": thickness["violating_area_ratio"],
                         "violating_count": thickness["violating_count"],
                     },
