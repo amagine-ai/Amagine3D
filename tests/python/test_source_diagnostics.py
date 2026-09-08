@@ -4,8 +4,12 @@ import contextlib
 import io
 import json
 import os
+from hashlib import sha256
 from pathlib import Path
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -18,6 +22,7 @@ if str(SKILL) not in sys.path:
     sys.path.insert(0, str(SKILL))
 
 import cad_helpers  # noqa: E402
+from tests.python.intent_fixture import write_intent  # noqa: E402
 
 
 class SourceDiagnosticsTests(unittest.TestCase):
@@ -101,6 +106,47 @@ class SourceDiagnosticsTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "evidence-cad-source-diagnostics/v1")
         self.assertEqual(len(payload["issues"]), 2)
         self.assertEqual(cad_helpers._DEFERRED_ISSUES, [])
+
+    def test_public_compile_preserves_failed_boolean_measurements_and_never_publishes(self):
+        directory = ROOT / "workspace/skill-validation"
+        directory.mkdir(parents=True, exist_ok=True)
+        cases = (
+            ("build.add('body', Box(10,10,10))\nbuild.add('feature', Pos(6.05,0,0)*Box(2,2,2))\n", "SOURCE.UNION_DISCONNECTED", 0.05),
+            ("build.add('body', Box(10,10,10)-Box(6,6,6))\nbuild.cut('feature', Box(2,2,2))\n", "SOURCE.CUT_MISSED_OWNER", 2.0),
+        )
+        for content, code, gap in cases:
+            with self.subTest(code=code), tempfile.TemporaryDirectory(dir=directory) as temporary:
+                root = Path(temporary)
+                (root / ".start").write_text("start")
+                intent, data = write_intent(root, part="body", feature_owners={"body": "body", "feature": "body"})
+                profile = root / "profile.json"
+                shutil.copyfile(data["printability"]["profile"]["path"], profile)
+                data["printability"]["profile"]["path"] = str(profile)
+                intent.write_text(json.dumps(data))
+                source = root / "build.py"
+                source.write_text("from build123d import Box, Pos\nfrom build_session import BuildSession\nbuild=BuildSession(__file__)\n" + content + "build.export()\n")
+                inputs = {p: sha256(p.read_bytes()).hexdigest() for p in (source, intent)}
+                environment = {key: value for key, value in os.environ.items() if not key.startswith("AMAGINE3D_")}
+                environment.update(AMAGINE3D_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1")
+                command = subprocess.run(
+                    ["node", str(ROOT / "bin/a3d.mjs"), "compile", "body_scene.json", "--marker", ".start",
+                     "--intent", intent.name, "--source", source.name], cwd=root, env=environment,
+                    capture_output=True, text=True, timeout=35,
+                )
+                self.assertEqual(command.returncode, 1, command.stdout + command.stderr)
+                result = json.loads((root / "body_compile-result.json").read_text())
+                issue = next(item for item in result["issues"] if item["code"] == code)
+                witness = issue["observed"]["booleanWitness"]
+                self.assertEqual(witness["components"][0]["gapMm"], gap)
+                self.assertEqual(witness["coordinateFrame"], "operation-input")
+                diagnostics = json.loads(Path(result["artifacts"]["sourceDiagnostics"]["path"]).read_text())
+                self.assertEqual(diagnostics["runId"], result["runId"])
+                self.assertEqual(diagnostics["issues"][0]["observed"]["booleanWitness"], witness)
+                self.assertFalse(result["pass"])
+                self.assertFalse(result["deliveryReady"])
+                self.assertFalse((root / "body.publish.json").exists())
+                self.assertFalse(list(root.glob("*.step")))
+                self.assertEqual(inputs, {p: sha256(p.read_bytes()).hexdigest() for p in inputs})
 
 
 if __name__ == "__main__":

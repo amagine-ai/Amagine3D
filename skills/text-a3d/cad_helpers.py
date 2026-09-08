@@ -969,6 +969,67 @@ def observe(
     }
 
 
+def _boolean_witness(body, operand, *, operation, part_name=None, removed_mm3=None):
+    """Measure failed-operation inputs without changing their geometry or acceptance.
+
+    OCCT measures distance between BRep surfaces: contained, overlapping solids
+    can have positive surface distance. Only a zero-volume common permits calling
+    that distance a gap. A touching edge also need not fuse into one solid.
+    """
+    witness = {"operation": operation, "coordinateFrame": "operation-input", "units": "mm",
+               "ownerPartId": part_name, "components": []}
+    if removed_mm3 is not None:
+        witness["removedMm3"] = round(float(removed_mm3), 8)
+    try:
+        bodies, components = list(body.solids()), list(operand.solids())
+        body_bounds, operand_bounds = _stats(body)["bbox_mm"], _stats(operand)["bbox_mm"]
+        common = body & operand
+        intersection = float(common.volume) if common else 0.0
+        if not math.isfinite(intersection):
+            raise ValueError("intersection volume is nonfinite")
+        intersection = max(0.0, intersection)
+        witness.update(bodyBoundsMm=body_bounds, operandBoundsMm=operand_bounds,
+                       bodySolidCount=len(bodies), operandSolidCount=len(components),
+                       intersectionVolumeMm3=round(intersection, 8),
+                       operandInsideOwnerBounds=all(
+                           body_bounds["min"][i] - 1e-7 <= operand_bounds["min"][i]
+                           and operand_bounds["max"][i] <= body_bounds["max"][i] + 1e-7
+                           for i in range(3)),
+                       containmentBasis="axis-aligned bounds only; no prior-cut or enclosed-cavity attribution")
+        for index, component in enumerate(components):
+            record = {"solidIndex": index, "connectedToOwner": None, "relation": "unavailable"}
+            try:
+                record["boundsMm"] = _stats(component)["bbox_mm"]
+                common = body & component
+                volume = float(common.volume) if common else 0.0
+                if not math.isfinite(volume):
+                    raise ValueError("component intersection volume is nonfinite")
+                volume = max(0.0, volume)
+                distance, owner_point, operand_point = body.distance_to_with_closest_points(component)
+                values = [float(distance), *owner_point, *operand_point]
+                if not all(math.isfinite(value) for value in values):
+                    raise ValueError("closest-point measurement is nonfinite")
+                overlap = volume > 1e-9
+                touching = distance <= 1e-7
+                connected = overlap or (touching and any(
+                    len((owner_solid + component).solids()) == 1 for owner_solid in bodies))
+                record.update(connectedToOwner=connected,
+                              relation="volume-overlap" if overlap else "touching" if touching else "disjoint",
+                              intersectionVolumeMm3=round(volume, 8), surfaceDistanceMm=round(float(distance), 8),
+                              gapMm=None if overlap else round(float(distance), 8),
+                              ownerPointMm=[round(float(v), 8) for v in owner_point],
+                              operandPointMm=[round(float(v), 8) for v in operand_point])
+            except Exception as error:
+                record["measurementError"] = str(error)
+            witness["components"].append(record)
+        witness["unconnectedComponentCount"] = sum(item["connectedToOwner"] is False for item in witness["components"])
+        witness["unresolvedComponentCount"] = sum(item["connectedToOwner"] is None for item in witness["components"])
+    except Exception as error:
+        # Secondary measurement failure must not replace the original boolean error.
+        witness["measurementError"] = str(error)
+    return witness
+
+
 def checked_cut(
     body,
     tool,
@@ -1025,6 +1086,8 @@ def checked_cut(
                 "observed": {
                     "removedMm3": round(removed, 6),
                     "tool": tool_stats,
+                    **({"booleanWitness": _boolean_witness(body, tool, operation="cut", part_name=part_name,
+                                                           removed_mm3=removed)} if _collect_source_diagnostics() else {}),
                 },
                 **({"partId": part_name} if part_name is not None else {}),
             },
@@ -1106,6 +1169,8 @@ def checked_union(
                 "observed": {
                     "addition": addition_stats,
                     "result": _manifest_geometry_record(result_stats),
+                    **({"booleanWitness": _boolean_witness(body, addition, operation="union", part_name=part_name)}
+                       if _collect_source_diagnostics() else {}),
                 },
                 **({"partId": part_name} if part_name is not None else {}),
             },
