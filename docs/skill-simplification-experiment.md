@@ -407,3 +407,13 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 独立文档审查确认了一处可直接修复的顺序冲突：主入口要求无合同先草模，`authoring-example.md` 的第一个命令块却先创建 profile/intent 并正式编译；开发阶段又直接引向完整安装验收。现将已有的复制 build、draft、看预览步骤前移，profile/intent/compile 后移，并把安装证据限定到最终阶段。依赖 intent 的 assembly/surface-shell 路径仍明确先完成 profile/intent，再带 `--intent` 草模。功能模型的空间、通路、支撑、保持和装配要求，以及供应商、打印和最终验收约束全部保留。没有改运行时 API 或示例几何；主 SKILL 保持 **176 行**。
 
 同时区分曲面校准的两个入口：修复现有源时迁入回调结构，保留其 intent、part/feature IDs 和真实站点映射；指南中的直接 import 代码用于有配套 intent 的独立示例。不能用示例的 `surface-shell` 身份替代实际杯子的 `desk-cup` 合同。4 项共享文件/路由检查在最终文本上 **2.149 秒通过**，前一次 2.677 秒日志另行保留，仍是 4 个既有方法。证据：[最终入口验证](../workspace/quality-v7-audit/final-regression/staged-entry-final.log)。这项重排尚无模型行为效果证据，安装示例自身仍包含完整定位、承托和四组螺钉，其适配成本不会因文字移动而消失。
+
+### dev-08：交付完整，但两个修复目标仍失败
+
+`dev-08` 杯子冻结 `644164b06bff1921336acee04dba5479e3e16cd3`，在 **739.445 秒自然结束**，没有用满 1,200 秒上限。6 次草模成功，3 次完成的正式编译中 2 失败、1 通过；最后源码与通过轮 `5c29ebc3-9c0a-49de-9933-e57027de4d0c` 一致，32 个完整快照文件逐一匹配真实终态。自然结束使用 terminal inventory，未伪造超时 cutoff；86 个终态文件稳定，没有残留或迟到文件。这次工件绑定完整，但这不是几何验收通过。证据：[终态绑定](../workspace/quality-evaluation-v1/development/dev-08/inspection/completed-run-terminal-binding.json)、[执行记录](../workspace/quality-evaluation-v1/development/dev-08/inspection/development-transport-review.md)。
+
+独立 STEP 检查的包络为 **82.000004415×62.000008048×95.000000200 mm**，通过固定尺寸；z=95 顶口 **54.637931496 mm**，仍不满足固定 54 mm。96 条脚缘探针全部交叉核对一致，但 **14 条 `<2 mm`**，最小 **0.655464169 mm**；五条中央底板均为 3.5 mm。最短点从外底平面进入，在下部同一 B-spline 外面退出、再进入，之后才到内壁；实际是外脚回缩薄楔，不能解释成顶部端口截断。独立截面外宽 **50 mm（z0）→49.717312826 mm（z1.5）→50 mm（z3）**，反证源码对低段单调性的注释。没有执行模型源码来替代独立测量，也没有把有限样本称作全局壁厚证明。证据：[脚缘定位与材料段](../workspace/quality-evaluation-v1/development/dev-08/inspection/cup-independent-review/short-foot-classification.json)。
+
+26 条完成命令中，模型读了 `surface-design.md`，没有继续读取其中链接的 `surface-shell.md`，也没读新的回调示例；不能把这次较早完成归功于新回调。最终官方测量与独立复核绑定同一个 STEP，回复报出 54.638 mm 同时宣称修复完成。源码已把目标解释成“at least 54”，而固定 intent 的 feature acceptance 仍明确 54 mm。观察支持入口未到达和固定目标被误读，不足以断言模型明知违规仍交付。
+
+据此仅替换现有主入口的测量/范围说明：比较所有 intent 目标，包括 feature acceptance；固定尺寸在修复时仍是等式，显式范围另论；loft 或修饰尺寸漂移时直接进入现有曲面联合校准指导。主入口仍是 176 行。该文字修改及前述阶段重排尚需新的模型行为验证；当前不能宣称整体建模质量提高。

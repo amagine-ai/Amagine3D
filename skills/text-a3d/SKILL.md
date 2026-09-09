@@ -116,10 +116,11 @@ functional relationships; compile success alone does not establish model quality
 `references/design-review.md` covers fit and assembly; `references/bambu-printability.md`
 distinguishes process advisories from defects requiring a change.
 
-For a dimension at a specified height, measure final STEP with
-`a3d measure MODEL.step --section-z HEIGHT`; repeat section options as needed.
-For sizes that lofts or finishing can change, retain geometry assertions as shown in
-`references/surface-shell.md`; recheck them after any geometry edit.
+Compare final STEP measurements with intent targets, including feature acceptance.
+For dimensions at a height, use `a3d measure MODEL.step --section-z HEIGHT`; repeat as needed.
+A fixed size stays an equality during repair. Use only declared ranges; inferred values are not ranges.
+For drifting loft or finishing dimensions, use `references/surface-shell.md` to
+calibrate coupled controls and assert all final dimensions after the complete construction.
 For a shape edit, save the previous display GLB and use
 `a3d compare BEFORE.glb AFTER.glb --view front` for a shared camera and scale.
 Inputs must share coordinates and units. A projected change does not score quality,
@@ -132,7 +133,6 @@ names stable for repairs; create another model version for a requested variant o
 snapshot. Preserve intent when its targets have not changed. A changed target needs
 a separate intent revision with verified parent path/SHA and a reason, retaining
 part identity and source/output paths. See `references/evidence-contract.md`.
-Declare genuine freedom as ranges before using it; an inferred value is not a range.
 Deleting an unmet requirement changes scope. Deliver editable and manufacturing
 files with specific observations and remaining limitations.
 
