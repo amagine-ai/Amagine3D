@@ -18,7 +18,8 @@ retention and assembly access. An opening must connect the exterior to its targe
 cavity. Missing component dimensions call for reversible, explicit assumptions;
 they do not by themselves reduce a functional device to an appearance model.
 For a housing with installed components, start from the shared datums in
-`examples/installed_module_build.py` and its matching intent example. Establish
+`examples/installed_module_build.py`. It runs with `a3d draft` before any intent
+or profile; use its matching intent example after the geometry settles. Establish
 the cavity, mounting and access with simple solids before rounding the exterior.
 
 For appearance-led work, inspect the supplied images or establish a reference

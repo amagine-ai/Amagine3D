@@ -20,6 +20,45 @@ SKILL = ROOT / "skills" / "text-a3d"
 
 
 class PublicAuthoringExampleTests(unittest.TestCase):
+    def test_installation_controls_import_without_geometry_and_do_not_rewrite_targets(self):
+        temporary_root = ROOT / "workspace" / "skill-validation"
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
+            work = Path(directory)
+            env = {**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"}
+            for name in ("installed_module_build.py", "installed_module_intent.py"):
+                shutil.copyfile(SKILL / "examples" / name, work / name)
+            source = work / "installed_module_build.py"
+            source.write_text(source.read_text().replace('"width": 80.0', '"width": 79.0')
+                              .replace('"module_width": 50.0', '"module_width": 49.0'))
+            imported = subprocess.run([sys.executable, "-B", "-c", '''
+import json, sys
+from pathlib import Path
+before = {p.name for p in Path('.').iterdir()}
+from installed_module_build import P
+assert not any(name == 'build123d' or name.startswith('build123d.') for name in sys.modules)
+assert before == {p.name for p in Path('.').iterdir()}
+print(json.dumps([P['width'], P['module_width']]))
+'''], cwd=work, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(imported.returncode, 0, imported.stderr)
+            self.assertEqual(json.loads(imported.stdout), [79, 49])
+            profile = subprocess.run(
+                [str(ROOT / "bin" / "a3d"), "profile", "--machine", "a1-mini", "--nozzle", "0.4",
+                 "--tool", "0", "--out", "installed_module_printer-profile.json"],
+                cwd=work, env=env, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(profile.returncode, 0, profile.stdout + profile.stderr)
+            generated = subprocess.run([sys.executable, "-B", "installed_module_intent.py"],
+                cwd=work, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+            intent = json.loads((work / "installed_module_intent.json").read_text())
+            self.assertEqual([intent["dimensions_mm"][axis]["value"] for axis in "xyz"], [80, 60, 16])
+            module = next(feature for feature in intent["features"]
+                          if feature["id"] == "module-space")
+            self.assertEqual(module["part"], "frame")
+            self.assertIn("50 x 30 x 5 mm", module["acceptance"])
+            self.assertFalse((work / "installed_module_parameters.json").exists())
+
     @contextmanager
     def compile_example(self, example_name):
         temporary_root = ROOT / "workspace" / "skill-validation"
@@ -34,19 +73,24 @@ class PublicAuthoringExampleTests(unittest.TestCase):
                 return result
 
             cli = str(ROOT / "bin" / "a3d")
-            run(cli, "profile", "--machine", "a1-mini", "--nozzle", "0.4", "--tool", "0", "--out", f"{example_name}_printer-profile.json")
             for name in (f"{example_name}_intent.py", f"{example_name}_build.py"):
                 shutil.copyfile(SKILL / "examples" / name, work / name)
             source = work / f"{example_name}_build.py"
             source_hash = sha256(source.read_bytes()).hexdigest()
             draft = None
-            if example_name == "simple_brep":
+            if example_name in {"simple_brep", "installed_module"}:
                 draft = json.loads(run(cli, "draft", source.name).stdout)
                 self.assertFalse((work / f"{example_name}_intent.json").exists())
+                self.assertFalse((work / f"{example_name}_printer-profile.json").exists())
+                self.assertFalse((work / f"{example_name}_parameters.json").exists())
+            run(cli, "profile", "--machine", "a1-mini", "--nozzle", "0.4", "--tool", "0", "--out", f"{example_name}_printer-profile.json")
             run(sys.executable, f"{example_name}_intent.py")
             run(cli, "intent", f"{example_name}_intent.json")
             if example_name == "installed_module":
-                draft = json.loads(run(cli, "draft", source.name, "--intent", f"{example_name}_intent.json").stdout)
+                bound_draft = json.loads(run(cli, "draft", source.name, "--intent", f"{example_name}_intent.json").stdout)
+                self.assertEqual(bound_draft["status"], "draft")
+                self.assertEqual(bound_draft["objects"], draft["objects"])
+                self.assertEqual(sha256(source.read_bytes()).hexdigest(), source_hash)
             if draft is not None:
                 self.assertEqual(draft["status"], "draft")
                 self.assertFalse(draft["deliveryReady"])
