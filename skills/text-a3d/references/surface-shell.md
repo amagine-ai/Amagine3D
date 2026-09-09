@@ -22,14 +22,34 @@ bound final STEP after finishing. Draft remains an unvalidated preview and may
 still miss these targets. Use the callback below to check all target errors
 together; final compile can stop at an earlier blocking issue.
 
-When finished dimensions keep drifting together, calibrate the controls together.
-For an existing model, adapt the example's `build_geometry` and `measure_finished`
-functions into its source, preserving its intent, part/feature IDs and actual
-station mapping. Retain existing dimension assertions when the old intent lacks
-`section_dimensions`; copying a new example does not upgrade that contract.
-Keep finishing inside `build_geometry`, so trials and final
-compile use the same complete construction. For the copied standalone example,
-after creating its matching intent, a local calibration script can start with:
+When finished dimensions drift together, first read `build_geometry`,
+`measure_finished` and `main` in `examples/surface_shell_build.py`.
+For an existing source, move its construction and finishing into
+`build_geometry(controls=None)`, returning a fresh `BuildSession` without exporting.
+Preserve its intent filename and part/feature IDs; use the example's environment
+fallback to resolve that same intent in ordinary Python. Use a local station copy
+in both outer and cavity construction, including `station_at`; adapt the control
+indices, measured owner and section plane to your model.
+Keep structural validity checks in the builder, and final acceptance/export in
+`main`, called only under `if __name__ == "__main__"`. Off-target calibration trials
+must return actual errors without exporting or triggering final acceptance.
+
+An old contract may lack a typed check for a fixed section target. Retain or add
+its missing final-geometry guard before export, after all finishing; skip it in
+draft. For example, with module-level imports of `Plane` and `measure_section`,
+use your actual owner and fixed brief constants (not station controls):
+
+```python
+if not build.is_draft:
+    top = measure_section(build.part(PART_NAME), Plane.XY.offset(TOP_PLANE_Z))
+    outer = top["outer_envelope"]
+    if outer is None or not abs(outer["width_u_mm"] - TOP_OUTER_WIDTH) <= 1e-4:
+        raise ValueError(f"Final section must be {TOP_OUTER_WIDTH} mm wide; measured {outer}")
+```
+
+Copying an example does not upgrade an old contract. After that original intent
+is available, a separate calibration script can start with the following calls
+(change the import and control mapping for your source):
 
 ```python
 import numpy as np

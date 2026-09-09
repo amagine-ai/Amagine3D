@@ -18,7 +18,6 @@ For an existing model, read its source and intent, preserve its identities and
 targets, and draft with `a3d draft SOURCE.py --intent INTENT.json`. For loft or
 finishing dimensions that drift, first read `references/surface-shell.md`: adapt
 its complete-geometry measurement callback and jointly calibrate the controls.
-Keep dimension assertions if the existing intent lacks typed section checks.
 
 For a new surface-led construction, use `references/surface-design.md` and the
 intent-bound example in `references/surface-shell.md`; follow its setup.

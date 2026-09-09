@@ -9,8 +9,9 @@ Choose the example that demonstrates the API structure you need:
 - `surface_shell_intent.py` and `surface_shell_build.py`: an outer BRep loft and
   an inner loft cutter, showing a section-controlled shell.
 - `installed_module_intent.py` and `installed_module_build.py`: a configurable
-  module installation with a real window, support, access, optional preview
-  reference and installation evidence against final manufactured parts.
+  front-facing (−Y), rear-service (+Y) module installation, with world Z up,
+  a real window, support, access, optional preview reference and installation
+  evidence against final manufactured parts.
 
 These are API examples. Develop the actual shape, dimensions, features and part
 boundaries from the user's request. `BuildSession` binds the authored BRep solids

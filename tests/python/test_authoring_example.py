@@ -52,11 +52,11 @@ print(json.dumps([P['width'], P['module_width']]))
                 cwd=work, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
             intent = json.loads((work / "installed_module_intent.json").read_text())
-            self.assertEqual([intent["dimensions_mm"][axis]["value"] for axis in "xyz"], [80, 60, 16])
+            self.assertEqual([intent["dimensions_mm"][axis]["value"] for axis in "xyz"], [80, 16, 60])
             module = next(feature for feature in intent["features"]
                           if feature["id"] == "module-space")
             self.assertEqual(module["part"], "frame")
-            self.assertIn("50 x 30 x 5 mm", module["acceptance"])
+            self.assertIn("width 50 x height 30 x depth 5 mm", module["acceptance"])
             self.assertFalse((work / "installed_module_parameters.json").exists())
 
     @contextmanager
@@ -143,7 +143,7 @@ print(json.dumps([P['width'], P['module_width']]))
             assembly = import_step(work / "installed-module-assemble.step")
             self.assertTrue(assembly.is_valid)
             self.assertEqual(len(assembly.solids()), 2)
-            np.testing.assert_allclose(tuple(assembly.bounding_box().size), [80, 60, 16], atol=1e-5)
+            np.testing.assert_allclose(tuple(assembly.bounding_box().size), [80, 16, 60], atol=1e-5)
             for part in ("frame", "cover"):
                 solid = import_step(work / f"installed-module-{part}.step")
                 self.assertTrue(solid.is_valid)
@@ -171,6 +171,14 @@ print(json.dumps([P['width'], P['module_width']]))
             scene = json.loads((work / "installed_module_scene.json").read_text())
             fastening = next(interface for interface in scene["interfaces"] if interface["id"] == "cover-fastening")
             self.assertEqual(len(fastening["fasteners"]), 4)
+            self.assertEqual([fastener["axis"]["direction"] for fastener in fastening["fasteners"]],
+                             [[0, -1, 0]] * 4)
+            self.assertEqual([fastener["axis"]["originMm"] for fastener in fastening["fasteners"]],
+                             [[-33, 5, 7], [-33, 5, 53], [33, 5, 7], [33, 5, 53]])
+            module_check = next(check for check in scene["installationChecks"]
+                                if check["featureId"] == "module-space")
+            self.assertEqual(module_check["withdrawalAxis"], [0, 1, 0])
+            self.assertEqual(module_check["supportDirection"], [0, -1, 0])
 
     def test_surface_shell_recompiles_changed_walls_without_rewriting_intent(self):
         with self.compile_example("surface_shell") as work:

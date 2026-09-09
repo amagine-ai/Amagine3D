@@ -467,3 +467,27 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 杯子另做有界人工机制原型：从dev10最后完整PASS复制源码，原intent/profile逐字不变，三项站点控制在完整含圆缘几何上联合校准，并在原外loft、共用内腔之间融合真实3 mm短脚。9次校准约20.891秒，加1次公开draft和1次compile共11次构建；成品STEP包络 **82×62×95 mm** 在原精度内，z95口宽 **54.000000001272 mm**，同一96条足缘探针由32条短段降为0，全部明确，最短14.787807711 mm；五条中央底板仍3.5 mm。预览保留开口、收脚/丰腹/收肩/后移关系，短直脚台阶可见；这是非盲观察。局部mesh告警0.00722 mm仍未解决，有限探针不证明全壁厚。该原型证明这两项缺陷能在原约束下同时修复，**不代表模型自行采用、A/B通过或整体质量提高**。证据：[完整原型与64项SHA记录](../workspace/quality-v7-audit/cup-finished-geometry-prototype/report.md)。
 
 当前最终代码合并回归 **150个Python方法通过（43.986秒）**，公开CLI **12项通过（1.963秒）**。未新增测试方法；首次混合suite因同名color `cad_helpers` 的搜索路径污染失败，既有布尔见证测试改为显式加载单色文件后重跑；另一次错写capability测试模块名的命令失败也保留，改用真实模块后通过。中间重复运行不累计。独立静态审查确认数值/严重度/验收逻辑未改；安装sweep中“is exact”的过强措辞恢复为“can be exact”。下一轮仍须冻结候选并保持原case/seed/模型/时限；当前没有正式holdout结论。
+
+### dev-11：杯子同版完整交付，足缘局部改善，固定口宽仍失败
+
+`dev-11` 冻结 `40fade6081c523a881dddc7bed705c70dca9c84f`，保持 dev-10 的原case/旧cup seed、runtime、harness、模型与medium设置，两例各1,200秒、并发2，无反馈或自动补跑。杯子在 **1132.362秒自然结束**，外壳在 **1199.986秒记为timeout**，保留原 **04:49:27.192 UTC** 截止；status时间比该截止早14ms的原始记录未改。杯子使用自然terminal inventory，不伪造cutoff。两例清理均未发现需结束的残留进程，也没有声称发过信号；随后杯子69文件、外壳78文件的terminal或cutoff、after-exit与current逐一一致，0晚写、0不稳定，冻结完整性通过。证据：[终态/错误链报告](../workspace/quality-evaluation-v1/development/dev-11/inspection/development-transport-review.md)、[清理复核](../workspace/quality-evaluation-v1/development/dev-11/inspection/post-cleanup-verification.json)。
+
+杯子4次完成草模中3成功、1失败；6次完整compile中5失败、1PASS，首次PASS为 **895.653秒**，晚于dev-10的636.302秒。唯一成功轮 `73f5c571-ccee-4d3a-b72a-c77c40bb68ba` 的 **32个文件全部匹配自然终态**，当前源、STEP、报告与预览同版，没有将历史成功拼到后续源码。独立STEP包络 **81.999920795×62.000025204×95.000000200 mm** 通过原尺寸精度；z95外口 **54.099425219211 mm** 仍不满足固定54 mm，而且偏差较dev-10的54.075825369496 mm略增。最终回复报出了54.0994 mm却仍称修复完成，未明确承认这项目标失败。
+
+同组96条足缘探针全部交叉核对明确、**0条 `<2 mm`**，最短连续材料段 **12.385417116704 mm**；五条中央底板均3.5 mm，实际底脚外宽50 mm。相比dev-10的32条短段/最小0.303930057261 mm，这组足缘指标有局部改善；当前源确实把6 mm直脚extrusion融合进外loft。最短材料段从外底进入，之后到内腔退出，不是相对内外壁厚。未采样脚缘、全局壁厚、整块底板、承载稳定性与盲评仍未证明；mesh薄区告警最小0.00706 mm保留，其实际原因未知，不能采用模型“仅为曲率采样”的未验证归因。证据：[独立同版STEP测量](../workspace/quality-evaluation-v1/development/dev-11/inspection/cup-independent-review/measurement-first/summary.json)、[独立结论与边界](../workspace/quality-evaluation-v1/development/dev-11/inspection/cup-independent-review/conclusions.json)。
+
+这轮确实到达了曲面指导：杯子在 **299.313秒**读取完整`surface-shell.md`，**323.694秒**首次改源，随后采用真实直脚；不能再说指南未被读取。但它没有实现`build_geometry/measure_finished`联合校准回调，仍靠完整compile循环手调站点。五轮失败依次是X/Y漂移、Y=62.0484、62.0026、61.9996，以及STEP读回X=82.000116704超过1e-4容差；最后仅将整体包络调到允许精度，固定顶口仍漏过。旧intent未添加typed section字段，这次结果不能替代新合同验收机制的模型效果证据。
+
+外壳在 **162.162秒**复制并读安装示例，**216.445秒**写适配源码，**227.103秒**完成首草模、**297.226秒**首次草模成功，早于dev-10的399.344 / 635.868秒。首次编辑前可见文档/API输出20,125字符，先草模后intent的顺序确实执行。后续 **11次完整compile全部失败**：构造ID未声明、intent文件缺失、修订元数据/归属错误、接口kind及接口ID不匹配，最后 **1186.527秒**失败为`interfaces[1].fasteners must declare at least one screw axis`。虽有intent中的四颗紧固件描述，实际source导出接口的轴向元数据仍不足；尚未进入完整物理装配/插入验收。最后失败快照13文件全部匹配cutoff，但缺1项且无同版完整预览，不能当合格交付。草模提前没有抵消正式交付失败。
+
+可见SDK断流分别发生在杯子 **04:32:08.004 / 04:47:30.769 UTC** 和外壳 **04:48:10.127 UTC**，均显示`Reconnecting... 1/2`并在之后恢复可见工具进展；原预算不延长，不能把全部空档归因skill或思考。17条完整compile命令/事件输出均保留，5秒observer捕获其中16条/31次快照，漏掉的仅是外壳757.489秒“intent文件不存在”的CONFIG.INVALID结果，不伪造该轮快照；唯一PASS已完整保全。证据：[SDK原始事件绑定](../workspace/quality-evaluation-v1/development/dev-11/inspection/provider-errors.json)、[历史与终态逐文件绑定](../workspace/quality-evaluation-v1/development/dev-11/inspection/complete-snapshot-terminal-bindings.json)。本轮支持**交付一致性和已采样脚缘的局部改善**，仍不支持宣称整体建模质量提高；下一候选及正式holdout均未由这轮结论自动启动。
+
+### dev-11 后：统一安装基准，补齐旧源迁移与成品尺寸守卫
+
+安装示例改用前面−Y、后盖+Y、世界Z向上的共同基准，宽/高/深名称与人类尺寸一致。只替换原有build/intent两文件，保留原part/feature/interface及真实圆形紧固件recipes；默认世界XYZ由80×60×16变为80×16×60，独立目标仍为宽80×高60×深16。隔离对照的两件实体与原几何旋转后的双向BRep差集体积均为0，包络误差≤7.11e−15 mm；三项安装见证及四颗螺钉的轴/端点随同变换，两边安装审计均通过。支持方向−Y只检查向视窗座接触，不证明重力支持、承载或稳定；原两项薄区warnings保留。独立只读审查无坐标/归属阻断，实际接入后两项既有公开测试通过（25.480秒），覆盖导入不生成几何/不重写目标、真实两实体、插入/止挡/通路、四轴方向与端点。独立底插草模和历史记录不改。证据：[例子等价原型](../workspace/quality-v7-audit/front-service-example-proposal/README.md)、[独立审查](../workspace/quality-v7-audit/front-service-example-proposal/independent-review/review.md)、[产品真实测试](../workspace/quality-v7-audit/front-service-example-proposal/product-validation/receipt.json)。
+
+旧cup seed从未带最终口宽断言，原“保留断言”措辞未覆盖这种情况。隔离副本只在现有export前加四尺寸成品检查，原intent/profile逐字不变：合格人工原型公开compile通过，实际顶口54.000000001277 mm；dev11终态在整体XYZ合格时以顶口54.099425219218 mm超差拒绝；同一负例源码的公开draft仍成功且deliveryReady=false。第一轮控制因函数内同名import遮蔽原调用而失败，完整保留，未算尺寸拒绝；后续draft本身成功，wrapper多段JSON解析错误单列，未计为几何失败。证据：[隔离控制目录](../workspace/quality-v7-audit/legacy-final-assertion-proposal/public-controls-v2/)。
+
+产品仅在已有surface-shell指南把“保留”改为“保留或补上缺失检查”，以五行top-only `ValueError` 片段说明真实owner、固定目标、完整收尾之后/导出之前与draft豁免；不把重复目标断言加回已有typed验收的示例，不新增API或解析acceptance文字。该实际文档片段另有8项逻辑控制（目标内外、dev11观测值、缺截面、NaN/无穷、draft不测量）全部通过；这些是提供数值的分支控制，不能冒充重新建造几何。三项公开控制用的是四尺寸assert插入版，明确与最终文档片段区分。证据：[实际片段逻辑控制](../workspace/quality-v7-audit/legacy-final-assertion-proposal/product-guide-validation/logic-controls.json)。
+
+曲面段落还把旧源“adapt callbacks”替换为具体迁移：完整构造/finish移入返回fresh BuildSession的函数，保留原intent的普通Python路径，局部stations同时进入外形、内腔和station_at，最终验收/export与可导入试算分开。dev11源是模块级构造且station_at读全局，因此这些是实际迁移陷阱，不是又一套solver；原有限差分方法和30次上限保持。主入口删除重复断言句，不新增入口。上述是已验证机制及迁移说明，尚未证明模型采用、完整质量通过或正式A/B改善；下一轮必须保持原开发输入与预算验证。
