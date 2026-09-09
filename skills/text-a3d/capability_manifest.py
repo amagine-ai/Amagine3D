@@ -189,6 +189,13 @@ def _intent_input_constraints() -> dict[str, Any]:
             },
             "faceDirections": {face: sorted(directions) for face, directions in sorted(contract.FACE_DIRECTIONS.items())},
             "directionRules": "direction or edge_crossing requires face; none and surface-normal are also valid for any face",
+            "section_dimensions": {
+                "scope": "optional list of outer-section dimensions on the owning final semantic BRep STEP; not hole, passage or wall dimensions",
+                "plane": "{axis: x/y/z, coordinate_mm: finite number}; absolute semantic coordinates",
+                "outer_envelope": "width_u_mm and/or depth_v_mm, each {value, constraint?}; same fixed/range rules as dimensions_mm",
+                "precision": "0.0001 mm numerical precision; --tol cannot relax section targets",
+                "details": "references/evidence-contract.md",
+            },
         },
         "critical_features": "IDs from parts.*.features[].id; interface IDs do not qualify unless also declared as features",
         "interfaces[]": {

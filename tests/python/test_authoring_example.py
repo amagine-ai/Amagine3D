@@ -202,6 +202,16 @@ print(json.dumps([P['width'], P['module_width']]))
                         path = work / path
                     self.assertEqual(record["sha256"], sha256(path.read_bytes()).hexdigest())
                     exports[kind] = path
+                audit_record = result["artifacts"]["stepAudit:surface-shell"]
+                audit_path = Path(audit_record["path"])
+                self.assertEqual(audit_record["sha256"], sha256(audit_path.read_bytes()).hexdigest())
+                audit = json.loads(audit_path.read_text())
+                self.assertEqual(audit["step"]["sha256"], sha256(exports["step"].read_bytes()).hexdigest())
+                section = next(check for check in audit["checks"]
+                               if check["name"] == "section:shell-surface:0:width_u_mm")
+                self.assertTrue(section["pass"], section)
+                self.assertEqual(section["expected"]["value_mm"], 82)
+                self.assertAlmostEqual(section["observed"]["actual_mm"], 82, places=4)
                 solid = import_step(exports["step"])
                 self.assertTrue(solid.is_valid)
                 self.assertEqual(len(solid.solids()), 1)
@@ -284,9 +294,9 @@ print(json.dumps(actual))
             for key in ("runId", "sourceHash", "sceneHash", "reportHash"):
                 self.assertNotEqual(second[key], first[key], key)
 
-            # A finishing edit changes the actual top section while every loft
-            # control and target stays unchanged. The example must catch that
-            # coupled change before exporting another draft as ready.
+            # A finishing edit changes the actual top section while the overall
+            # bounds and immutable target stay unchanged. Preview is allowed;
+            # final acceptance must fail against the exported STEP itself.
             finishing = '''    from cad_helpers import checked_fillet
     build.finish("surface-shell", lambda body: checked_fillet(
         body, [edge for edge in body.edges() if edge.bounding_box().min.Z > HEIGHT - 0.01],
@@ -295,23 +305,59 @@ print(json.dumps(actual))
             source = source_path.read_text()
             marker = "    # Any finishing belongs here"
             self.assertEqual(source.count(marker), 1)
-            # Simultaneous shoulder drift must appear in that same feedback,
-            # instead of being concealed behind the first failed top check.
-            station = "(30.0, 100.0, 80.0, 14.0, 0.0, 0.0)"
-            self.assertEqual(source.count(station), 1)
-            source = source.replace(station, "(30.0, 100.2, 80.2, 14.0, 0.0, 0.0)")
             source_path.write_text(source.replace(marker, finishing + "\n" + marker))
             result = subprocess.run(
                 [str(ROOT / "bin" / "a3d"), "draft", source_path.name, "--intent", intent_path.name],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
                 capture_output=True, text=True, timeout=120,
             )
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             draft = json.loads(result.stdout)
-            self.assertEqual(draft["artifacts"], {})
-            self.assertIn("Top outer width at z=90.0: expected 82.0, measured", draft["issues"][0]["detail"])
-            self.assertIn("Envelope X: expected 100.0, measured", draft["issues"][0]["detail"])
-            self.assertIn("Envelope Y: expected 80.0, measured", draft["issues"][0]["detail"])
+            self.assertEqual(draft["status"], "draft")
+            self.assertFalse(draft["deliveryReady"])
+            result = subprocess.run(
+                [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
+                 "--source", source_path.name, "--output-dir", "."],
+                cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            failed = json.loads((work / "surface-shell_compile-result.json").read_text())
+            self.assertFalse(failed["pass"])
+            audit_record = failed["artifacts"]["stepAudit:surface-shell"]
+            audit_path = Path(audit_record["path"])
+            self.assertEqual(audit_record["sha256"], sha256(audit_path.read_bytes()).hexdigest())
+            audit = json.loads(audit_path.read_text())
+            self.assertEqual(audit["step"]["sha256"], sha256((work / "surface-shell.step").read_bytes()).hexdigest())
+            self.assertIn("section:shell-surface:0:width_u_mm", audit["errors"])
+            section = next(check for check in audit["checks"]
+                           if check["name"] == "section:shell-surface:0:width_u_mm")
+            self.assertLess(section["observed"]["actual_mm"], 81.9)
+            self.assertEqual(section["expected"]["value_mm"], 82)
+            np.testing.assert_allclose(audit["bounds_mm"]["size"], [100, 80, 90], atol=1e-5)
+            self.assertEqual(sha256(intent_path.read_bytes()).hexdigest(), intent_hash)
+
+            # Whole-envelope drift is rejected earlier during export. Absence
+            # of a later section audit is not evidence that the section passed.
+            station = "(30.0, 100.0, 80.0, 14.0, 0.0, 0.0)"
+            source = source_path.read_text()
+            self.assertEqual(source.count(station), 1)
+            source_path.write_text(source.replace(station, "(30.0, 100.2, 80.2, 14.0, 0.0, 0.0)"))
+            result = subprocess.run(
+                [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
+                 "--source", source_path.name, "--output-dir", "."],
+                cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            failed = json.loads((work / "surface-shell_compile-result.json").read_text())
+            self.assertFalse(failed["pass"])
+            self.assertTrue(any(issue["stage"] == "source" for issue in failed["issues"]), failed["issues"])
+            details = "\n".join(issue["message"] for issue in failed["issues"])
+            self.assertIn("semantic envelope dimension x differs from intent", details)
+            self.assertIn("semantic envelope dimension y differs from intent", details)
+            self.assertNotIn("stepAudit:surface-shell", failed["artifacts"])
+            self.assertEqual(sha256(intent_path.read_bytes()).hexdigest(), intent_hash)
 
 
 if __name__ == "__main__":

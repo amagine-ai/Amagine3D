@@ -14,18 +14,20 @@ and `FLOOR` control the section inset and base thickness. Section insets do not
 guarantee constant 3D normal thickness on sloping walls; check measured wall
 thickness and shoulder overhang after changes.
 
-The example checks its 100×80×90 mm envelope and 82 mm final outer width on the
-z=90 plane after all geometry edits, using `bounding_box` and `measure_section`.
-It reports all dimensional deviations together. Keep these brief targets separate
-from loft controls. A new station or fillet can change a previously correct
-section; the assertion reports target and measured width before export in both
-draft and compile. Use the requested datum and size for the actual model, and
-retain the complete shape's preview and independent final STEP checks.
+The intent keeps the 100×80×90 mm envelope and the 82 mm final outer width on
+z=90 separate from editable loft controls. Its `section_dimensions` declaration
+on `shell-surface` measures the owning part's outer section in semantic coordinates;
+it does not measure a hole, passage or wall thickness. Public compile checks the
+bound final STEP after finishing. Draft remains an unvalidated preview and may
+still miss these targets. Use the callback below to check all target errors
+together; final compile can stop at an earlier blocking issue.
 
 When finished dimensions keep drifting together, calibrate the controls together.
 For an existing model, adapt the example's `build_geometry` and `measure_finished`
 functions into its source, preserving its intent, part/feature IDs and actual
-station mapping. Keep finishing inside `build_geometry`, so trials and final
+station mapping. Retain existing dimension assertions when the old intent lacks
+`section_dimensions`; copying a new example does not upgrade that contract.
+Keep finishing inside `build_geometry`, so trials and final
 compile use the same complete construction. For the copied standalone example,
 after creating its matching intent, a local calibration script can start with:
 
@@ -80,8 +82,11 @@ cp "$AMAGINE3D_SKILL_DIR/examples/surface_shell_intent.py" .
 cp "$AMAGINE3D_SKILL_DIR/examples/surface_shell_build.py" .
 python3 surface_shell_intent.py
 a3d intent surface_shell_intent.json
-a3d compile surface_shell_scene.json --intent surface_shell_intent.json --source surface_shell_build.py --output-dir .
+a3d draft surface_shell_build.py --intent surface_shell_intent.json
 ```
+
+Inspect the returned preview with `view_image`, develop the source controls,
+then run `a3d compile surface_shell_scene.json --intent surface_shell_intent.json --source surface_shell_build.py --output-dir .`.
 
 The intent is written once; the compiler executes the build source. Its
 `BuildSession.add` and `cut` retain the outer solid and actual cavity cutter;

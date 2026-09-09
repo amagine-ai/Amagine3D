@@ -1,5 +1,6 @@
 """Exact final-solid sections, frames, holes and STEP/CLI input binding."""
 from contextlib import redirect_stderr, redirect_stdout
+from copy import deepcopy
 from hashlib import sha256
 import io
 import json
@@ -19,6 +20,9 @@ from build123d import (
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "skills" / "text-a3d"))
 import brep_measurements as measurements
+import step_check
+from build_manifest import artifact_record
+from tests.python.intent_fixture import intent_ref, write_intent
 
 
 class BrepMeasurementsTests(unittest.TestCase):
@@ -33,6 +37,30 @@ class BrepMeasurementsTests(unittest.TestCase):
         self.assertEqual(len(actual), len(expected))
         for value, target in zip(actual, expected):
             self.assertAlmostEqual(value, target, places=places)
+
+    def _section_audit_inputs(self, step_path, sections, *, owner="part", other_step=None,
+                              dimensions=(54, 40, 10)):
+        owners = {"mouth-outside": owner}
+        if other_step is not None:
+            owners["other-body"] = "other"
+        intent_path, intent = write_intent(
+            self.work, part=owner if other_step is None else "fixture-assembly",
+            feature_owners=owners, dimensions_mm=dimensions)
+        if sections is not None:
+            intent["features"][0]["section_dimensions"] = deepcopy(sections)
+        intent_path.write_text(json.dumps(intent))
+        # Only STEP-check inputs are needed here; complete manifests are tested separately.
+        report = {"schema": "evidence-a3d-build/v1",
+                  "backend": "brep-part" if other_step is None else "brep-assembly",
+                  "inputs": {"intent": intent_ref(intent_path)},
+                  "parts": {part: {"semantic": {"boundsMm": {"size": list(dimensions)}}}
+                            for part in set(owners.values())},
+                  "artifacts": {f"step:{owner}": artifact_record(step_path, coordinateFrame="semantic")}}
+        if other_step is not None:
+            report["artifacts"]["step:other"] = artifact_record(other_step, coordinateFrame="semantic")
+        report_path = self.work / "step-report.json"
+        report_path.write_text(json.dumps(report))
+        return intent_path, report_path
 
     def test_box_with_two_holes_keeps_outer_center_distinct_from_material_centroid(self):
         part = Pos(0, 0, 5) * Box(20, 12, 10)
@@ -140,19 +168,195 @@ class BrepMeasurementsTests(unittest.TestCase):
         self.assertAlmostEqual(mouth["outer_envelope"]["width_u_mm"], 52)
         self.assertAlmostEqual(result["world_bounds_mm"]["size"][0], 54)
 
+        raw_path = self.work / "unfilleted.step"
+        export_step(box, raw_path)
+        fixed = [{"plane": {"axis": "z", "coordinate_mm": 10},
+                  "outer_envelope": {"width_u_mm": {"value": 54}}}]
+        correct = deepcopy(fixed)
+        correct[0]["outer_envelope"]["width_u_mm"]["value"] = 52
+        ranged = deepcopy(correct)
+        ranged[0]["outer_envelope"]["width_u_mm"]["constraint"] = {
+            "kind": "range", "min_mm": 51.99, "max_mm": 52.01}
+        outside_range = deepcopy(ranged)
+        outside_range[0]["outer_envelope"]["width_u_mm"] = {
+            "value": 53, "constraint": {"kind": "range", "min_mm": 52.9, "max_mm": 53.1}}
+        empty = deepcopy(fixed)
+        empty[0]["plane"]["coordinate_mm"] = 11
+        # At 0.5 mm from a top fillet's center, the unit circle reaches
+        # z=9+sqrt(1-0.5**2). Using an offset relative to the part's minimum
+        # instead of these absolute x/y planes would incorrectly measure z=10.
+        section_height = 9 + math.sqrt(3) / 2
+        axes = [
+            {"plane": {"axis": "x", "coordinate_mm": 26.5},
+             "outer_envelope": {"width_u_mm": {"value": 40}, "depth_v_mm": {"value": section_height}}},
+            {"plane": {"axis": "y", "coordinate_mm": -19.5},
+             "outer_envelope": {"width_u_mm": {"value": 54}, "depth_v_mm": {"value": section_height}}},
+        ]
+        cases = [
+            ("legacy", None, True, "part", None),
+            ("unbound legacy report", None, True, "part", None),
+            ("fixed mismatch", fixed, False, "part", None),
+            ("report-only relative intent", fixed, False, "part", None),
+            ("fixed correct", correct, True, "part", None),
+            ("explicit range", ranged, True, "part", None),
+            ("outside range", outside_range, False, "part", None),
+            ("empty section", empty, False, "part", None),
+            ("absolute x/y planes and u/v", axes, True, "part", None),
+            ("physical part named assembly", fixed, False, "assembly", None),
+            ("correct other part cannot substitute", fixed, False, "part", raw_path),
+        ]
+        for name, sections, expected, owner, other in cases:
+            with self.subTest(name=name):
+                intent_path, report_path = self._section_audit_inputs(
+                    path, sections, owner=owner, other_step=other)
+                argv = [sys.executable, step_check.__file__, str(path), "--report", str(report_path), "--tol", "10"]
+                if name in {"report-only relative intent", "unbound legacy report"}:
+                    report = json.loads(report_path.read_text())
+                    if sections is None:
+                        report["inputs"].pop("intent")
+                    else:
+                        report["inputs"]["intent"]["path"] = intent_path.name
+                    report_path.write_text(json.dumps(report))
+                else:
+                    argv.extend(["--intent", str(intent_path)])
+                checked = subprocess.run(
+                    argv,
+                    capture_output=True, text=True, encoding="utf-8", timeout=30)
+                self.assertEqual(checked.returncode, 0 if expected else 1, checked.stdout + checked.stderr)
+                payload = json.loads(checked.stdout)
+                self.assertEqual(payload["pass"], expected)
+                self.assertEqual(payload["step"]["sha256"], sha256(path.read_bytes()).hexdigest())
+                self.assertTrue(all(check["pass"] for check in payload["checks"]
+                                    if check["name"].startswith("dimension_")))
+                local = [check for check in payload["checks"] if check["name"].startswith("section:")]
+                if sections is None:
+                    self.assertEqual(local, [])
+                    continue
+                if name == "absolute x/y planes and u/v":
+                    self.assertEqual(len(local), 4, payload)
+                    for check in local:
+                        self.assertAlmostEqual(check["observed"]["actual_mm"], check["expected"]["value_mm"])
+                        plane = check["observed"]["plane"]
+                        self.assertEqual(plane["v_dir"], [0, 0, 1])
+                        if ":0:" in check["name"]:
+                            self.assertEqual(plane["origin_mm"], [26.5, 0, 0])
+                            self.assertEqual(plane["u_dir"], [0, 1, 0])
+                        else:
+                            self.assertEqual(plane["origin_mm"], [0, -19.5, 0])
+                            self.assertEqual(plane["u_dir"], [1, 0, 0])
+                    continue
+                self.assertEqual(len(local), 1, payload)
+                check = local[0]
+                self.assertEqual(check["observed"]["part"], owner)
+                self.assertEqual(check["observed"]["coordinate_frame"], "semantic")
+                self.assertEqual(check["expected"]["measurement_precision_mm"], 0.0001)
+                if name == "empty section":
+                    self.assertIsNone(check["observed"]["actual_mm"])
+                else:
+                    self.assertAlmostEqual(check["observed"]["actual_mm"], 52)
+                    if not expected and sections[0]["outer_envelope"]["width_u_mm"]["value"] == 54:
+                        self.assertAlmostEqual(check["observed"]["delta_mm"], -2)
+
+    def test_step_section_audit_rejects_unbound_owner_frame_and_replaced_input(self):
+        path = self.work / "unread.step"
+        path.write_bytes(b"binding failures must occur before CAD import")
+        sections = [{"plane": {"axis": "z", "coordinate_mm": 10},
+                     "outer_envelope": {"width_u_mm": {"value": 54}}}]
+        cases = {
+            "wrong intent hash": "intent does not match",
+            "removed section requirements": "intent does not match",
+            "report-only bad intent hash": "intent does not match",
+            "wrong semantic frame": "semantic STEP",
+            "unknown owner": "declared physical owner",
+            "unknown artifact": "declared physical part",
+            "duplicate SHA alias": "exactly one",
+            "missing report": "hash-bound build report",
+            "multipart assembly owner": "owner assembly collides",
+            "replaced after selection": "changed after build-report artifact selection",
+        }
+        for name, message in cases.items():
+            with self.subTest(name=name):
+                other_path = self.work / "other-unread.step"
+                other_path.write_bytes(b"another owner's STEP")
+                intent_path, report_path = self._section_audit_inputs(
+                    path, sections, owner="assembly" if name == "multipart assembly owner" else "part",
+                    other_step=other_path if name == "multipart assembly owner" else None)
+                intent, report = json.loads(intent_path.read_text()), json.loads(report_path.read_text())
+                if name in {"wrong intent hash", "report-only bad intent hash"}:
+                    report["inputs"]["intent"]["sha256"] = "0" * 64
+                elif name == "removed section requirements":
+                    intent["features"][0].pop("section_dimensions")
+                    intent_path = self.work / "substitute-legacy-intent.json"
+                    intent_path.write_text(json.dumps(intent))
+                elif name == "wrong semantic frame":
+                    report["artifacts"]["step:part"]["coordinateFrame"] = "part-print"
+                elif name == "unknown owner":
+                    intent["features"][0]["part"] = "other"
+                    intent_path.write_text(json.dumps(intent))
+                    report["inputs"]["intent"] = intent_ref(intent_path)
+                elif name in {"unknown artifact", "duplicate SHA alias"}:
+                    report["artifacts"]["step:alias"] = deepcopy(report["artifacts"]["step:part"])
+                    if name == "unknown artifact":
+                        report["artifacts"]["step:part"]["sha256"] = "f" * 64
+                report_path.write_text(json.dumps(report))
+                argv = ["step_check.py", str(path)]
+                if name != "report-only bad intent hash":
+                    argv.extend(["--intent", str(intent_path)])
+                if name != "missing report":
+                    argv.extend(["--report", str(report_path)])
+                digest_calls = 0
+                real_digest = step_check._digest
+
+                def digest(file):
+                    nonlocal digest_calls
+                    if name == "replaced after selection" and Path(file).resolve() == path:
+                        digest_calls += 1
+                        if digest_calls > 1:
+                            return "f" * 64
+                    return real_digest(file)
+
+                with patch.object(sys, "argv", argv), patch.object(step_check, "_digest", digest), \
+                     patch.object(step_check, "import_step") as importer, redirect_stdout(io.StringIO()) as output:
+                    code = step_check.main()
+                importer.assert_not_called()
+                self.assertEqual(code, 1)
+                payload = json.loads(output.getvalue())
+                self.assertFalse(payload["pass"])
+                self.assertIn(message, payload["checks"][0]["observed"])
+
     def test_step_changed_during_measurement_discards_result(self):
         path = self.work / "changing.step"
         export_step(Box(10, 10, 10), path)
+        original = path.read_bytes()
         real_import = measurements.import_step
 
         def changed(file):
             part = real_import(file)
-            file.write_bytes(file.read_bytes() + b"\n")
+            changed_path = Path(file)
+            changed_path.write_bytes(changed_path.read_bytes() + b"\n")
             return part
 
         with patch.object(measurements, "import_step", changed):
             with self.assertRaisesRegex(ValueError, "changed during measurement"):
                 measurements.measure_step(path)
+
+        path.write_bytes(original)
+        intent_path, report_path = self._section_audit_inputs(
+            path, [{"plane": {"axis": "z", "coordinate_mm": 0},
+                    "outer_envelope": {"width_u_mm": {"value": 10}}}], dimensions=(10, 10, 10))
+        with patch.object(sys, "argv", ["step_check.py", str(path), "--intent", str(intent_path),
+                                       "--report", str(report_path)]), \
+             patch.object(step_check, "import_step", changed), redirect_stdout(io.StringIO()) as output:
+            code = step_check.main()
+        self.assertEqual(code, 1)
+        payload = json.loads(output.getvalue())
+        self.assertFalse(payload["pass"])
+        self.assertEqual(payload["errors"], ["section_step_unchanged"])
+        binding = next(check for check in payload["checks"] if check["name"] == "section_step_unchanged")
+        self.assertEqual(binding["expected"], sha256(original).hexdigest())
+        self.assertEqual(binding["observed"], sha256(path.read_bytes()).hexdigest())
+        self.assertNotEqual(binding["expected"], binding["observed"])
+        self.assertEqual(payload["step"]["sha256"], binding["observed"])
 
     def test_trimmed_spline_section_area_uses_adaptive_integration(self):
         angles = [i * 2 * math.pi / 24 for i in range(24)]

@@ -17,6 +17,10 @@ write_intent(
     parts={"surface-shell": {
         "features": [
             {"id": "shell-surface", "kind": "envelope",
+             "section_dimensions": [{
+                 "plane": {"axis": "z", "coordinate_mm": 90.0},
+                 "outer_envelope": {"width_u_mm": {"value": 82.0}},
+             }],
              "evidence": "Proposed demonstration of a section-driven BRep shell, not a product requirement",
              "acceptance": "100 x 80 x 90 mm envelope with rounded rectangular sections and narrower upper/lower shoulders; ruled transitions are acceptable"},
             {"id": "shell-cavity", "kind": "cavity", "face": "top", "direction": "+Z",

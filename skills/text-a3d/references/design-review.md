@@ -83,12 +83,27 @@ the product or weaken QA merely to satisfy the current packing implementation.
 
 ## Visual review
 
-For appearance-led work, use the main skill's reference-image guidance to establish
-a direction before detailing. Prefer supplied references; otherwise, when network
-access is enabled, actually view a few relevant images and retain their sources.
+Inspect uploaded images directly as the primary visual reference. For appearance-led
+work without one, use available native search to find and actually view a small
+relevant set when network access is enabled. Record URLs and useful silhouette,
+proportion or surface relationships in the workspace, separating observations from
+interpretation. Dimension-driven parts need no unrelated image search.
+
+Follow runtime network instructions. `CODEX_WEB_SEARCH_ENABLED` defaults to true;
+false disables search. Enabled configuration does not guarantee provider tools or
+image perception. Use available tools directly, without per-task capability probes;
+if a step fails, identify missing evidence and continue with supplied/local evidence.
+A page title is not visual inspection. For deterministic palette/silhouette facts,
+use `a3d reference IMAGE --out REPORT.json`. Perspective appearance is approximate;
+do not claim exact reproduction without measurements.
+
+For uncertain fit or mounting dimensions, use primary component drawings or supplier
+specifications when network access is enabled. Carry exact component identity and
+source into intent; a similar product is not an exact specification. Otherwise keep
+proposed envelopes and dimensions as reversible parameters.
+
 Extract the relationships that shape the result: relative volume, silhouette,
-surface transitions, spacing and integration of secondary forms. Perspective
-references suggest proportions but do not establish exact dimensions.
+surface transitions, spacing and integration of secondary forms.
 
 For a new model with unresolved construction, `a3d draft <name>_build.py` previews
 the same BuildSession source before intent/feature registration when it declares
@@ -110,7 +125,7 @@ features. When the current tools support a focused, section or exploded view,
 use it as supplemental evidence while retaining the canonical assembly.
 
 Describe concrete discrepancies and tune the source controls responsible for
-them. Follow the main skill's image-reading instructions and report the visible
+them. Follow the reference guidance above and report the visible
 evidence's limitations alongside the actual compile outcome.
 
 For a requested size at a particular location, read the actual STEP section:

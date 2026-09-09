@@ -24,6 +24,7 @@ from build_manifest import (  # noqa: E402
     semantic_assembly_record,
     semantic_envelope_errors,
     semantic_envelope_tolerance_mm,
+    semantic_evidence_errors,
     validate_manifest,
 )
 from tests.python.intent_fixture import (  # noqa: E402
@@ -288,6 +289,51 @@ class BuildManifestTests(unittest.TestCase):
             errors = validate_manifest(report)
             self.assertTrue(any("step must be not-applicable" in item for item in errors))
             self.assertTrue(any("step:part is forbidden" in item for item in errors))
+
+    def test_section_dimensions_require_the_owners_semantic_brep_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            intent_path = Path(report["inputs"]["intent"]["path"])
+            intent = json.loads(intent_path.read_text())
+            intent.update(part="part", manufacturing={"mode": "single-part"}, features=[{
+                "id": "part-body", "part": "part", "kind": "envelope",
+                "evidence": "The top outside dimension belongs to this part",
+                "acceptance": "Top outside width is 1 mm",
+                "section_dimensions": [{"plane": {"axis": "z", "coordinate_mm": 1},
+                                        "outer_envelope": {"width_u_mm": {"value": 1}}}],
+            }])
+            intent_path.write_text(json.dumps(intent))
+            digest = artifact_record(intent_path)["sha256"]
+            report["inputs"]["intent"]["sha256"] = digest
+            report["backendData"]["semanticAssembly"]["intentSha256"] = digest
+            self.assertEqual(semantic_evidence_errors(report, root), [])
+
+            for name in ("missing STEP", "print coordinates", "mesh owner"):
+                with self.subTest(name=name):
+                    changed = deepcopy(report)
+                    if name == "missing STEP":
+                        changed["artifacts"].pop("step:part")
+                    elif name == "print coordinates":
+                        changed["artifacts"]["step:part"]["coordinateFrame"] = "part-print"
+                    else:
+                        changed["backend"] = "hybrid-mesh"
+                        changed["parts"]["part"]["representationMaster"] = "mesh"
+                        changed["artifacts"].pop("step:part")
+                    errors = semantic_evidence_errors(changed, root)
+                    self.assertTrue(any("section dimensions for part-body" in error for error in errors), errors)
+
+            # Multipart export reserves step:assembly for the aggregate; a physical
+            # part with that name cannot obtain its own section proof from the union.
+            intent["manufacturing"] = {"mode": "multipart", "parts": [{"name": "assembly"}, {"name": "other"}]}
+            intent["features"][0]["part"] = "assembly"
+            intent_path.write_text(json.dumps(intent))
+            report["inputs"]["intent"]["sha256"] = artifact_record(intent_path)["sha256"]
+            report["backend"] = "brep-assembly"
+            report["parts"] = {name: deepcopy(report["parts"]["part"]) for name in ("assembly", "other")}
+            report["artifacts"]["step:assembly"] = report["artifacts"].pop("step:part")
+            errors = semantic_evidence_errors(report, root)
+            self.assertTrue(any("owner assembly collides" in error for error in errors), errors)
 
     def test_hybrid_cannot_omit_print_package_and_material_plan(self):
         with tempfile.TemporaryDirectory() as directory:

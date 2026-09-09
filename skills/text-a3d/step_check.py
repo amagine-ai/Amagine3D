@@ -9,11 +9,12 @@ import math
 from pathlib import Path
 import tempfile
 
-from build123d import export_stl, import_step
+from build123d import Plane, export_stl, import_step
 import trimesh
 
 from build_manifest import (
     SEMANTIC_ARTIFACT_TOLERANCE_MM,
+    BREP_ENVELOPE_TOLERANCE_MM,
     SEMANTIC_ENVELOPE_TOLERANCE_MM,
 )
 
@@ -162,6 +163,75 @@ class Audit:
         return all(item["pass"] for item in self.checks)
 
 
+def _bound_section_features(intent: dict | None, intent_path: str | None,
+                            report: dict | None, artifact_key: str | None) -> list[dict]:
+    """Select requirements on this hash-bound semantic part; never its print pose."""
+    from intent_contract import feature_owner_map, physical_part_names, validate_section_dimensions
+
+    features = intent.get("features", []) if isinstance(intent, dict) else []
+    requested = [feature for feature in features if isinstance(feature, dict) and "section_dimensions" in feature]
+    if not requested:
+        return []
+    errors = [error for index, feature in enumerate(features) if isinstance(feature, dict)
+              for error in validate_section_dimensions(feature, index)]
+    if errors:
+        raise ValueError("; ".join(errors))
+    if not isinstance(report, dict) or not intent_path:
+        raise ValueError("section dimensions require the hash-bound build report and intent")
+    if report.get("inputs", {}).get("intent", {}).get("sha256") != _digest(Path(intent_path)):
+        raise ValueError("section dimension intent does not match the build-report hash")
+    owners = feature_owner_map(intent)
+    parts = physical_part_names(intent)
+    for feature in requested:
+        owner = owners.get(feature.get("id"))
+        if owner not in parts:
+            raise ValueError("section dimension feature must have a declared physical owner")
+        if owner == "assembly" and report.get("backend") == "brep-assembly":
+            raise ValueError("section dimension owner assembly collides with the aggregate STEP artifact")
+        artifact = report.get("artifacts", {}).get(f"step:{owner}", {})
+        if artifact.get("coordinateFrame") != "semantic":
+            raise ValueError(f"section dimensions for {owner} require its semantic STEP artifact")
+    owner = artifact_key.removeprefix("step:") if artifact_key else None
+    # A physical part may itself be named assembly; its own requirements still apply.
+    if owner in parts:
+        return [dict(feature, part=owner) for feature in requested if owners.get(feature["id"]) == owner]
+    # Public compile separately audits every owner STEP; a union can hide a wrong part.
+    if artifact_key == "step:assembly" and report.get("backend") == "brep-assembly":
+        return []
+    raise ValueError("section dimension STEP artifact must identify a declared physical part")
+
+
+def _audit_section_dimensions(audit, shape, features: list[dict]) -> None:
+    from brep_measurements import measure_section
+    from intent_contract import dimension_limits
+
+    for feature in features:
+        for index, requirement in enumerate(feature["section_dimensions"]):
+            axis, coordinate = requirement["plane"]["axis"], requirement["plane"]["coordinate_mm"]
+            normal = {"x": (1, 0, 0), "y": (0, -1, 0), "z": (0, 0, 1)}[axis]
+            plane = Plane(origin=tuple(coordinate if a == axis else 0 for a in "xyz"),
+                          x_dir=(0, 1, 0) if axis == "x" else (1, 0, 0), z_dir=normal)
+            name = f"section:{feature['id']}:{index}"
+            try:
+                measured = measure_section(shape, plane, label=name)
+            except Exception as error:
+                audit.add(name, False, {"part": feature["part"], "error": str(error)})
+                continue
+            for metric, item in requirement["outer_envelope"].items():
+                target = {"dimensions_mm": {"x": item}}
+                lower, upper = dimension_limits(target, "x")
+                accepted_lower, accepted_upper = dimension_limits(target, "x", BREP_ENVELOPE_TOLERANCE_MM)
+                envelope = measured["outer_envelope"]
+                actual = envelope[metric] if envelope is not None else None
+                audit.add(f"{name}:{metric}", actual is not None and accepted_lower <= actual <= accepted_upper,
+                          {"part": feature["part"], "coordinate_frame": "semantic", "plane": measured["plane"],
+                           "outer_envelope": envelope, "actual_mm": actual,
+                           "delta_mm": actual - item["value"] if actual is not None else None,
+                           "material_island_count": measured["material_island_count"], "hole_count": measured["hole_count"]},
+                          {"value_mm": item["value"], "min_mm": lower, "max_mm": upper,
+                           "measurement_precision_mm": BREP_ENVELOPE_TOLERANCE_MM})
+
+
 def audit_step(
     step_path: Path,
     *,
@@ -170,8 +240,13 @@ def audit_step(
     expect_y: float | None = None,
     expect_z: float | None = None,
     tolerance: float = 0.5,
+    section_features: list[dict] | None = None,
+    expected_step_sha256: str | None = None,
 ) -> dict:
     audit = Audit()
+    input_hash = _digest(step_path)
+    if expected_step_sha256 is not None and input_hash != expected_step_sha256:
+        raise ValueError("STEP changed after build-report artifact selection")
     shape = import_step(str(step_path))
     solid_count = len(shape.solids())
     valid = _valid(shape)
@@ -193,6 +268,7 @@ def audit_step(
             dimensions[index],
             {"value": expected, "tolerance": tolerance},
         )
+    _audit_section_dimensions(audit, shape, section_features or [])
     with tempfile.TemporaryDirectory() as directory:
         mesh_path = Path(directory) / "step-meshability.stl"
         export_stl(shape, str(mesh_path), tolerance=0.05, angular_tolerance=0.2)
@@ -207,6 +283,9 @@ def audit_step(
             },
             "non-empty STL preview mesh",
         )
+    output_hash = _digest(step_path)
+    if section_features:
+        audit.add("section_step_unchanged", output_hash == input_hash, output_hash, input_hash)
     return {
         "bounds_mm": bounds,
         "checks": audit.checks,
@@ -214,7 +293,7 @@ def audit_step(
         "pass": audit.passed,
         "schema": "evidence-step-audit/v1",
         "solid_count": solid_count,
-        "step": {"path": str(step_path.resolve()), "sha256": _digest(step_path)},
+        "step": {"path": str(step_path.resolve()), "sha256": output_hash},
     }
 
 
@@ -231,10 +310,28 @@ def main() -> int:
     parser.add_argument("--out")
     args = parser.parse_args()
     try:
-        intent = _load_json(args.intent)
         report = _load_json(args.report)
         if report is not None and report.get("schema") != BUILD_SCHEMA:
             raise ValueError(f"build report must use {BUILD_SCHEMA}")
+        intent_path = args.intent
+        inputs = report.get("inputs") if isinstance(report, dict) else None
+        binding = inputs.get("intent") if isinstance(inputs, dict) else None
+        if isinstance(binding, dict):
+            if intent_path is None:
+                bound_path = Path(binding["path"])
+                if not bound_path.is_absolute():
+                    bound_path = Path(args.report).resolve().parent / bound_path
+                intent_path = str(bound_path)
+            # Parse exactly the bytes whose hash was checked. A missing flag or
+            # substitute legacy intent must not discard the bound requirements.
+            raw_intent = Path(intent_path).read_bytes()
+            if sha256(raw_intent).hexdigest() != binding.get("sha256"):
+                raise ValueError("section dimension intent does not match the build-report hash")
+            intent = json.loads(raw_intent)
+            if not isinstance(intent, dict):
+                raise ValueError("bound intent must contain a JSON object")
+        else:
+            intent = _load_json(intent_path)
         step_path = Path(args.step)
         artifact_key = _artifact_key(report, step_path) if report is not None else None
         if report is not None and artifact_key is None:
@@ -250,6 +347,7 @@ def main() -> int:
         expect_solids = args.expect_solids
         if expect_solids is None:
             expect_solids = _report_expected_solids(report, artifact_key)
+        section_features = _bound_section_features(intent, intent_path, report, artifact_key)
         result = audit_step(
             step_path,
             expect_solids=expect_solids,
@@ -263,6 +361,8 @@ def main() -> int:
                 dimensions[2] if dimensions is not None else None
             ),
             tolerance=tolerance,
+            section_features=section_features,
+            expected_step_sha256=report["artifacts"][artifact_key]["sha256"] if section_features else None,
         )
     except Exception as error:
         result = {

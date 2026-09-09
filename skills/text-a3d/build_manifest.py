@@ -1547,6 +1547,22 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
     inputs = data.get("inputs")
     intent_reference = inputs.get("intent") if isinstance(inputs, dict) else None
     intent = _bound_json(intent_reference, base_dir)
+    section_features = [feature for feature in intent.get("features", [])
+                        if isinstance(feature, dict) and "section_dimensions" in feature] if isinstance(intent, dict) else []
+    if section_features:
+        from intent_contract import feature_owner_map
+        owners = feature_owner_map(intent)
+        part_records = data.get("parts") if isinstance(data.get("parts"), dict) else {}
+        artifacts = data.get("artifacts") if isinstance(data.get("artifacts"), dict) else {}
+        for feature in section_features:
+            owner = owners.get(feature.get("id"))
+            if owner == "assembly" and data.get("backend") == "brep-assembly":
+                errors.append("section dimension owner assembly collides with the aggregate STEP artifact")
+            part = part_records.get(owner, {})
+            step = artifacts.get(f"step:{owner}", {})
+            if (not isinstance(part, dict) or part.get("representationMaster") != "brep"
+                    or not isinstance(step, dict) or step.get("coordinateFrame") != "semantic"):
+                errors.append(f"section dimensions for {feature.get('id')} require owning part {owner} with a semantic BRep STEP")
     scene_reference = inputs.get("scene") if isinstance(inputs, dict) else None
     scene = _bound_json(scene_reference, base_dir)
     if isinstance(data.get("materialPlan"), dict):

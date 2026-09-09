@@ -683,6 +683,52 @@ def validate_coordinate_system(coordinate_system) -> list[str]:
     return errors
 
 
+def validate_section_dimensions(feature: dict, index: int) -> list[str]:
+    """Optional exact planes of the owning final part in the semantic frame.
+
+    Only outer section envelopes are supported; these are not hole diameters,
+    passage dimensions, feature-cutter bounds or minimum wall measurements.
+    """
+    if "section_dimensions" not in feature:
+        return []
+    prefix = f"features[{index}].section_dimensions"
+    records = feature["section_dimensions"]
+    if not isinstance(records, list) or not records:
+        return [f"{prefix} must be a non-empty list"]
+    errors = []
+    for section_index, record in enumerate(records):
+        label = f"{prefix}[{section_index}]"
+        if not isinstance(record, dict) or set(record) != {"plane", "outer_envelope"}:
+            errors.append(f"{label} requires only plane and outer_envelope")
+            continue
+        plane = record["plane"]
+        if (not isinstance(plane, dict) or set(plane) != {"axis", "coordinate_mm"}
+                or not isinstance(plane.get("axis"), str) or plane["axis"] not in "xyz"
+                or len(plane["axis"]) != 1
+                or not isinstance(plane.get("coordinate_mm"), (int, float))
+                or isinstance(plane["coordinate_mm"], bool)
+                or not math.isfinite(plane["coordinate_mm"])):
+            errors.append(f"{label}.plane requires axis x/y/z and finite coordinate_mm in the semantic frame")
+        dimensions = record["outer_envelope"]
+        if (not isinstance(dimensions, dict) or not dimensions
+                or not set(dimensions) <= {"width_u_mm", "depth_v_mm"}):
+            errors.append(f"{label}.outer_envelope requires width_u_mm and/or depth_v_mm")
+            continue
+        for metric, item in dimensions.items():
+            if not isinstance(item, dict) or not set(item) <= {"value", "constraint"}:
+                errors.append(f"{label}.outer_envelope.{metric} accepts only value and optional constraint")
+                continue
+            constraint = item.get("constraint", {})
+            if isinstance(constraint, dict) and not set(constraint) <= {"kind", "min_mm", "max_mm"}:
+                errors.append(f"{label}.outer_envelope.{metric}.constraint has unsupported fields")
+                continue
+            try:
+                dimension_limits({"dimensions_mm": {"x": item}}, "x")
+            except ValueError as error:
+                errors.append(f"{label}.outer_envelope.{metric}: {error}")
+    return errors
+
+
 def validate_feature_semantics(feature: dict, index: int) -> list[str]:
     errors: list[str] = []
     feature_id = f"features[{index}]"
@@ -869,6 +915,7 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     errors.append(f"features[{index}].id is invalid")
                 ids.append(feature_id)
             errors.extend(validate_feature_semantics(feature, index))
+            errors.extend(validate_section_dimensions(feature, index))
             if "installation_checks" in feature:
                 from installation_contract import validate_requirements
                 errors.extend(validate_requirements(

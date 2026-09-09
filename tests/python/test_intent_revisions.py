@@ -72,6 +72,44 @@ class IntentRevisionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     dimension_limits(document, "x")
 
+    def test_section_dimensions_validate_fixed_ranges_and_reject_unsupported_targets(self):
+        original = deepcopy(self.original)
+        self.assertEqual(validate(original, self.root), [])
+        section = {"plane": {"axis": "z", "coordinate_mm": 10},
+                   "outer_envelope": {"width_u_mm": {"value": 54}}}
+        original["features"][0]["section_dimensions"] = [section]
+        self.assertEqual(validate(original, self.root), [])
+        section["outer_envelope"]["width_u_mm"] = {
+            "value": 54, "constraint": {"kind": "range", "min_mm": 53.9, "max_mm": 54.1}}
+        self.assertEqual(validate(original, self.root), [])
+        for axis in "xyz":
+            section["plane"] = {"axis": axis, "coordinate_mm": -2.5}
+            self.assertEqual(validate(original, self.root), [])
+
+        mutations = {
+            "empty": lambda feature: feature.update(section_dimensions=[]),
+            "invalid plane": lambda feature: feature["section_dimensions"][0]["plane"].update(axis=["z"]),
+            "nonfinite plane": lambda feature: feature["section_dimensions"][0]["plane"].update(coordinate_mm=float("nan")),
+            "unsupported hole": lambda feature: feature["section_dimensions"][0].update(hole_envelope={"diameter_mm": {"value": 4}}),
+            "unknown outer metric": lambda feature: feature["section_dimensions"][0]["outer_envelope"].update(diameter_mm={"value": 54}),
+            "authored tolerance": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(tolerance_mm=2),
+            "outside range": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(value=55),
+            "fixed with range": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(constraint={"kind": "fixed", "min_mm": 1}),
+            "invalid dimension": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(value=True),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                invalid = deepcopy(original)
+                mutate(invalid["features"][0])
+                self.assertTrue(any("section_dimensions" in error for error in validate(invalid, self.root)))
+
+        # Feature kind does not turn an explicit outer-envelope measurement into a hole diameter.
+        hole = deepcopy(original)
+        hole["features"][0].update(kind="hole", face="top", direction="+Z", edge_crossing="forbidden")
+        self.assertEqual(validate(hole, self.root), [])
+        hole["features"][0]["section_dimensions"][0]["hole_envelope"] = {"width_u_mm": {"value": 4}}
+        self.assertTrue(any("section_dimensions" in error for error in validate(hole, self.root)))
+
     def test_allowed_parameter_revision_keeps_baseline_and_records_diff(self):
         original = deepcopy(self.original)
         original["dimensions_mm"]["x"] = {"value": 40, "source": "inferred", "confidence": "medium", "constraint": {"kind": "range", "min_mm": 35, "max_mm": 45}}
@@ -91,6 +129,10 @@ class IntentRevisionTests(unittest.TestCase):
             lambda data: data["dimensions_mm"]["x"].update(constraint={"kind": "range", "min_mm": 1, "max_mm": 999}),
             lambda data: data["printability"]["profile"].update(path="different-printer.json"),
             lambda data: data["features"][0].update(acceptance="Optional feature"),
+            lambda data: data["features"][0].update(section_dimensions=[{
+                "plane": {"axis": "z", "coordinate_mm": 10},
+                "outer_envelope": {"width_u_mm": {"value": 54}},
+            }]),
             lambda data: data["features"].clear(),
         )
         for change in changes:

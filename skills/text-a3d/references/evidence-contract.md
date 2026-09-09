@@ -88,6 +88,39 @@ not grant permission to resize. An axis can explicitly declare
 must satisfy that declared range with the applicable measurement tolerance.
 Without a range, the value remains fixed.
 
+A feature can optionally declare `section_dimensions` when its requirement is
+the outside size at a particular height or other semantic plane:
+
+```json
+"section_dimensions": [{
+  "plane": {"axis": "z", "coordinate_mm": 95},
+  "outer_envelope": {"width_u_mm": {"value": 54}}
+}]
+```
+
+The nonempty list belongs to the feature's physical part. Each plane uses an
+absolute semantic coordinate; its in-plane `u/v` axes are `+Y/+Z` for `x`,
+`+X/+Z` for `y`, and `+X/+Y` for `z`. Declare `width_u_mm`, `depth_v_mm`, or
+both. Each metric accepts `value` and the same optional `constraint` range as
+above. Final compile measures the owner's hash-bound semantic STEP after all
+finishing, using 0.0001 mm numerical tolerance, independently of `--tol`.
+An empty section fails. The audit records the plane, actual value, target,
+delta and STEP hash; an assembly union or another part cannot substitute for
+the owning part. This requires a BRep owner and its semantic STEP artifact.
+In multipart BRep exports, `assembly` names the aggregate STEP; a physical owner
+with that same name is ambiguous and cannot carry this check. Single-part owners
+named `assembly` are supported.
+
+This is the outer envelope of all material islands, including gaps between
+them. It does not measure a hole, cavity clearance, passage or wall thickness,
+even when attached to a feature with that kind. Use the corresponding geometric
+checks for those requirements. Drafts remain previews; whole-envelope errors
+can stop compile before its section audit runs. Existing intents without this
+field keep their previous behavior: acceptance prose is not parsed into a
+section check. Keep their existing dimension assertions unless a legitimate
+intent revision supplies the typed requirement; adding one is a target change
+under the revision rules below.
+
 The parameter panel does not amend or regenerate this immutable intent. Direct
 parameter rebuilds are valid only while the complete semantic X/Y/Z envelope
 continues to satisfy `dimensions_mm`. For a user-requested change to the target
