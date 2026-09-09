@@ -33,12 +33,12 @@ For other new models, select one build example: `simple_brep` for one solid,
 ```bash
 example_name=installed_module
 cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
+a3d draft "${example_name}_build.py"
 ```
 
-Read that source and adapt its named controls and geometry to the brief, then run
-`a3d draft "${example_name}_build.py"`.
-Inspect the returned preview with `view_image` before preparing final evidence.
-These two sources run without intent or profile.
+Inspect the example preview with `view_image`, then adapt the named controls and
+geometry to the brief in this same source. These two examples run without intent
+or profile.
 
 Develop the body, cavity and openings from shared component envelopes and datums,
 then add support, retention and assembly access before exterior finishing.

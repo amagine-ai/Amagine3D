@@ -111,8 +111,10 @@ mount ID for its same-owner display anchor.
 
 A missed cut still fails, and final
 geometry, interface and installation checks remain independent. Paired interfaces,
-raw screw interfaces and installation checks pass through `export`; screw recipe
-nodes are derived from the interface's feature IDs. See the installed-module example.
+raw screw interfaces and installation checks pass through `export`. The screw
+pair's `bind` applies its three shapes at one location and returns the fastener
+record; choose `boss_mode="add"` for new material or `"observe"` for an existing
+receiver. See the installed-module example; final geometry audits still apply.
 
 The installed-module example uses a local `interval_box` with explicit lower/upper
 bounds for each axis; a lower-bound datum cannot also be used as a centered Box's

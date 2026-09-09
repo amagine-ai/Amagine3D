@@ -450,6 +450,7 @@ def build_manifest(symbols: Iterable[str] = ()) -> dict[str, Any]:
             "pin_socket",
             "retained_slider",
             "self_tapping_screw_pair",
+            "SelfTappingScrewPair",
         },
     )
     authoring_helpers = _function_signatures(

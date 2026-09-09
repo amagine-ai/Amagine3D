@@ -103,21 +103,13 @@ def main():
         datum = Pos(*origin) * Rot(X=90)
         pair = self_tapping_screw_pair(interface_id="cover-fastening", axis_id=name, **P["fastening"])
         clearance, pilot, boss = f"cover-{name}", f"frame-{name}-pilot", f"frame-{name}-boss"
-        # These receivers are already inside the thick frame corners. Observe the
-        # existing material instead of claiming a union that adds zero volume.
-        build.observe(boss, datum * pair.receiver_boss, role="solid", part_name="frame")
-        build.cut(pilot, datum * pair.pilot_cutter, part_name="frame")
-        build.cut(clearance, datum * pair.clearance_cutter, part_name="cover")
-        f = P["fastening"]
-        fasteners.append({
-            "id": name, "axis": {"originMm": origin, "direction": [0, -1, 0]},
-            "screwFamily": f["screw_family"], "nominalDiameterMm": f["nominal_diameter_mm"], "cutterOvershootMm": f["cutter_overshoot_mm"],
-            "cover": {"partId": "cover", "featureId": clearance, "diameterMm": f["clearance_diameter_mm"], "thicknessMm": P["cover_thickness"]},
-            "receiver": {"partId": "frame", "featureId": pilot, "bossFeatureId": boss,
-                         "diameterMm": f["pilot_diameter_mm"], "bossOuterDiameterMm": f["boss_outer_diameter_mm"],
-                         "engagementMm": f["engagement_mm"], "closedEndMm": f["closed_end_mm"],
-                         "minimumBossWallMm": f["minimum_boss_wall_mm"], "minimumRootEmbedMm": f["minimum_root_embed_mm"], "tipClearanceMm": f["pilot_tip_clearance_mm"]},
-        })
+        # The thick corners already contain the bosses. Geometry and scene
+        # evidence share this placement and the recipe's construction values.
+        fasteners.append(pair.bind(
+            build, location=datum, cover_part="cover", receiver_part="frame",
+            clearance_feature=clearance, pilot_feature=pilot, boss_feature=boss,
+            boss_mode="observe",
+        ))
 
     # Draft needs only the completed solids and an optional component reference.
     # Defer final display/installation evidence until intent exists for compilation.

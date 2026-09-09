@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
-from build123d import Align, Circle, Cylinder, Pos, RectangleRounded, extrude
+from build123d import Align, Circle, Cylinder, Location, Plane, Pos, RectangleRounded, extrude
 
 
 class InterfaceRecipeError(ValueError):
@@ -38,6 +38,57 @@ class SelfTappingScrewPair:
     pilot_cutter: Any
     receiver_boss: Any
     evidence: dict[str, Any]
+
+    def bind(self, build, *, location: Location, cover_part: str, receiver_part: str,
+             clearance_feature: str, pilot_feature: str, boss_feature: str,
+             boss_mode: str) -> dict[str, Any]:
+        """Apply the three shapes atomically and return one scene fastener record.
+
+        Use on a pair returned by self_tapping_screw_pair(). The same rigid
+        location sets all geometry and its axis. Explicit boss_mode='add' adds
+        receiver material; 'observe' identifies material already in the receiver.
+        Neither mode establishes fastening strength or replaces final audits.
+        """
+        if not isinstance(location, Location):
+            raise InterfaceRecipeError("location must be a rigid build123d Location")
+        if boss_mode not in ("add", "observe"):
+            raise InterfaceRecipeError("boss_mode must be 'add' or 'observe'")
+        if cover_part == receiver_part:
+            raise InterfaceRecipeError("fastener must connect two distinct parts")
+        ids = (clearance_feature, pilot_feature, boss_feature)
+        if any(not isinstance(value, str) or not value.strip() for value in ids) or len(set(ids)) != 3:
+            raise InterfaceRecipeError("fastener feature IDs must be distinct nonempty strings")
+
+        datum = Plane(location)
+        screw, cover, receiver = (self.evidence[key] for key in ("screw", "cover", "receiver"))
+        record = {
+            "id": self.evidence["axis"]["id"],
+            "axis": {"originMm": list(datum.origin), "direction": list(datum.z_dir)},
+            "screwFamily": screw["family"], "nominalDiameterMm": screw["nominal_diameter_mm"],
+            "cutterOvershootMm": self.evidence["cutter_overshoot_mm"],
+            "cover": {"partId": cover_part, "featureId": clearance_feature,
+                      "diameterMm": cover["clearance_diameter_mm"], "thicknessMm": cover["thickness_mm"]},
+            "receiver": {"partId": receiver_part, "featureId": pilot_feature, "bossFeatureId": boss_feature,
+                         "diameterMm": receiver["pilot_diameter_mm"], "bossOuterDiameterMm": receiver["boss_outer_diameter_mm"],
+                         "engagementMm": receiver["thread_engagement_mm"], "closedEndMm": receiver["closed_end_mm"],
+                         "minimumBossWallMm": receiver["minimum_boss_wall_mm"],
+                         "minimumRootEmbedMm": receiver["minimum_root_embed_mm"], "tipClearanceMm": receiver["tip_clearance_mm"]},
+        }
+        if cover["head_recess_diameter_mm"] is not None:
+            record["cover"].update(
+                headRecessDiameterMm=cover["head_recess_diameter_mm"],
+                headRecessDepthMm=cover["head_recess_depth_mm"],
+                minimumResidualWallMm=cover["minimum_cover_land_mm"],
+            )
+        with build.capture():
+            boss = location * self.receiver_boss
+            if boss_mode == "add":
+                build.add(boss_feature, boss, part_name=receiver_part)
+            else:
+                build.observe(boss_feature, boss, role="solid", part_name=receiver_part)
+            build.cut(pilot_feature, location * self.pilot_cutter, part_name=receiver_part)
+            build.cut(clearance_feature, location * self.clearance_cutter, part_name=cover_part)
+        return record
 
 
 def _positive(name: str, value: float) -> float:
@@ -468,6 +519,7 @@ def self_tapping_screw_pair(
         evidence={
             "id": interface_id,
             "type": "self-tapping-screw",
+            "cutter_overshoot_mm": overshoot,
             "assembly_axis": "+Z",
             "axis": {
                 "id": axis_id,
@@ -505,6 +557,7 @@ def self_tapping_screw_pair(
                 "boss_outer_diameter_mm": boss_outer,
                 "boss_height_mm": boss_height,
                 "boss_wall_mm": boss_wall,
+                "minimum_boss_wall_mm": minimum_wall,
                 "closed_end_mm": closed_end,
                 "minimum_root_embed_mm": root_embed,
             },

@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 import importlib.util
+from contextlib import contextmanager, redirect_stdout
+from copy import deepcopy
+import io
+import json
+import math
+import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
+
+from build123d import Align, Box, Location, Pos, Vertex
 
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "skills" / "text-a3d" / "interface_recipes.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
+from build_session import BuildSession
+from cad_helpers import BuildInvariantError
 
 
 def load_module():
@@ -28,6 +41,157 @@ def is_valid(shape) -> bool:
 
 
 class InterfaceRecipeTests(unittest.TestCase):
+    @contextmanager
+    def draft_session(self):
+        directory = ROOT / "workspace" / "skill-validation"
+        directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="screw-bind-", dir=directory) as work:
+            source = Path(work) / "fixture_build.py"
+            source.write_text("# Real BuildSession draft geometry fixture.\n")
+            with patch.dict(os.environ, {
+                "AMAGINE3D_SOURCE_PHASE": "draft",
+                "AMAGINE3D_DRAFT_DIR": work,
+                "AMAGINE3D_SOURCE_DIAGNOSTICS_PATH": str(Path(work) / "diagnostics.json"),
+            }, clear=True):
+                yield BuildSession(source, part_names=("cover", "receiver"))
+            self.assertFalse(list(Path(work).glob("*intent*")))
+
+    @staticmethod
+    def screw_pair():
+        return recipes.self_tapping_screw_pair(
+            interface_id="cover-joint", axis_id="oblique-screw",
+            cover_thickness_mm=3.2, nominal_diameter_mm=4.0,
+            clearance_diameter_mm=4.6, pilot_diameter_mm=3.3,
+            boss_outer_diameter_mm=10.0, engagement_mm=7.5,
+            pilot_tip_clearance_mm=1.1, closed_end_mm=1.7,
+            minimum_boss_wall_mm=2.5, minimum_root_embed_mm=0.7,
+            head_recess_diameter_mm=8.2, head_recess_depth_mm=1.2,
+            minimum_cover_land_mm=1.4, cutter_overshoot_mm=0.6,
+        )
+
+    @staticmethod
+    def screw_bodies():
+        # Boss spans z=0..10.3 and overlaps this receiver root by 0.7 mm.
+        return (
+            Pos(0, 0, -3.2) * Box(24, 20, 3.2, align=(Align.CENTER, Align.CENTER, Align.MIN)),
+            Pos(0, 0, 9.6) * Box(24, 20, 2.5, align=(Align.CENTER, Align.CENTER, Align.MIN)),
+        )
+
+    def assertSameMaterial(self, actual, expected):
+        self.assertTrue(is_valid(actual))
+        self.assertEqual(len(actual.solids()), len(expected.solids()))
+        self.assertAlmostEqual(actual.volume, expected.volume, places=6)
+        self.assertLess(abs((actual - expected).volume), 1e-6)
+        self.assertLess(abs((expected - actual).volume), 1e-6)
+
+    def test_screw_bind_places_actual_bores_and_metadata_from_one_transform(self):
+        pair = self.screw_pair()
+        original_evidence = deepcopy(pair.evidence)
+        original_shapes = [deepcopy(shape) for shape in (
+            pair.clearance_cutter, pair.pilot_cutter, pair.receiver_boss)]
+        location = Location((13, -7, 19), (27, 38, -16))
+        point = lambda x, y, z: (location * Vertex(x, y, z)).center()
+        cover, receiver = self.screw_bodies()
+        with self.draft_session() as build:
+            build.add("cover-body", location * cover, part_name="cover")
+            build.add("receiver-body", location * receiver, part_name="receiver")
+            record = pair.bind(
+                build, location=location, cover_part="cover", receiver_part="receiver",
+                clearance_feature="clearance", pilot_feature="pilot", boss_feature="boss",
+                boss_mode="add",
+            )
+            cover_result, receiver_result = build.part("cover"), build.part("receiver")
+            # Independent cylinder-volume expectations include the counterbore,
+            # blind pilot and real boss addition outside the existing root.
+            removed_cover = math.pi * (2.3**2 * 3.2 + (4.1**2 - 2.3**2) * 1.2)
+            self.assertAlmostEqual(cover_result.volume, 24 * 20 * 3.2 - removed_cover, places=5)
+            self.assertAlmostEqual(
+                receiver_result.volume, 24 * 20 * 2.5 + math.pi * 5**2 * 9.6 - math.pi * 1.65**2 * 8.6,
+                places=5,
+            )
+            for shape in (cover_result, receiver_result):
+                self.assertTrue(is_valid(shape))
+                self.assertEqual(len(shape.solids()), 1)
+            for shape, samples in (
+                (cover_result, [(2.25, 0, -0.6, False), (2.35, 0, -0.6, True),
+                                (4.05, 0, -2.6, False), (4.15, 0, -2.6, True),
+                                (4.05, 0, -1.8, True)]),
+                (receiver_result, [(1.60, 0, 4, False), (1.70, 0, 4, True),
+                                   (0, 0, 8.55, False), (0, 0, 8.65, True),
+                                   (4.95, 0, 4, True), (5.05, 0, 4, False)]),
+            ):
+                for x, y, z, material in samples:
+                    with self.subTest(point=(x, y, z), material=material):
+                        self.assertEqual(shape.is_inside(point(x, y, z)), material)
+            self.assertEqual(record["id"], "oblique-screw")
+            for actual, expected in zip(record["axis"]["originMm"], (13, -7, 19)):
+                self.assertAlmostEqual(actual, expected, places=7)
+            direction = point(0, 0, 1) - point(0, 0, 0)
+            for actual, expected in zip(record["axis"]["direction"], direction):
+                self.assertAlmostEqual(actual, expected, places=7)
+            self.assertTrue(all(abs(value) > 0.1 for value in direction))
+            self.assertEqual(record["screwFamily"], "M4 plastic thread-forming/self-tapping")
+            self.assertEqual(record["nominalDiameterMm"], 4.0)
+            self.assertEqual(record["cutterOvershootMm"], 0.6)
+            self.assertEqual(record["cover"], {
+                "partId": "cover", "featureId": "clearance", "diameterMm": 4.6,
+                "thicknessMm": 3.2, "headRecessDiameterMm": 8.2,
+                "headRecessDepthMm": 1.2, "minimumResidualWallMm": 1.4,
+            })
+            self.assertEqual(record["receiver"], {
+                "partId": "receiver", "featureId": "pilot", "bossFeatureId": "boss",
+                "diameterMm": 3.3, "bossOuterDiameterMm": 10.0, "engagementMm": 7.5,
+                "closedEndMm": 1.7, "minimumBossWallMm": 2.5,
+                "minimumRootEmbedMm": 0.7, "tipClearanceMm": 1.1,
+            })
+            for feature, owner, role in (("clearance", "cover", "cutter"),
+                                          ("pilot", "receiver", "cutter"), ("boss", "receiver", "solid")):
+                self.assertEqual((build._features[feature]["owner"], build._features[feature]["role"]), (owner, role))
+        self.assertEqual(pair.evidence, original_evidence)
+        for actual, expected in zip((pair.clearance_cutter, pair.pilot_cutter, pair.receiver_boss), original_shapes):
+            self.assertSameMaterial(actual, expected)
+
+    def test_screw_bind_observe_is_explicit_and_failed_group_restores_both_parts(self):
+        pair = self.screw_pair()
+        cover, root = self.screw_bodies()
+        args = dict(location=Location(), cover_part="cover", receiver_part="receiver",
+                    clearance_feature="clearance", pilot_feature="pilot", boss_feature="boss")
+        with self.draft_session() as build:
+            build.add("cover-body", cover, part_name="cover")
+            contained = root + pair.receiver_boss
+            build.add("receiver-body", contained, part_name="receiver")
+            record = pair.bind(build, **args, boss_mode="observe")
+            self.assertEqual(record["receiver"]["bossFeatureId"], "boss")
+            self.assertAlmostEqual(build.part("receiver").volume, contained.volume - math.pi * 1.65**2 * 8.6, places=5)
+            self.assertFalse(build.part("receiver").is_inside((0, 0, 4)))
+            self.assertFalse(any(e.get("id") == "boss" and e.get("kind") == "union" for e in build._evidence.events))
+
+        for scenario in ("redundant-add", "cover-miss", "invalid-mode", "same-part"):
+            with self.subTest(scenario=scenario), self.draft_session() as build:
+                build.add("cover-body", Pos(100, 0, 0) * cover if scenario == "cover-miss" else cover, part_name="cover")
+                build.add("receiver-body", root + pair.receiver_boss if scenario == "redundant-add" else root, part_name="receiver")
+                before_parts = {name: build.part(name) for name in ("cover", "receiver")}
+                before_features, before_evidence = deepcopy(build._features), deepcopy(build._evidence)
+                kwargs = {**args, "boss_mode": "invalid" if scenario == "invalid-mode" else "add"}
+                if scenario == "same-part":
+                    kwargs["receiver_part"] = "cover"
+                output = io.StringIO()
+                expected_error = recipes.InterfaceRecipeError if scenario in ("invalid-mode", "same-part") else BuildInvariantError
+                with redirect_stdout(output), self.assertRaises(expected_error):
+                    pair.bind(build, **kwargs)
+                if scenario in ("redundant-add", "cover-miss"):
+                    issue = json.loads(output.getvalue())["issues"][0]
+                    self.assertEqual(issue["code"], "SOURCE.UNION_NO_EFFECT" if scenario == "redundant-add" else "SOURCE.CUT_MISSED_OWNER")
+                    self.assertEqual(issue["featureId"], "boss" if scenario == "redundant-add" else "clearance")
+                for name, shape in before_parts.items():
+                    self.assertSameMaterial(build.part(name), shape)
+                self.assertEqual(set(build._features), set(before_features))
+                for name, feature in before_features.items():
+                    self.assertEqual((build._features[name]["owner"], build._features[name]["role"]), (feature["owner"], feature["role"]))
+                    self.assertSameMaterial(build._features[name]["shape"], feature["shape"])
+                for field in ("events", "features", "parameters", "issues"):
+                    self.assertEqual(getattr(build._evidence, field), getattr(before_evidence, field), field)
+
     def test_collar_socket_derives_both_sides_from_one_profile(self) -> None:
         pair = recipes.collar_socket(
             interface_id="housing-base",
