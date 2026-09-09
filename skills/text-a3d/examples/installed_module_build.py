@@ -23,7 +23,6 @@ P["fastening"] = {
     "engagement_mm": 6.0, "pilot_tip_clearance_mm": 0.8,
     "closed_end_mm": 1.2, "minimum_boss_wall_mm": 1.8,
     "minimum_root_embed_mm": 0.4, "cutter_overshoot_mm": 1.0,
-    "cover_thickness_mm": P["cover_thickness"],
 }
 
 def interval_box(*, x, y, z):
@@ -101,7 +100,8 @@ def main():
         name = f"corner-{index + 1}"
         origin = [sx*SCREW_X, COVER_Y, CENTER_Z+sz*SCREW_Z_OFFSET]
         datum = Pos(*origin) * Rot(X=90)
-        pair = self_tapping_screw_pair(interface_id="cover-fastening", axis_id=name, **P["fastening"])
+        pair = self_tapping_screw_pair(interface_id="cover-fastening", axis_id=name,
+                                      cover_thickness_mm=P["cover_thickness"], **P["fastening"])
         clearance, pilot, boss = f"cover-{name}", f"frame-{name}-pilot", f"frame-{name}-boss"
         # The thick corners already contain the bosses. Geometry and scene
         # evidence share this placement and the recipe's construction values.

@@ -477,8 +477,25 @@ def _probe_fastener(
     cover_land_witness: trimesh.Trimesh | None = None
     cover_land_missing: float | None = None
     cover_land_name: str | None = None
+    head_recess_probe: trimesh.Trimesh | None = None
+    head_recess_overlap: float | None = None
     if "headRecessDiameterMm" in cover:
         head_diameter = float(cover["headRecessDiameterMm"])
+        recess_depth = float(cover["headRecessDepthMm"])
+        recess_radial_inset = min(0.02, head_diameter * 0.005)
+        recess_axial_inset = min(0.02, recess_depth * 0.01)
+        # Original cutter evidence can remain correct after later material edits.
+        # The final cover must still leave the declared head recess volume open.
+        head_recess_probe = _segment_cylinder(
+            head_diameter / 2 - recess_radial_inset,
+            origin - direction * (cover_thickness - recess_axial_inset),
+            origin - direction * (cover_thickness - recess_depth + recess_axial_inset),
+        )
+        head_recess_overlap = _intersection_volume(
+            cover_mesh,
+            head_recess_probe,
+            f"self-tapping geometry {key} head recess",
+        )
         minimum_cover_land = float(cover["minimumResidualWallMm"])
         radial_band = (head_diameter - clearance_diameter) / 2
         land_radial_inset = min(0.02, radial_band * 0.2)
@@ -553,6 +570,10 @@ def _probe_fastener(
         checks[cover_land_name] = (
             cover_land_missing <= _probe_tolerance(cover_land_witness)
         )
+    if head_recess_probe is not None and head_recess_overlap is not None:
+        checks["head_recess_volume_is_open"] = (
+            head_recess_overlap <= _probe_tolerance(head_recess_probe)
+        )
     clearance_axis_hits = _axis_triangle_intersections(
         cover_mesh,
         origin,
@@ -598,6 +619,11 @@ def _probe_fastener(
                 if cover_land_missing is not None
                 else {}
             ),
+            **(
+                {"headRecessOverlap": round(head_recess_overlap, 9)}
+                if head_recess_overlap is not None
+                else {}
+            ),
         },
         "tolerancesMm3": {
             "recipeFeatureVolumes": recipe_tolerances,
@@ -612,6 +638,11 @@ def _probe_fastener(
                 if cover_land_witness is not None
                 else {}
             ),
+            **(
+                {"headRecess": _probe_tolerance(head_recess_probe)}
+                if head_recess_probe is not None
+                else {}
+            ),
         },
         "witnessVolumesMm3": {
             "clearance": round(float(clearance_probe.volume), 9),
@@ -623,6 +654,11 @@ def _probe_fastener(
             **(
                 {"headRecessFloor": round(float(cover_land_witness.volume), 9)}
                 if cover_land_witness is not None
+                else {}
+            ),
+            **(
+                {"headRecess": round(float(head_recess_probe.volume), 9)}
+                if head_recess_probe is not None
                 else {}
             ),
         },

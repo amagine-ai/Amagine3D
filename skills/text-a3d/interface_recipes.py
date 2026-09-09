@@ -511,6 +511,9 @@ def self_tapping_screw_pair(
         align=(Align.CENTER, Align.CENTER, Align.MIN),
     )
     under_head_cover_stack = cover_thickness - (recess_depth or 0.0)
+    # Reserved tip clearance is empty space, not additional screw length.
+    # With both engagement and clearance fixed, the two bounds coincide.
+    under_head_length = under_head_cover_stack + engagement
 
     return SelfTappingScrewPair(
         clearance_cutter=clearance_cutter,
@@ -531,12 +534,8 @@ def self_tapping_screw_pair(
                 "nominal_diameter_mm": nominal,
                 "manufacturing": "purchased-hardware-excluded",
                 "under_head_cover_stack_mm": under_head_cover_stack,
-                "minimum_under_head_length_mm": (
-                    under_head_cover_stack + engagement
-                ),
-                "maximum_under_head_length_mm": (
-                    under_head_cover_stack + pilot_depth
-                ),
+                "minimum_under_head_length_mm": under_head_length,
+                "maximum_under_head_length_mm": under_head_length,
             },
             "cover": {
                 "thickness_mm": cover_thickness,

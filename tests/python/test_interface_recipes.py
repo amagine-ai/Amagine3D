@@ -328,7 +328,7 @@ class InterfaceRecipeTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             evidence["screw"]["maximum_under_head_length_mm"],
-            8.2,
+            7.4,
         )
 
     def test_self_tapping_pair_has_no_implicit_cover_land_without_a_recess(self) -> None:
@@ -339,6 +339,47 @@ class InterfaceRecipeTests(unittest.TestCase):
         )
 
         self.assertNotIn("minimum_cover_land_mm", pair.evidence["cover"])
+
+    def test_recommended_screw_lengths_preserve_engagement_and_tip_gap_in_real_bores(self):
+        # Cases are independent of any product dimensions or exported example.
+        # Both recommended endpoints must preserve the explicitly reserved void.
+        cases = (
+            (4.8, 0.0, 9.2, 1.3, 3.0, 3.4, 2.6, 7.5),
+            (5.4, 1.6, 8.4, 0.9, 4.0, 4.6, 3.3, 10.0),
+            (3.1, 0.7, 4.6, 0.5, 2.5, 2.9, 2.1, 7.0),
+        )
+        for thickness, recess, engagement, gap, nominal, clearance, pilot, boss in cases:
+            for location in (Location(), Location((17, -11, 23), (31, -27, 19))):
+                with self.subTest(thickness=thickness, recess=recess, placement=location):
+                    recess_args = dict(head_recess_diameter_mm=clearance + 2,
+                                       head_recess_depth_mm=recess,
+                                       minimum_cover_land_mm=1.5) if recess else {}
+                    pair = recipes.self_tapping_screw_pair(
+                        interface_id="independent-joint", axis_id="a", cover_thickness_mm=thickness,
+                        nominal_diameter_mm=nominal, clearance_diameter_mm=clearance,
+                        pilot_diameter_mm=pilot, boss_outer_diameter_mm=boss,
+                        engagement_mm=engagement, pilot_tip_clearance_mm=gap,
+                        closed_end_mm=2.4, **recess_args,
+                    )
+                    receiver = location * (pair.receiver_boss - pair.pilot_cutter)
+                    cover = location * (Pos(0, 0, -thickness)
+                        * Box(20, 20, thickness, align=(Align.CENTER, Align.CENTER, Align.MIN))
+                        - pair.clearance_cutter)
+                    point = lambda x, y, z: (location * Vertex(x, y, z)).center()
+                    seat_z = -thickness + recess
+                    # Verify the actual head-bearing face on the finished cover.
+                    radius = clearance / 2 + 0.5
+                    self.assertFalse(cover.is_inside(point(radius, 0, seat_z - 0.001)))
+                    self.assertTrue(cover.is_inside(point(radius, 0, seat_z + 0.001)))
+                    self.assertTrue(is_valid(receiver))
+                    self.assertEqual(len(receiver.solids()), 1)
+                    for endpoint in ("minimum_under_head_length_mm", "maximum_under_head_length_mm"):
+                        tip_z = seat_z + pair.evidence["screw"][endpoint]
+                        self.assertGreaterEqual(tip_z + 1e-9, engagement)
+                        # The requested tip gap must be void right up to the
+                        # physical blind end, with real closed material after it.
+                        self.assertFalse(receiver.is_inside(point(0, 0, tip_z + gap - 0.001)), endpoint)
+                        self.assertTrue(receiver.is_inside(point(0, 0, tip_z + gap + 0.001)), endpoint)
 
     def test_self_tapping_pair_requires_an_explicit_cover_land_with_a_recess(self) -> None:
         with self.assertRaisesRegex(

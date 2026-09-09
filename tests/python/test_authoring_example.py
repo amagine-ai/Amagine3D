@@ -13,7 +13,7 @@ import unittest
 
 import numpy as np
 import trimesh
-from build123d import import_step
+from build123d import Align, Box, Cylinder, Pos, Rot, import_step
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "text-a3d"
@@ -252,6 +252,65 @@ print(json.dumps([P['width'], P['module_width']]))
             self.assertEqual(diagnostic["code"], "SOURCE.CUT_MISSED_OWNER")
             self.assertAlmostEqual(diagnostic["observed"]["removedMm3"], 0)
             self.assertEqual(sha256(intent.read_bytes()).hexdigest(), intent_hash)
+
+    def test_cover_thickness_edit_keeps_through_holes_and_interface_on_current_control(self):
+        # Edit only the primary control after P has been initialized. Both the
+        # executable builder and importing intent writer see this same edit.
+        # The overall assembly/module brief stays fixed for both variants.
+        for thickness in (2.5, 4.0):
+            with self.subTest(thickness=thickness), self.compile_example(
+                "installed_module", source_changes=((
+                    '\ndef interval_box(',
+                    f'\nP["cover_thickness"] = {thickness!r}\n\ndef interval_box(',
+                ),),
+            ) as work:
+                result = json.loads((work / "installed-module_compile-result.json").read_text())
+                self.assertTrue(result["pass"], result.get("issues"))
+                intent = json.loads((work / "installed_module_intent.json").read_text())
+                self.assertEqual([intent["dimensions_mm"][axis]["value"] for axis in "xyz"], [80, 16, 60])
+                module = next(item for item in intent["features"] if item["id"] == "module-space")
+                self.assertIn("width 50 x height 30 x depth 5 mm", module["acceptance"])
+                self.assertEqual(intent["manufacturing"]["interfaces"][0]["fastening"]["cover_thickness_mm"], thickness)
+                screw_assumption = next(item for item in intent["assumptions"] if "under-head length" in item)
+                self.assertIn(f"under-head length of {thickness+6:g} mm", screw_assumption)
+                scene = json.loads((work / "installed_module_scene.json").read_text())
+                screws = next(item for item in scene["interfaces"] if item["id"] == "cover-fastening")["fasteners"]
+                cover = import_step(work / "installed-module-cover.step")
+                self.assertTrue(cover.is_valid)
+                self.assertEqual(len(cover.solids()), 1)
+                assembly = import_step(work / "installed-module-assemble.step")
+                self.assertEqual(len(assembly.solids()), 2)
+                np.testing.assert_allclose(tuple(assembly.bounding_box().size), [80, 16, 60], atol=1e-5)
+                # A remote strip crosses only the cover plate, away from the
+                # locator, pads and screws. Read its real STEP thickness.
+                strip = cover & (Pos(38, -9, 29) * Box(1, 18, 2, align=(Align.MIN,) * 3))
+                measured_thickness = float(strip.bounding_box().size.Y)
+                self.assertAlmostEqual(measured_thickness, thickness, places=5)
+                bores = []
+                for screw, (x, z) in zip(screws, ((-33, 7), (-33, 53), (33, 7), (33, 53))):
+                    self.assertEqual(screw["cover"]["thicknessMm"], thickness)
+                    np.testing.assert_allclose(screw["axis"]["originMm"], [x, 8-thickness, z], atol=1e-6)
+                    # Independently positioned cylinder spans both plate faces;
+                    # no final material may obstruct this inner bore volume.
+                    probe = Pos(x, 8.5, z) * Rot(X=90) * Cylinder(
+                        1.5, thickness+1, align=(Align.CENTER, Align.CENTER, Align.MIN))
+                    intersection = cover & probe
+                    blocked = 0.0 if intersection is None else float(intersection.volume)
+                    self.assertLess(blocked, 1e-7)
+                    self.assertTrue(cover.is_inside((x+2, 8-thickness/2, z)))
+                    bores.append({"axis": [x, z], "blocked_mm3": blocked})
+                for name in ("installationAudit", "assemblyAudit"):
+                    artifact = result["artifacts"][name]
+                    path = Path(artifact["path"])
+                    self.assertEqual(artifact["sha256"], sha256(path.read_bytes()).hexdigest())
+                    evidence = json.loads(path.read_text())
+                    self.assertTrue(evidence["pass"], evidence.get("errors"))
+                (work / "cover-thickness-check.json").write_text(json.dumps({
+                    "target_thickness_mm": thickness, "measured_step_thickness_mm": measured_thickness,
+                    "bores": bores, "cover_step_sha256": sha256((work / "installed-module-cover.step").read_bytes()).hexdigest(),
+                    "scene_sha256": sha256((work / "installed_module_scene.json").read_bytes()).hexdigest(),
+                    "intent_sha256": sha256((work / "installed_module_intent.json").read_bytes()).hexdigest(),
+                }, indent=2) + "\n")
 
     def test_surface_shell_recompiles_changed_walls_without_rewriting_intent(self):
         with self.compile_example("surface_shell") as work:

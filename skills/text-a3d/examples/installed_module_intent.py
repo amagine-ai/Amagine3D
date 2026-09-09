@@ -47,9 +47,12 @@ def main():
 
     fastening = {key: value for key, value in P["fastening"].items() if key != "engagement_mm"}
     fastening.update({
+        "cover_thickness_mm": P["cover_thickness"],
         "locator_pairs": [{"id": "cover-location", "male_feature": "cover-collar", "female_feature": "frame-locator"}],
         "fasteners": fasteners,
     })
+    under_head_length = (P["cover_thickness"] - (P["fastening"].get("head_recess_depth_mm") or 0.0)
+                         + P["fastening"]["engagement_mm"])
     write_intent(
         ROOT / "installed_module_intent.json",
         profile_path=ROOT / "installed_module_printer-profile.json", part="installed-module",
@@ -78,7 +81,7 @@ def main():
             "This example brief fixes the assembly at width 80 x height 60 x depth 16 mm, with bottom z=0, and the module at width 50 x height 30 x depth 5 mm. Construction parameter edits do not revise these requirements.",
             "The required module envelope is width 50 x height 30 x depth 5 mm. Adapting to another supplier component requires independently revising its specification and active area, not copying dimensions from generated geometry.",
             "The optional module reference is purchased hardware, excluded from all manufacturing geometry; no dummy lens is required.",
-            f"Proposed M3 plastics screws require an under-head length from {P['cover_thickness'] + P['fastening']['engagement_mm']:.1f} to {P['cover_thickness'] + P['fastening']['engagement_mm'] + P['fastening']['pilot_tip_clearance_mm']:.1f} mm; choose supplier hardware and validate pilot fit for the actual material.",
+            f"Proposed plastics screws require an under-head length of {under_head_length:g} mm for {P['fastening']['engagement_mm']:g} mm engagement while preserving {P['fastening']['pilot_tip_clearance_mm']:g} mm tip clearance. If supplier hardware has a different length, redesign the receiver and revalidate the fit for the actual screw and material.",
             "Installation checks establish authored clearance, optical passage and geometric stops, not electrical operation, fastening strength or clamping force.",
         ],
     )

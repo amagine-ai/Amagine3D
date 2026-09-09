@@ -112,9 +112,10 @@ and [TR Plas-Tech 30 installation guide](https://www.trfastenings.com/Knowledge-
 
 Prefer a screw designed for direct fastening into thermoplastic. Record the
 actual chosen screw family and adjust the pilot from its supplier guidance.
-Choose an available under-head length within the recipe's reported minimum
-(cover stack plus engagement) and maximum (cover stack plus blind pilot depth)
-instead of letting the screw bottom out.
+The recipe's minimum and maximum under-head lengths coincide at cover thickness
+minus head-recess depth plus engagement. This preserves the reserved tip gap;
+the gap is not extra screw length. For a different available screw length,
+explicitly redesign the connection and recheck it against the requirements.
 Purchased screws may appear as `display-only` assembly references, but exclude
 them from STEP/STL/3MF printed-part counts and manufacturing booleans.
 
