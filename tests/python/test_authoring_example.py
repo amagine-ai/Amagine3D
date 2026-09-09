@@ -39,17 +39,17 @@ from installed_module_build import P
 assert not any(name == 'build123d' or name.startswith('build123d.') for name in sys.modules)
 assert before == {p.name for p in Path('.').iterdir()}
 print(json.dumps([P['width'], P['module_width']]))
-'''], cwd=work, env=env, capture_output=True, text=True, timeout=30)
+'''], cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
             self.assertEqual(imported.returncode, 0, imported.stderr)
             self.assertEqual(json.loads(imported.stdout), [79, 49])
             profile = subprocess.run(
                 [str(ROOT / "bin" / "a3d"), "profile", "--machine", "a1-mini", "--nozzle", "0.4",
                  "--tool", "0", "--out", "installed_module_printer-profile.json"],
-                cwd=work, env=env, capture_output=True, text=True, timeout=30,
+                cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", timeout=30,
             )
             self.assertEqual(profile.returncode, 0, profile.stdout + profile.stderr)
             generated = subprocess.run([sys.executable, "-B", "installed_module_intent.py"],
-                cwd=work, env=env, capture_output=True, text=True, timeout=30)
+                cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
             self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
             intent = json.loads((work / "installed_module_intent.json").read_text())
             self.assertEqual([intent["dimensions_mm"][axis]["value"] for axis in "xyz"], [80, 16, 60])
@@ -68,7 +68,7 @@ print(json.dumps([P['width'], P['module_width']]))
             env = {**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"}
 
             def run(*args):
-                result = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, timeout=120)
+                result = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
                 self.assertEqual(result.returncode, 0, result.stdout[-5000:] + result.stderr[-1000:])
                 return result
 
@@ -244,7 +244,7 @@ print(json.dumps([P['width'], P['module_width']]))
                 [str(ROOT / "bin" / "a3d"), "draft", source.name, "--intent", intent.name],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL),
                                "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
             )
             self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
             diagnostic = json.loads(failed.stdout)["issues"][0]["sourceIssue"]
@@ -401,7 +401,7 @@ print(json.dumps(actual))
 '''], cwd=work,
                 env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONPATH": str(SKILL),
                      "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True, encoding="utf-8", timeout=120)
             self.assertEqual(callback.returncode, 0, callback.stdout + callback.stderr)
             np.testing.assert_allclose(json.loads(callback.stdout), [100, 79.8, 81.8], atol=1e-5)
             source = source_path.read_text()
@@ -431,7 +431,7 @@ print(json.dumps(actual))
                  "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
             )
             self.assertEqual(result.returncode, 0, result.stdout[-5000:] + result.stderr[-1000:])
             second = read_and_measure(4.0)
@@ -455,7 +455,7 @@ print(json.dumps(actual))
             result = subprocess.run(
                 [str(ROOT / "bin" / "a3d"), "draft", source_path.name, "--intent", intent_path.name],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             draft = json.loads(result.stdout)
@@ -465,7 +465,7 @@ print(json.dumps(actual))
                 [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             failed = json.loads((work / "surface-shell_compile-result.json").read_text())
@@ -495,7 +495,7 @@ print(json.dumps(actual))
                 [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, encoding="utf-8", timeout=120,
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             failed = json.loads((work / "surface-shell_compile-result.json").read_text())

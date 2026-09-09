@@ -19,6 +19,7 @@ if str(SKILL) not in sys.path:
     sys.path.insert(0, str(SKILL))
 
 import geometry_binding  # noqa: E402
+from brep_tessellation import tessellate_brep  # noqa: E402
 from mesh_normalization import (  # noqa: E402
     MeshNormalizationError,
     canonical_mesh,
@@ -171,14 +172,16 @@ class MeshNormalizationTests(unittest.TestCase):
                 box = Box(*dimensions)
                 shape = fillet(box.edges(), radius)
                 self.assertTrue(shape.is_valid)
-                vertices, faces = shape.tessellate(0.02, 0.1)
+                # Compare normalization against the same absolute-mm mesh.
+                # Shape.tessellate uses relative precision and yields a different
+                # set of curved-surface triangles, not a normalization baseline.
+                vertices, faces = tessellate_brep(shape, 0.02, 0.1)
                 raw = trimesh.Trimesh(
                     vertices=[[v.X, v.Y, v.Z] for v in vertices], faces=faces, process=False,
                 )
                 raw.merge_vertices()
-                # These fixtures have eight zero-area faces in the bundled
-                # tessellator. Preserve the assertion if a future tessellator
-                # eliminates them: only truly zero-area faces may disappear.
+                # Only truly zero-area faces may disappear, regardless of how
+                # many degenerate faces the tessellator emits for this fixture.
                 zero_area_count = int(np.count_nonzero(raw.area_faces == 0))
                 normalized = geometry_binding.shape_to_mesh(shape, "rounded enclosure")
                 self.assertClosed(normalized)

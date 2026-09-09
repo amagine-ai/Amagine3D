@@ -38,7 +38,7 @@ class CadDraftTests(unittest.TestCase):
 
     def cli(self, *args):
         return subprocess.run(["node", str(ROOT / "bin" / "a3d.mjs"), *map(str, args)],
-                              cwd=self.workspace, env=self.environment, text=True,
+                              cwd=self.workspace, env=self.environment, text=True, encoding="utf-8",
                               capture_output=True, timeout=35)
 
     def source(self, content=None):
