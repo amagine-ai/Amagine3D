@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { unzipSync } from 'fflate';
 
 import { moveSessionsToTrash } from '../server/session-trash.ts';
 import {
@@ -16,8 +17,36 @@ import {
   userSessionArtifacts,
 } from '../server/sessions.ts';
 import { writeUnifiedBuildFixture } from './unified-build-fixture.ts';
+import { fileSectionArtifacts } from '../src/lib/artifact-selection.ts';
+import { createArtifactArchive } from '../server/artifact-archive.ts';
 
 const SESSION_ID = '3b0d4f25-1707-4cc8-92cf-6f5c28edfc93';
+
+test('shows only display and plate files from the current validated report', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-plate-files-'));
+  try {
+    const workspace = sessionWorkspaceRoot(root, SESSION_ID)!;
+    await mkdir(workspace, { recursive: true });
+    await writeUnifiedBuildFixture({ backend: 'brep-assembly', name: 'pair', root: workspace,
+      parts: ['left', 'right'], plateParts: [['left'], ['right']] });
+    const collection = await userSessionArtifacts(root, SESSION_ID);
+    const visible = fileSectionArtifacts(collection!.artifacts);
+    assert.deepEqual(visible.map(({ path }) => path), [
+      'pair-display.glb', 'pair-plate-01.3mf', 'pair-plate-01.stl', 'pair-plate-02.3mf', 'pair-plate-02.stl',
+    ]);
+    assert.deepEqual(visible.map(({ plateId }) => plateId), [undefined, '01', '01', '02', '02']);
+    assert.ok(visible.every(({ buildId, modelId }) => buildId && modelId === 'pair'));
+    assert.ok(collection!.artifacts.some(({ path, primary }) => path === 'pair-left.stl' && !primary));
+    const download = await createArtifactArchive(workspace, visible.map(({ path }) => path));
+    assert.ok(download);
+    assert.deepEqual(Object.keys(unzipSync(download)).sort(), visible.map(({ path }) => path).sort());
+    await writeUnifiedBuildFixture({ backend: 'brep-assembly', colored: true, name: 'pair', root: workspace, parts: ['left', 'right'] });
+    const rebuilt = await userSessionArtifacts(root, SESSION_ID);
+    assert.deepEqual(fileSectionArtifacts(rebuilt!.artifacts).map(({ path }) => path), ['pair-display.glb', 'pair.3mf', 'pair.stl']);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 test('persists product messages and the Codex thread id without legacy agent history', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-codex-session-'));

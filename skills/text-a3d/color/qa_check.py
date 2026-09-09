@@ -32,6 +32,7 @@ from build_manifest import (
 from material_plan import validate_material_plan, validate_material_sources
 from mesh_topology import MeshTopologyError, physical_body_count
 from opening_placement import local_opening_evidence
+from print_plates import print_plates, plate_for_artifact
 
 if __package__:
     from .export_3mf import inspect_color_archive, load_color_archive_mesh
@@ -131,7 +132,8 @@ def _report_print_record(
         return None
     frame = _report_coordinate_frame(report, artifact_key)
     if frame == "plate-print":
-        record = report.get("backendData", {}).get("printPlate")
+        plate = plate_for_artifact(report, artifact_key)
+        record = plate["geometry"] if plate else None
         if isinstance(record, dict):
             return record
         parts = report.get("parts", {})
@@ -224,9 +226,9 @@ def _report_artifact_key(
         if isinstance(part_id, str) and part_id
     }
     allowed = (
-        {"3mf"}
+        {p["threeMfKey"] for p in print_plates(report)}
         if model_path.suffix.lower() == ".3mf"
-        else ({"stl"} | part_stl_keys)
+        else ({p["stlKey"] for p in print_plates(report)} | part_stl_keys)
     )
     digest = _digest(str(model_path))
     matches = [
@@ -258,7 +260,7 @@ def _report_artifact_key(
     return matches[0]
 
 
-def _expected_colors(report: dict | None) -> dict[str, str]:
+def _expected_colors(report: dict | None, part_ids=None) -> dict[str, str]:
     if not isinstance(report, dict):
         return {}
     plan = report.get("materialPlan")
@@ -267,6 +269,8 @@ def _expected_colors(report: dict | None) -> dict[str, str]:
     materials = {item["id"]: item["color"] for item in plan["materials"]}
     expected: dict[str, str] = {}
     for assignment in plan["assignments"]:
+        if part_ids is not None and assignment["part"] not in part_ids:
+            continue
         if assignment["scope"] == "volumetric-region":
             archive_name = f"{assignment['part']}/{assignment['region']}"
         else:
@@ -952,7 +956,10 @@ def _affected(
             "status": "not_evaluated",
         }
     transformed_records: list[tuple[str, np.ndarray]] = []
+    plate = plate_for_artifact(report, artifact_key) if report.get("backendData", {}).get("printPlates") else None
     for record in _feature_bounds(report, part_name):
+        if plate and record["part"] not in plate["parts"]:
+            continue
         transform, reason = _feature_print_transform(
             report,
             artifact_key=artifact_key,
@@ -1123,6 +1130,8 @@ def main() -> int:
                 Path(args.report).resolve().parent,
             )
         report_part = _artifact_part_name(report, report_artifact)
+        plate = plate_for_artifact(report, report_artifact)
+        plate_parts = plate["parts"] if plate else None
         report_dimensions = _report_print_dimensions(report, report_artifact)
         expected_dimensions = report_dimensions
         if intent is not None:
@@ -1154,7 +1163,7 @@ def main() -> int:
                 raise ValueError(
                     "printability.print_package_mode must be co_print_body or separate_parts"
                 )
-            if is_print_package and report_artifact != "3mf":
+            if is_print_package and plate is None:
                 raise ValueError("build report does not bind the supplied 3MF print package")
             if not is_print_package and not str(report_artifact).startswith("stl"):
                 raise ValueError("build report does not bind the supplied manufacturing STL")
@@ -1239,7 +1248,7 @@ def main() -> int:
 
     if is_print_package:
         archive = package or inspect_color_archive(args.model)
-        expected_regions = _expected_colors(report)
+        expected_regions = _expected_colors(report, plate_parts)
         region_inventory = archive.get("regions")
         if not isinstance(region_inventory, list) or not region_inventory:
             raise ValueError(
@@ -1296,6 +1305,7 @@ def main() -> int:
             expected_part_count = len({
                 assignment["part"]
                 for assignment in report["materialPlan"]["assignments"]
+                if plate_parts is None or assignment["part"] in plate_parts
             })
             audit.add(
                 "print_package_separate_part_build_items",

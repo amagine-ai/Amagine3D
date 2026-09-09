@@ -17,6 +17,7 @@ for directory in (SKILL_DIR, SKILL_ROOT):
 from build_check import audit as audit_build
 from build_manifest import BUILD_SCHEMA
 from material_plan import MATERIAL_PLAN_SCHEMA, validate_material_plan
+from print_plates import print_plates
 from export_3mf import inspect_color_archive
 
 SUPPORTED_BACKENDS = {
@@ -27,11 +28,13 @@ SUPPORTED_BACKENDS = {
 }
 
 
-def _expected_colors(report: dict) -> dict[str, str]:
+def _expected_colors(report: dict, part_ids=None) -> dict[str, str]:
     plan = report["materialPlan"]
     materials = {item["id"]: item["color"] for item in plan["materials"]}
     values: dict[str, str] = {}
     for assignment in plan["assignments"]:
+        if part_ids is not None and assignment["part"] not in part_ids:
+            continue
         if assignment["scope"] == "volumetric-region":
             name = f"{assignment['part']}/{assignment['region']}"
         else:
@@ -60,7 +63,9 @@ def audit(report_path: Path, three_mf_path: Path, max_overlap: float) -> dict:
     manifest_errors = audit_build(report_path)["errors"]
     plan = report.get("materialPlan")
     plan_errors = validate_material_plan(plan)
-    expected = _expected_colors(report) if not plan_errors else {}
+    plate = next((p for p in print_plates(report)
+                  if report.get("artifacts", {}).get(p["threeMfKey"], {}).get("sha256") == archive_hash), None)
+    expected = _expected_colors(report, plate["parts"] if plate else []) if not plan_errors else {}
     inventory = archive.get("regions")
     if not isinstance(inventory, list) or not inventory:
         raise ValueError("3MF archive must expose non-empty volumetric regions")
@@ -73,10 +78,10 @@ def audit(report_path: Path, three_mf_path: Path, max_overlap: float) -> dict:
     package_mode = plan.get("packageMode") if isinstance(plan, dict) else None
     assignments = plan.get("assignments", []) if isinstance(plan, dict) else []
     expected_part_count = len({
-        item.get("part") for item in assignments if isinstance(item, dict)
+        item.get("part") for item in assignments if isinstance(item, dict) and plate and item.get("part") in plate["parts"]
     })
     build_items = archive.get("build_items", [])
-    artifact = report.get("artifacts", {}).get("3mf", {})
+    artifact = report.get("artifacts", {}).get(plate["threeMfKey"], {}) if plate else {}
 
     checks = [
         _check(

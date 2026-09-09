@@ -1036,6 +1036,27 @@ def _assembly_print_layout(parts: dict[str, object], profile: dict, *, intent_da
     raise original_error
 
 
+def _assembly_print_plates(parts, profile, *, intent_data=None):
+    """Keep preferred stable poses when extra plates are permitted."""
+    from plate_layout import plan_plates
+    limit = (intent_data or {}).get("printability", {}).get("max_plates", len(parts))
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        raise BuildInvariantError("max_plates must be a positive integer")
+    if limit == 1:
+        poses, oriented, packed = _assembly_print_layout(parts, profile, intent_data=intent_data)
+        return poses, oriented, [packed]
+    poses = {n: _select_print_orientation(s, profile, intent_data=intent_data) for n, s in parts.items()}
+    oriented = {n: _apply_print_orientation(s, poses[n]) for n, s in parts.items()}
+    boxes = {n: {"min": list(s.bounding_box().min), "max": list(s.bounding_box().max)} for n, s in oriented.items()}
+    plan = plan_plates(boxes, profile, max_plates=limit)
+    if not plan["pass"]:
+        # A tighter plate limit can still be met by alternate stable poses.
+        poses, oriented, packed = _assembly_print_layout(parts, profile, intent_data=intent_data)
+        return poses, oriented, [packed]
+    packed = [_print_plate({n: oriented[n] for n in plate["parts"]}, profile=profile) for plate in plan["plates"]]
+    return poses, oriented, packed
+
+
 def observe(
     shape,
     feature_id: str,
@@ -1865,11 +1886,10 @@ def export_assembly(
 
     # Failed packing must not erase otherwise inspectable semantic geometry.
     try:
-        print_orientations, oriented_parts, packed = _assembly_print_layout(
+        print_orientations, oriented_parts, packed_plates = _assembly_print_plates(
             {name: shape for name, (shape, _) in normalized.items()},
             plate_profile, intent_data=intent_data,
         )
-        print_plate, plate_parts, plate_transforms, plate_layout = packed
     except BuildInvariantError as error:
         if not isinstance(error.__cause__, PlateLayoutError):
             raise
@@ -1888,17 +1908,26 @@ def export_assembly(
         if _collect_source_diagnostics():
             print(json.dumps(payload, indent=2))
         raise
-    for part_name, transform in plate_transforms.items():
-        semantic_to_part = _orientation_transform(print_orientations[part_name])
-        transform["matrix"] = (
-            np.asarray(transform["matrix"]) @ np.asarray(semantic_to_part["matrix"])
-        ).round(10).tolist()
-    plate_layout["orientations"] = print_orientations
-    plate_layout["inputFrame"] = "part-print"
-    print_plate_stats = _stats(print_plate)
-    if not print_plate_stats["valid"]:
-        raise BuildInvariantError("print plate geometry is invalid")
-
+    plate_parts, plate_transforms, plate_records = {}, {}, []
+    for index, (print_plate, placed, transforms, layout) in enumerate(packed_plates, 1):
+        for part_name, transform in transforms.items():
+            semantic_to_part = _orientation_transform(print_orientations[part_name])
+            transform["matrix"] = (
+                np.asarray(transform["matrix"]) @ np.asarray(semantic_to_part["matrix"])
+            ).round(10).tolist()
+        layout["orientations"] = {n: print_orientations[n] for n in placed}
+        layout["inputFrame"] = "part-print"
+        stats = _stats(print_plate)
+        if not stats["valid"]:
+            raise BuildInvariantError("print plate geometry is invalid")
+        pid = f"{index:02d}"
+        plate_records.append({"id": pid, "parts": sorted(placed),
+                              "stlKey": "stl" if index == 1 else f"plate:{pid}:stl",
+                              "threeMfKey": "3mf" if index == 1 else f"plate:{pid}:3mf",
+                              "geometry": {**_manifest_geometry_record(stats), "layout": layout}})
+        plate_parts.update(placed)
+        plate_transforms.update(transforms)
+    plate_layout = plate_records[0]["geometry"]["layout"]
     artifacts = {}
     audit_stls = {}
     audit_steps = {}
@@ -1941,13 +1970,13 @@ def export_assembly(
     assembly_stats = _stats(assembly_shape)
     if not assembly_stats["valid"]:
         raise BuildInvariantError("assembly geometry is invalid")
-    stl_path = output / f"{name}.stl"
-    export_shape_stl(print_plate, stl_path)
-    artifacts["stl"] = {
-        "path": str(stl_path.resolve()),
-        "sha256": _digest(stl_path),
-    }
-    audit_stls["stl"] = (stl_path, export_geometry_record(print_plate))
+    for plate, (print_plate, _, _, _) in zip(plate_records, packed_plates):
+        suffix = "" if len(plate_records) == 1 else f"-plate-{plate['id']}"
+        stl_path = output / f"{name}{suffix}.stl"
+        export_shape_stl(print_plate, stl_path)
+        artifacts[plate["stlKey"]] = {"coordinateFrame": "plate-print",
+                                      "path": str(stl_path.resolve()), "sha256": _digest(stl_path)}
+        audit_stls[plate["stlKey"]] = (stl_path, export_geometry_record(print_plate))
 
     assemble_step_path = output / f"{name}-assemble.step"
     display_glb_path = output / f"{name}-display.glb"
@@ -2006,21 +2035,19 @@ def export_assembly(
         )
         entries.append((str(path), normalized_colors[part_name], part_name))
 
-    archive_path = output / f"{name}.3mf"
-    three_mf = _write_part_color_archive(
-        entries,
-        archive_path,
-        name,
-        package_mode="separate_parts",
-    )
-    artifacts["3mf"] = {
-        "coordinateFrame": "plate-print",
-        "path": str(archive_path.resolve()),
-        "scale": 1.0,
-        "sha256": _digest(archive_path),
-        "validator": "lib3mf",
-        "verified": True,
-    }
+    for plate in plate_records:
+        suffix = "" if len(plate_records) == 1 else f"-plate-{plate['id']}"
+        archive_path = output / f"{name}{suffix}.3mf"
+        inventory = _write_part_color_archive(
+            [entry for entry in entries if entry[2] in plate["parts"]],
+            archive_path, name + suffix, package_mode="separate_parts",
+        )
+        if plate["id"] == "01":
+            three_mf = inventory
+        artifacts[plate["threeMfKey"]] = {
+            "coordinateFrame": "plate-print", "path": str(archive_path.resolve()),
+            "sha256": _digest(archive_path), "validator": "lib3mf", "verified": True,
+        }
 
     assignments = [
         {
@@ -2146,10 +2173,8 @@ def export_assembly(
             "overlapsMm3": overlaps,
             "exportAudit": export_audit,
             "parameters": dict(_evidence().parameters),
-            "printPlate": {
-                **_manifest_geometry_record(print_plate_stats),
-                "layout": plate_layout,
-            },
+            "printPlate": plate_records[0]["geometry"],
+            **({"printPlates": plate_records} if len(plate_records) > 1 else {}),
             "semanticAssembly": semantic_assembly,
             **color_fields,
         },

@@ -6,6 +6,7 @@ import {
   fileSectionArtifacts,
   preferredDisplayPreviewArtifact,
   preferredPrintPreviewArtifact,
+  printPreviewForSelection,
 } from '../src/lib/artifact-selection.ts';
 import type { ArtifactSummary, PreviewFormat } from '../src/types.ts';
 
@@ -34,6 +35,25 @@ function model(
     ...(format ? { format } : {}),
   };
 }
+
+test('keeps plate selection and hides individual parts and obsolete plates', () => {
+  const display = { ...model('pair-display.glb', 'glb', '2026-09-09'), primary: true, modelId: 'pair', buildId: 'new' };
+  const plates = ['01', '02'].flatMap((plateId) => (['3mf', 'stl'] as const).map((format) => ({
+    ...model(`pair-plate-${plateId}.${format}`, format, `2026-09-09T00:00:0${plateId === '02' ? 2 : 1}Z`),
+    primary: true, modelId: 'pair', buildId: 'new', plateId,
+  })));
+  const artifacts = [
+    model('pair-part-a.stl', 'stl', '2026-09-10'),
+    model('pair-plate-03.stl', 'stl', '2026-09-10'),
+    ...plates.slice().reverse(), display,
+  ];
+  assert.deepEqual(fileSectionArtifacts(artifacts).map(({ path }) => path), [display.path, ...plates.map(({ path }) => path)]);
+  assert.equal(preferredPrintPreviewArtifact(artifacts)?.path, plates[0]!.path);
+  for (const selected of plates) {
+    assert.equal(printPreviewForSelection(artifacts, selected, { primaryPreviewPath: plates[0]!.path }), selected);
+  }
+  assert.equal(printPreviewForSelection(artifacts, display, { primaryPreviewPath: plates[0]!.path }), plates[0]);
+});
 
 test('selects the display GLB over the top-level STL for single-color builds', () => {
   const artifacts = [

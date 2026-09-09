@@ -26,6 +26,7 @@ import type {
   ParameterModel,
 } from '../src/types.ts';
 import { scanArtifacts } from './artifacts.ts';
+import { validateUnifiedBuildReport } from './build-report.ts';
 import { discoverModelBuilds, type ModelBuild } from './model-builds.ts';
 import type { ParameterBuildRequest } from './trpc/schemas.ts';
 
@@ -250,8 +251,25 @@ export async function parameterModelsForWorkspace(
 async function requireCandidateFiles(
   outDir: string,
   build: ModelBuild,
+  workspaceRoot: string,
 ): Promise<string[]> {
-  const paths = [...new Set([...build.artifactPaths, build.reportPath])];
+  const candidate = await validateUnifiedBuildReport(
+    workspaceRoot,
+    join(outDir, build.reportPath),
+  );
+  if (
+    !candidate || candidate.report.part !== build.modelId ||
+    candidate.inputPaths.source !== await realpath(join(workspaceRoot, build.sourcePath!))
+  ) {
+    throw new ParameterBuildError('Parameter build did not produce a valid report for this model.', 422);
+  }
+  // A size change can change the plate count. Promote the newly validated
+  // inventory; every output must have been generated inside this staging job.
+  const canonicalOutDir = await realpath(outDir);
+  const paths = [...new Set([
+    ...Object.values(candidate.artifactPaths).map((path) => relative(canonicalOutDir, path)),
+    build.reportPath,
+  ])];
   for (const path of paths) {
     safeGeneratedArtifactPath(path, 'Generated artifact');
     try {
@@ -263,12 +281,6 @@ async function requireCandidateFiles(
         422,
       );
     }
-  }
-  if (!paths.includes(build.primaryPreviewPath)) {
-    throw new ParameterBuildError(
-      'Parameter build report does not own the selected print root.',
-      409,
-    );
   }
   return paths;
 }
@@ -527,7 +539,7 @@ export async function rebuildModelWithParameters(options: {
       outDir,
       request.values,
     );
-    const candidatePaths = await requireCandidateFiles(outDir, build);
+    const candidatePaths = await requireCandidateFiles(outDir, build, workspaceRoot);
     const candidateReportPath = join(outDir, build.reportPath);
     await prepareCandidateReport(
       candidateReportPath,

@@ -47,7 +47,7 @@ import {
   defaultPreviewArtifact,
   fileSectionArtifacts,
   preferredDisplayPreviewArtifact,
-  preferredPrintPreviewArtifact,
+  printPreviewForSelection,
 } from '../lib/artifact-selection';
 import {
   appendChatStepText,
@@ -178,16 +178,7 @@ export function CadWorkbench({
       [activeParameterModel, artifacts, selectedArtifact],
     );
     const printPreviewArtifact = useMemo(
-      () =>
-        (activeParameterModel
-          ? artifacts.find(
-              ({ path }) => path === activeParameterModel.primaryPreviewPath,
-            )
-          : selectedArtifact?.kind === 'model' &&
-              (selectedArtifact.format === '3mf' ||
-                selectedArtifact.format === 'stl')
-            ? selectedArtifact
-            : undefined) ?? preferredPrintPreviewArtifact(artifacts),
+      () => printPreviewForSelection(artifacts, selectedArtifact, activeParameterModel),
       [activeParameterModel, artifacts, selectedArtifact],
     );
     const previewArtifact = printPreview

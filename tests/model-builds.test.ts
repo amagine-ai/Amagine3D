@@ -11,6 +11,40 @@ import {
   writeUnifiedBuildFixture,
 } from './unified-build-fixture.ts';
 
+test('discovers every plate and rejects missing, duplicated, or stale plate evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-multi-plate-builds-'));
+  try {
+    const fixture = await writeUnifiedBuildFixture({ backend: 'brep-assembly', name: 'pair', root,
+      parts: ['a', 'b'], plateParts: [['a'], ['b']] });
+    const discover = () => scanArtifacts(root).then((files) => discoverModelBuilds(root, files));
+    const [build] = await discover();
+    assert.equal(build?.primaryPreviewPath, 'pair-plate-01.3mf');
+    assert.deepEqual(build?.printPlates, [
+      { id: '01', stlPath: 'pair-plate-01.stl', threeMfPath: 'pair-plate-01.3mf' },
+      { id: '02', stlPath: 'pair-plate-02.stl', threeMfPath: 'pair-plate-02.3mf' },
+    ]);
+    assert.equal(build?.topLevelArtifactPaths.length, 5);
+    for (const modify of [
+      (report: any) => { report.backendData.printPlates[1].parts = ['a']; },
+      (report: any) => { report.backendData.printPlates[1].geometry.volumeMm3 = 20; },
+      (report: any) => { report.backendData.printPlates[1].id = '03'; },
+      (report: any) => { report.backendData.printPlates = [null, {}]; },
+      (report: any) => { delete report.artifacts['plate:02:3mf']; },
+      (report: any) => { report.artifacts['plate:02:3mf'].path = report.artifacts['3mf'].path; },
+    ]) {
+      const report = structuredClone(fixture.report);
+      modify(report);
+      await writeFile(fixture.reportPath, JSON.stringify(report));
+      assert.deepEqual(await discover(), []);
+    }
+    await writeFile(fixture.reportPath, JSON.stringify(fixture.report));
+    await writeFile(join(root, 'pair-plate-02.3mf'), 'stale second plate');
+    assert.deepEqual(await discover(), []);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test('uses the artifact matrix to choose the unified print root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'amagine-assembly-builds-'));
   try {

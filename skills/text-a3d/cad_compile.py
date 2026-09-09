@@ -13,6 +13,8 @@ sandbox: Agent-authored Python has the permissions of the Amagine3D process.
 
 from __future__ import annotations
 
+from print_plates import print_plates
+
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -2727,13 +2729,10 @@ def compile_cad(
                 (part_id, _resolve_reference(artifacts[key], report_dir, key), 1)
             )
     if "stl" in artifacts:
-        mesh_targets.append(
-            (
-                "plate",
-                _resolve_reference(artifacts["stl"], report_dir, "stl"),
-                len(parts),
-            )
-        )
+        for plate in print_plates(report):
+            key = plate["stlKey"]
+            target = "plate" if plate["id"] == "01" else f"plate-{plate['id']}"
+            mesh_targets.append((target, _resolve_reference(artifacts[key], report_dir, key), len(plate["parts"])))
     for target, mesh_path, components in mesh_targets:
         audit_path = output_dir / f"{model}_{target}-mesh-audit.json"
         _run_json_check(
@@ -2761,7 +2760,7 @@ def compile_cad(
             artifact_name=f"meshAudit:{target}",
             failure_code="QA.MESH_FAILED",
             expected_schema="evidence-mesh-audit/v3",
-            part=target if target != "plate" else None,
+            part=target if target in parts else None,
         )
         if _compile_deadline_exceeded(result):
             return _finish(result, result_path=result_path, log_path=log_path)
@@ -2797,14 +2796,17 @@ def compile_cad(
         if _compile_deadline_exceeded(result):
             return _finish(result, result_path=result_path, log_path=log_path)
 
-    if "3mf" in artifacts:
-        three_mf_path = _resolve_reference(artifacts["3mf"], report_dir, "3mf")
-        color_audit_path = output_dir / f"{model}_color-audit.json"
+    for plate in (print_plates(report) if "3mf" in artifacts else []):
+        tag = "" if len(print_plates(report)) == 1 else f":{plate['id']}"
+        file_tag = "" if not tag else f"_plate-{plate['id']}"
+        three_mf_key = plate["threeMfKey"]
+        three_mf_path = _resolve_reference(artifacts[three_mf_key], report_dir, three_mf_key)
+        color_audit_path = output_dir / f"{model}{file_tag}_color-audit.json"
         _run_json_check(
             result,
             runner,
             deadline,
-            name="color-qa",
+            name="color-qa" + tag,
             argv=[
                 sys.executable,
                 str(Path(__file__).resolve().parent / "color" / "qa_check.py"),
@@ -2820,18 +2822,18 @@ def compile_cad(
             cwd=workspace,
             timeout_seconds=options.check_timeout_seconds,
             output_path=color_audit_path,
-            artifact_name="colorAudit",
+            artifact_name="colorAudit" + tag,
             failure_code="QA.COLOR_FAILED",
             expected_schema="evidence-color-print-package-audit/v1",
         )
         if _compile_deadline_exceeded(result):
             return _finish(result, result_path=result_path, log_path=log_path)
-        package_audit_path = output_dir / f"{model}_color-assembly-audit.json"
+        package_audit_path = output_dir / f"{model}{file_tag}_color-assembly-audit.json"
         _run_json_check(
             result,
             runner,
             deadline,
-            name="color-assembly-qa",
+            name="color-assembly-qa" + tag,
             argv=[
                 sys.executable,
                 str(Path(__file__).resolve().parent / "color" / "assembly_check.py"),
@@ -2841,7 +2843,7 @@ def compile_cad(
             cwd=workspace,
             timeout_seconds=options.check_timeout_seconds,
             output_path=package_audit_path,
-            artifact_name="colorAssemblyAudit",
+            artifact_name="colorAssemblyAudit" + tag,
             failure_code="QA.COLOR_ASSEMBLY_FAILED",
             expected_schema="evidence-assembly-audit/v1",
         )

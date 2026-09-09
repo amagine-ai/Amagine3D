@@ -315,6 +315,7 @@ def write_intent(
     manufacturing_mode: str,
     parts: Mapping[str, Mapping[str, Any]],
     support_policy: str,
+    max_plates: int | None = None,
     minimum_wall_target_mm: float | None = None,
     critical_features: Sequence[str],
     reference_view: str,
@@ -376,6 +377,8 @@ def write_intent(
         ),
         "critical_features": list(critical_features),
     }
+    if max_plates is not None:
+        printability["max_plates"] = max_plates
     document: dict[str, Any] = {
         "schema": INTENT_SCHEMA,
         "part": part,

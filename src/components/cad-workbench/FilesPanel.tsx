@@ -145,7 +145,10 @@ export function FilesPanel({
                     artifact={artifact}
                     selected={selectedPath === artifact.path}
                   />
-                  <span>{artifact.name}</span>
+                  <span>{artifact.plateId
+                    ? text(`${artifact.modelId ?? ''} · Plate ${Number(artifact.plateId)} · ${artifact.format?.toUpperCase()}`,
+                      `${artifact.modelId ?? ''} · 第 ${Number(artifact.plateId)} 盘 · ${artifact.format?.toUpperCase()}`)
+                    : artifact.name}</span>
                 </button>
               </li>
             ))}

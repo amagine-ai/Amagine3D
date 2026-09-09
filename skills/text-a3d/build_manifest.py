@@ -8,6 +8,8 @@ share it without importing a geometry kernel.
 
 from __future__ import annotations
 
+from print_plates import print_plates, plate_collection_errors
+
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -808,6 +810,8 @@ def _backend_data_errors(
         }
         if requires_three_mf:
             expected.update({"internalPartMeshes", "partColors", "printPackageMode", "threeMf"})
+        if "printPlates" in value:
+            expected.add("printPlates")
     elif backend == "brep-part":
         expected = {
             "exportAudit",
@@ -1194,6 +1198,9 @@ def validate_manifest(data: Any) -> list[str]:
             "glb:display": "semantic",
             "stl": "plate-print",
         }
+        for plate in print_plates(data):
+            if isinstance(plate, dict):
+                expected_frames.update({key: "plate-print" for key in (plate.get("stlKey"), plate.get("threeMfKey")) if isinstance(key, str)})
         for name, expected_frame in expected_frames.items():
             record = artifacts.get(name)
             if isinstance(record, dict) and record.get("coordinateFrame") != expected_frame:
@@ -1246,6 +1253,7 @@ def validate_manifest(data: Any) -> list[str]:
                         or key.startswith("stl:")
                         or key.startswith("step:")
                         or key.startswith("plate-stl:")
+                        or (key.startswith("plate:") and key.endswith(":stl"))
                         or key.startswith("region:")
                     }
                     if set(audited) != expected_audited:
@@ -1396,6 +1404,10 @@ def validate_manifest(data: Any) -> list[str]:
             })
         if required_three_mf:
             expected_artifact_keys.update({"3mf", "materialPlan"})
+        if backend == "brep-assembly" and "printPlates" in data.get("backendData", {}):
+            for plate in print_plates(data):
+                if isinstance(plate, dict):
+                    expected_artifact_keys.update(key for key in (plate.get("stlKey"), plate.get("threeMfKey")) if isinstance(key, str))
         if artifact_keys != expected_artifact_keys:
             errors.append(
                 f"artifacts must contain exactly {sorted(expected_artifact_keys)} "
@@ -1481,6 +1493,7 @@ def validate_manifest(data: Any) -> list[str]:
             )
         )
 
+    errors.extend(plate_collection_errors(data, _geometry_errors))
     return errors
 
 

@@ -4,6 +4,7 @@ import { basename, relative, sep } from 'node:path';
 import type { ArtifactSummary } from '../src/types.ts';
 import {
   type UnifiedBuildReport,
+  reportPrintPlates,
   validateUnifiedBuildReport,
 } from './build-report.ts';
 import { resolveArtifactPath } from './artifacts.ts';
@@ -18,6 +19,8 @@ export interface ModelBuild {
   reportPath: string;
   sourcePath?: string;
   topLevelArtifactPaths: string[];
+  runId?: string;
+  printPlates?: { id: string; stlPath: string; threeMfPath: string }[];
 }
 
 function safeRelativePath(root: string, candidate: string): string | undefined {
@@ -126,6 +129,12 @@ export async function discoverModelBuilds(
         ),
       ),
     ].filter((path): path is string => Boolean(path));
+    const printPlates = reportPrintPlates(report).map((plate) => ({
+      id: plate.id,
+      stlPath: safeRelativePath(canonicalRoot, validated.artifactPaths[plate.stlKey]!)!,
+      threeMfPath: safeRelativePath(canonicalRoot, validated.artifactPaths[plate.threeMfKey]!)!,
+    }));
+    topLevelArtifactPaths.push(...printPlates.flatMap((plate) => [plate.stlPath, plate.threeMfPath]));
     builds.push({
       artifactPaths,
       displayPreviewPath,
@@ -137,6 +146,8 @@ export async function discoverModelBuilds(
       reportPath: artifact.path,
       ...(sourcePath ? { sourcePath } : {}),
       topLevelArtifactPaths: [...new Set(topLevelArtifactPaths)],
+      ...(typeof report.runId === 'string' ? { runId: report.runId } : {}),
+      ...(printPlates.length ? { printPlates } : {}),
     });
   }
   return builds.sort((left, right) =>

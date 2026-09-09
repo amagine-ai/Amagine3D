@@ -20,6 +20,7 @@ from coordinate_frames import (
 )
 from mesh_topology import MeshTopologyError, physical_body_count
 from opening_placement import local_opening_evidence
+from print_plates import plate_for_artifact
 
 
 FACE_AXES = {
@@ -147,7 +148,8 @@ def _report_print_dimensions(
     if frame == "part-print" and part_name is not None:
         record = report.get("parts", {}).get(part_name, {}).get("print")
     elif frame == "plate-print":
-        record = report.get("backendData", {}).get("printPlate")
+        plate = plate_for_artifact(report, artifact_key)
+        record = plate["geometry"] if plate else None
     else:
         return None
     bounds = record.get("boundsMm", {}) if isinstance(record, dict) else {}
@@ -364,7 +366,7 @@ def _report_artifact_for_stl(
     matches = [
         key
         for key, reference in report.get("artifacts", {}).items()
-        if (key == "stl" or key.startswith("stl:"))
+        if (key == "stl" or key.startswith("stl:") or (key.startswith("plate:") and key.endswith(":stl")))
         and isinstance(reference, dict)
         and reference.get("sha256") == digest
     ]
@@ -389,7 +391,7 @@ def _report_artifact_for_stl(
 def _artifact_part_name(report: dict | None, artifact_key: str | None) -> str | None:
     if not isinstance(report, dict) or not isinstance(artifact_key, str):
         return None
-    if artifact_key == "stl":
+    if artifact_key == "stl" or artifact_key.startswith("plate:"):
         return None
     part_name = artifact_key.removeprefix("stl:")
     if part_name not in report.get("parts", {}):
@@ -767,7 +769,10 @@ def _affected_features(
             "status": "not_evaluated",
         }
     transformed_records: list[tuple[str, np.ndarray]] = []
+    plate = plate_for_artifact(report, artifact_key) if report.get("backendData", {}).get("printPlates") else None
     for record in _report_feature_bounds(report, part_name):
+        if plate and record["part"] not in plate["parts"]:
+            continue
         transform, reason = _feature_print_transform(
             report,
             artifact_key=artifact_key,

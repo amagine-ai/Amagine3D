@@ -996,6 +996,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
             errors.append("printability.build_axis must be +Z")
         if printability.get("bed_contact") != "z-min":
             errors.append("printability.bed_contact must be z-min")
+        if "max_plates" in printability:
+            count = printability["max_plates"]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+                errors.append("printability.max_plates must be a positive integer")
         if printability.get("support_policy") not in {
             "support-free",
             "supports-allowed",

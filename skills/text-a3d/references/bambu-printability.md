@@ -28,9 +28,17 @@ at export. A successful footprint plan is not a manufacturing audit.
 The planner tries translations and 90-degree turns about the build axis, then
 proposes separate plates up to the stated limit. It distinguishes a single
 part exceeding the usable volume from a heuristic that has not found a layout.
-The latter is not proof of impossibility. The current `export_assembly` complete
-manufacturing package still requires one plate; a multi-plate plan alone does
-not constitute exported, audited multi-plate 3MF delivery. A failed export keeps
+The latter is not proof of impossibility. `export_assembly` preserves stable
+print orientations and allows multiple plates by default. Set
+`write_intent(..., max_plates=1)` only when a single plate is required (or use
+another positive limit). Each plate is exported and audited independently:
+`name-plate-01.3mf` / `.stl`, `name-plate-02.3mf` / `.stl`, etc. Single-plate
+exports retain `name.3mf` / `.stl`. The report's `backendData.printPlates` maps
+each manufactured part to exactly one plate; the legacy `printPlate` and
+`artifacts.stl` / `artifacts.3mf` refer to the first plate. STEP and display GLB
+retain the assembled geometry. Individual part STLs remain internal QA inputs;
+the product file list exposes the display model and plate files only.
+A failed export keeps
 hash-bound semantic STEP/GLB and a diagnostic preview where generation succeeds,
 without declaring manufacture complete. Use that evidence to improve packing
 or plan the required export work, keeping the selected printer and target form.
@@ -54,7 +62,8 @@ finish sizes enter the build report.
 For same-material multipart assemblies, keep every printed part as one valid
 solid, export them with `export_assembly()`, audit each part STL individually,
 then audit `<name>.stl` as the arranged print-bed layout and use
-`assembly_check.py` for report integrity. Every printed STL that leaves the
+`assembly_check.py` for report integrity. For multiple plates, audit every
+`<name>-plate-NN.stl` and its corresponding 3MF. Every printed STL that leaves the
 helper is in print coordinates with `Z-min = 0`; every `NAME-PART.step` and the
 required `NAME-assemble.step` preserve physical mating positions, while
 `NAME-display.glb` preserves the display model instead of acting as

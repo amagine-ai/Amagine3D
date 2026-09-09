@@ -7,12 +7,15 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
+import { unzipSync } from 'fflate';
 
 import {
   parameterModelsForWorkspace,
   rebuildModelWithParameters,
 } from '../server/model-parameters.ts';
 import { parameterBuildRequestSchema } from '../server/trpc/schemas.ts';
+import { scanArtifacts } from '../server/artifacts.ts';
+import { discoverModelBuilds } from '../server/model-builds.ts';
 
 const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 const PROJECT_ROOT = resolve(import.meta.dirname, '..');
@@ -39,6 +42,66 @@ const COORDINATE_SYSTEM = {
   y_positive: 'back',
   z_positive: 'top',
 };
+
+test('parameter rebuilds support single to multiple plates and back without promoting stale files',
+  { skip: !existsSync(VENV_PYTHON) }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'amagine-plate-parameter-'));
+    try {
+      const inputs = await writeEvidenceInputs({
+        name: 'plate_pair', root, parts: ['lower', 'upper'], dimensionsMm: [170, 170, 60],
+        features: ['lower', 'upper'].map((part) => ({ id: part, kind: 'interface', part })),
+        manufacturing: {
+          mode: 'multipart',
+          parts: ['lower', 'upper'].map((name) => ({ name, role: name, acceptance: 'separate solid' })),
+          interfaces: [{ id: 'seam', connection: 'glue-face', assembly_axis: '+Z', engagement_mm: 1,
+            features: ['lower', 'upper'], between: ['lower', 'upper'], acceptance: 'paired assembly faces' }],
+        },
+      });
+      const source = `import sys
+sys.path.insert(0, ${JSON.stringify(join(PROJECT_ROOT, 'skills', 'text-a3d'))})
+from build123d import Box, Pos
+from cad_helpers import export_assembly, observe, parameter
+SIZE = parameter("size", 40.0, min_value=40, max_value=170, step=10, unit="mm", label="Size", affects=("lower", "upper"))
+# Opposite envelope corners stay fixed while the two internal footprints grow.
+offset = (170 - SIZE) / 2
+parts = {"lower": Pos(-offset,-offset,15)*Box(SIZE,SIZE,30), "upper": Pos(offset,offset,45)*Box(SIZE,SIZE,30)}
+for name, shape in parts.items():
+    observe(shape, name, "solid", part_name=name)
+export_assembly(parts, "plate_pair", source_path=__file__, intent_path=${JSON.stringify(inputs.intent)}, scene_path=${JSON.stringify(inputs.scene)})
+`;
+      await writeFile(join(root, 'plate_pair.py'), source);
+      await execFileAsync(VENV_PYTHON, ['plate_pair.py'], { cwd: root });
+      for (const [size, expectedCount] of [[170, 2], [40, 1]] as const) {
+        const [model] = await parameterModelsForWorkspace(root, VENV_PYTHON);
+        assert.ok(model);
+        await rebuildModelWithParameters({ pythonExecutable: VENV_PYTHON, workspaceRoot: root,
+          request: { sourcePath: model.sourcePath, sourceHash: model.sourceHash,
+            primaryPreviewPath: model.primaryPreviewPath, values: { size } } });
+        const [build] = await discoverModelBuilds(root, await scanArtifacts(root));
+        assert.ok(build, 'promoted report must retain valid hashes and bindings');
+        assert.equal(build.printPlates?.length ?? 1, expectedCount);
+        assert.equal(build.topLevelArtifactPaths.length, 1 + expectedCount * 2);
+        assert.equal(build.primaryPreviewPath, expectedCount === 1 ? 'plate_pair.3mf' : 'plate_pair-plate-01.3mf');
+        assert.ok(build.artifactPaths.every((path) => !path.startsWith('.amagine-state')));
+        if (build.printPlates) {
+          const owners: string[] = [];
+          for (const plate of build.printPlates) {
+            const archive = unzipSync(await readFile(join(root, plate.threeMfPath)));
+            const xml = new TextDecoder().decode(archive['3D/3dmodel.model']);
+            const names = [...xml.matchAll(/<object\b[^>]*\bname="([^"]+)"/gu)].map((match) => match[1]!);
+            assert.equal(names.length, 1, 'each independent archive contains only its assigned solid');
+            owners.push(...names);
+          }
+          assert.deepEqual(owners.sort(), ['lower', 'upper']);
+        }
+      }
+      assert.ok(existsSync(join(root, 'plate_pair-plate-02.stl')), 'old files may remain on disk');
+      const [final] = await discoverModelBuilds(root, await scanArtifacts(root));
+      assert.ok(!final!.topLevelArtifactPaths.includes('plate_pair-plate-02.stl'), 'orphaned plates are not offered as current outputs');
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
 
 function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
@@ -203,14 +266,11 @@ async function writeEvidenceInputs(options: {
         sha256: sha256(intentJson),
       },
       interfaces: sceneInterfaces,
-      nodes: parts.map((part, index) => ({
-        featureId:
-          features.find((feature) => feature.part === part)?.id ??
-          features[index]?.id ??
-          features[0]?.id,
-        id: `${part}-body`,
+      nodes: features.map((feature) => ({
+        featureId: feature.id,
+        id: `${feature.id}-body`,
         operation: 'union',
-        partId: part,
+        partId: feature.part ?? parts[0],
         recipe: { kind: 'build123dSource', parameters: {} },
         role: 'solid',
       })),

@@ -267,8 +267,16 @@ export async function userSessionArtifacts(
   const primaryPaths = new Set(
     builds.flatMap(({ topLevelArtifactPaths }) => topLevelArtifactPaths),
   );
+  const displayMetadata = new Map(builds.flatMap((build) =>
+    build.topLevelArtifactPaths.map((path) => {
+      const plate = build.printPlates?.find((item) => item.stlPath === path || item.threeMfPath === path);
+      return [path, { modelId: build.modelId, buildId: build.runId,
+        ...(plate ? { plateId: plate.id } : {}) }] as const;
+    }),
+  ));
   const artifacts = scannedArtifacts.map((artifact) => ({
     ...artifact,
+    ...displayMetadata.get(artifact.path),
     ...(featuredPaths.has(artifact.path) ? { featured: true } : {}),
     ...(primaryPaths.has(artifact.path) ? { primary: true } : {}),
     url: `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/file?path=${encodeURIComponent(artifact.path)}`,

@@ -77,6 +77,9 @@ export interface SkillSummary {
 }
 
 export interface ArtifactSummary {
+  modelId?: string;
+  buildId?: string;
+  plateId?: string;
   featured?: boolean;
   format?: PreviewFormat;
   kind: ArtifactKind;
@@ -120,6 +123,7 @@ export interface ModelParameter {
 }
 
 export interface ParameterModel {
+  printPlates?: { id: string; stlPath: string; threeMfPath: string }[];
   artifactPaths: string[];
   displayPreviewPath: string;
   modelId: string;

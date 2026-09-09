@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from print_plates import print_plates
+
 import argparse
 from hashlib import sha256
 import importlib.util
@@ -518,14 +520,13 @@ def audit_report(
         assembly_solids,
         len(part_names),
     )
-    print_plate = backend_data.get("printPlate")
-    print_solids = (
-        print_plate.get("bodyCount") if isinstance(print_plate, dict) else None
-    )
+    plate_counts = [p.get("geometry", {}).get("bodyCount")
+                    for p in print_plates(report) if isinstance(p.get("geometry"), dict)]
     audit.add(
         "print_plate_solid_count",
-        print_solids == len(part_names),
-        print_solids,
+        bool(plate_counts) and all(isinstance(n, int) for n in plate_counts)
+        and sum(plate_counts) == len(part_names),
+        plate_counts,
         len(part_names),
     )
     print_ref = artifact_map.get("stl")

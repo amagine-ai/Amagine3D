@@ -53,6 +53,7 @@ export interface UnifiedBuildFixtureOptions {
   colored?: boolean;
   name: string;
   parts?: string[];
+  plateParts?: string[][];
   pass?: boolean;
   root: string;
   schema?: string;
@@ -125,9 +126,10 @@ export async function writeUnifiedBuildFixture(
     root,
     schema = 'evidence-a3d-build/v1',
     sourceContent = '# parametric CAD source\n',
+    plateParts,
   } = options;
   const hybrid = backend === 'hybrid-mesh';
-  const needsThreeMf = colored;
+  const needsThreeMf = colored || Boolean(plateParts);
   const revision = `${name}-revision-1`;
   const hybridStepConsistency = {
     parts: {},
@@ -424,6 +426,30 @@ export async function writeUnifiedBuildFixture(
     artifacts.materialPlan = plan;
   }
 
+  const printPlates = plateParts?.map((owners, index) => {
+    const id = String(index + 1).padStart(2, '0');
+    return {
+      id,
+      parts: owners,
+      stlKey: index === 0 ? 'stl' : `plate:${id}:stl`,
+      threeMfKey: index === 0 ? '3mf' : `plate:${id}:3mf`,
+      geometry: {
+        ...geometryRecord(owners.length),
+        layout: { auto_scale: false, scale: 1, transforms: Object.fromEntries(owners.map((part) => [part, IDENTITY])) },
+      },
+    };
+  });
+  for (const plate of printPlates ?? []) {
+    for (const [key, extension] of [[plate.stlKey, 'stl'], [plate.threeMfKey, '3mf']] as const) {
+      const file = await writeBound(`${name}-plate-${plate.id}.${extension}`, `${extension} plate ${plate.id}`);
+      artifacts[key] = { ...file, coordinateFrame: 'plate-print', ...(extension === '3mf' ? { validator: 'lib3mf', verified: true } : {}) };
+    }
+  }
+  if (printPlates) {
+    topStl = artifacts.stl!.path as string;
+    threeMfPath = artifacts['3mf']!.path as string;
+  }
+
   let exportAudit: Record<string, unknown> | undefined;
   if (!hybrid) {
     const expectedGeometry = {
@@ -441,6 +467,7 @@ export async function writeUnifiedBuildFixture(
             key.startsWith('stl:') ||
             key.startsWith('step:') ||
             key.startsWith('plate-stl:') ||
+            /^plate:\d+:stl$/u.test(key) ||
             key.startsWith('region:'),
         )
         .map(([key, artifact]) => {
@@ -596,7 +623,8 @@ export async function writeUnifiedBuildFixture(
       exportAudit,
       overlapsMm3: overlapMap(parts),
       parameters: {},
-      printPlate: { ...geometryRecord(parts.length), layout },
+      printPlate: printPlates?.[0]?.geometry ?? { ...geometryRecord(parts.length), layout },
+      ...(printPlates ? { printPlates } : {}),
       semanticAssembly,
       ...(needsThreeMf
         ? {

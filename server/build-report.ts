@@ -82,6 +82,59 @@ export interface ValidateBuildOptions {
   minimumModifiedAtMs?: number;
 }
 
+export interface BuildPrintPlate {
+  id: string;
+  parts: string[];
+  stlKey: string;
+  threeMfKey: string;
+  geometry: Record<string, unknown>;
+}
+
+/** Read only after report validation; legacy single-plate reports need no list. */
+export function reportPrintPlates(report: UnifiedBuildReport): BuildPrintPlate[] {
+  const plates = objectRecord(report.backendData)?.printPlates;
+  return Array.isArray(plates) ? plates as BuildPrintPlate[] : [];
+}
+
+function validPrintPlates(report: UnifiedBuildReport): boolean {
+  const data = objectRecord(report.backendData);
+  if (data?.printPlates === undefined) return true;
+  if (report.backend !== 'brep-assembly' || !Array.isArray(data.printPlates) || data.printPlates.length < 2) return false;
+  const owners: string[] = [];
+  const paths: string[] = [];
+  const parts = report.parts ?? {};
+  for (const [index, raw] of data.printPlates.entries()) {
+    const plate = objectRecord(raw);
+    const id = String(index + 1).padStart(2, '0');
+    const stlKey = index === 0 ? 'stl' : `plate:${id}:stl`;
+    const threeMfKey = index === 0 ? '3mf' : `plate:${id}:3mf`;
+    if (!plate || !exactKeys(plate, ['id', 'parts', 'stlKey', 'threeMfKey', 'geometry']) ||
+        plate.id !== id || plate.stlKey !== stlKey || plate.threeMfKey !== threeMfKey ||
+        !Array.isArray(plate.parts) || !plate.parts.length ||
+        !plate.parts.every((part): part is string => nonEmptyString(part) && part in parts)) return false;
+    owners.push(...plate.parts);
+    const geometry = objectRecord(plate.geometry);
+    if (!geometry || !exactKeys(geometry, ['bodyCount', 'boundsMm', 'isVolume', 'layout', 'valid', 'volumeMm3'])) return false;
+    const { layout: rawLayout, ...record } = geometry;
+    const layout = objectRecord(rawLayout);
+    const transforms = objectRecord(layout?.transforms);
+    if (!validGeometryRecord(record) || geometry.bodyCount !== plate.parts.length ||
+        !transforms || !exactKeys(transforms, plate.parts)) return false;
+    const volume = plate.parts.reduce((sum, part) => sum + Number(parts[part]?.semantic?.volumeMm3), 0);
+    if (!finiteNumber(geometry.volumeMm3) || !Number.isFinite(volume) ||
+        Math.abs(geometry.volumeMm3 - volume) > Math.max(0.001, volume * 1e-6)) return false;
+    for (const key of [stlKey, threeMfKey]) {
+      const artifact = report.artifacts?.[key];
+      if (!artifact || artifact.coordinateFrame !== 'plate-print' || !nonEmptyString(artifact.path) ||
+          (key === threeMfKey && (artifact.verified !== true || artifact.validator !== 'lib3mf'))) return false;
+      paths.push(artifact.path);
+    }
+  }
+  return JSON.stringify(owners.sort()) === JSON.stringify(Object.keys(parts).sort()) &&
+    new Set(paths).size === paths.length &&
+    canonicalJson(reportPrintPlates(report)[0]?.geometry) === canonicalJson(data.printPlate);
+}
+
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -905,6 +958,7 @@ function validBackendData(
       'parameters',
       'printPlate',
       'semanticAssembly',
+      ...(data.printPlates !== undefined ? ['printPlates'] : []),
       ...(requiresThreeMf
         ? ['internalPartMeshes', 'partColors', 'printPackageMode', 'threeMf']
         : []),
@@ -1030,7 +1084,7 @@ function validBackendData(
 
 function expectedArtifactFrame(key: string): string | undefined {
   if (key === 'glb:display' || key.startsWith('step:')) return 'semantic';
-  if (key === '3mf' || key === 'stl' || key.startsWith('plate-stl:')) {
+  if (key === '3mf' || key === 'stl' || key.startsWith('plate-stl:') || /^plate:\d+:(stl|3mf)$/u.test(key)) {
     return 'plate-print';
   }
   if (key.startsWith('stl:')) return 'part-print';
@@ -1043,11 +1097,12 @@ function artifactSuffixMatches(key: string, path: unknown): boolean {
   if (!nonEmptyString(path)) return false;
   const suffix = extname(path).toLowerCase();
   if (key === 'glb:display') return suffix === '.glb';
-  if (key === '3mf') return suffix === '.3mf';
+  if (key === '3mf' || /^plate:\d+:3mf$/u.test(key)) return suffix === '.3mf';
   if (
     key === 'stl' ||
     key.startsWith('stl:') ||
     key.startsWith('plate-stl:') ||
+    /^plate:\d+:stl$/u.test(key) ||
     /^region:.+:(?:print|semantic)$/u.test(key)
   ) {
     return suffix === '.stl';
@@ -1344,6 +1399,11 @@ function validStructure(report: UnifiedBuildReport): boolean {
     artifacts,
     requiresThreeMf,
   );
+  if (!validPrintPlates(report)) return false;
+  for (const plate of reportPrintPlates(report)) {
+    expectedKeys?.add(plate.stlKey);
+    expectedKeys?.add(plate.threeMfKey);
+  }
   if (
     !expectedKeys ||
     JSON.stringify([...expectedKeys].sort()) !==
@@ -1532,6 +1592,7 @@ async function validateBrepExportAudit(
         key.startsWith('stl:') ||
         key.startsWith('step:') ||
         key.startsWith('plate-stl:') ||
+        /^plate:\d+:stl$/u.test(key) ||
         key.startsWith('region:'),
     )
     .sort();
