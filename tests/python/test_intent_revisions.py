@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "skills" / "text-a3d"))
 
 import cad_compile
-from intent_contract import dimension_limits, validate
+from intent_contract import dimension_limits, dimension_measurement_precision_mm, validate
 from intent_revision import audit_lineage, history_path, semantic_diff, validate_revision
 from tests.python.intent_fixture import write_intent
 
@@ -49,11 +49,17 @@ class IntentRevisionTests(unittest.TestCase):
         item = original["dimensions_mm"]["x"]
         item["value"], item["source"] = 40, "inferred"
         self.assertEqual(dimension_limits(original, "x"), (40.0, 40.0))
+        self.assertEqual(dimension_measurement_precision_mm(item), 0.01)
         self.assertEqual(dimension_limits(original, "x", tolerance_mm=0.5), (39.5, 40.5))
         item["constraint"] = {"kind": "range", "min_mm": 35, "max_mm": 45}
         self.assertEqual(validate(original, self.root), [])
         self.assertEqual(dimension_limits(original, "x"), (35.0, 45.0))
         self.assertEqual(dimension_limits(original, "x", tolerance_mm=0.5), (34.5, 45.5))
+        for precision in (0.0001, 0.001, 0.01):
+            item["measurement_precision_mm"] = precision
+            self.assertEqual(dimension_measurement_precision_mm(item), precision)
+            self.assertEqual(dimension_limits(original, "x"), (35.0, 45.0))
+            self.assertEqual(validate(original, self.root), [])
         item["value"] = 46
         self.assertTrue(any("within its declared range" in error for error in validate(original, self.root)))
 
@@ -71,6 +77,14 @@ class IntentRevisionTests(unittest.TestCase):
                 document = {"dimensions_mm": {"x": {"value": 40, "constraint": constraint}}}
                 with self.assertRaises(ValueError):
                     dimension_limits(document, "x")
+        for precision in (None, True, 0, -0.01, 0.000099, 0.010001, float("nan"), float("inf"), "0.001"):
+            with self.subTest(precision=precision):
+                document = deepcopy(self.original)
+                item = document["dimensions_mm"]["x"]
+                item["measurement_precision_mm"] = precision
+                with self.assertRaisesRegex(ValueError, "measurement_precision_mm"):
+                    dimension_limits(document, "x")
+                self.assertTrue(any("measurement_precision_mm" in error for error in validate(document, self.root)))
 
     def test_section_dimensions_validate_fixed_ranges_and_reject_unsupported_targets(self):
         original = deepcopy(self.original)
@@ -82,6 +96,9 @@ class IntentRevisionTests(unittest.TestCase):
         section["outer_envelope"]["width_u_mm"] = {
             "value": 54, "constraint": {"kind": "range", "min_mm": 53.9, "max_mm": 54.1}}
         self.assertEqual(validate(original, self.root), [])
+        for precision in (0.0001, 0.001, 0.01):
+            section["outer_envelope"]["width_u_mm"]["measurement_precision_mm"] = precision
+            self.assertEqual(validate(original, self.root), [])
         for axis in "xyz":
             section["plane"] = {"axis": axis, "coordinate_mm": -2.5}
             self.assertEqual(validate(original, self.root), [])
@@ -93,6 +110,9 @@ class IntentRevisionTests(unittest.TestCase):
             "unsupported hole": lambda feature: feature["section_dimensions"][0].update(hole_envelope={"diameter_mm": {"value": 4}}),
             "unknown outer metric": lambda feature: feature["section_dimensions"][0]["outer_envelope"].update(diameter_mm={"value": 54}),
             "authored tolerance": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(tolerance_mm=2),
+            "looser precision": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(measurement_precision_mm=0.02),
+            "invalid precision": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(measurement_precision_mm=True),
+            "nonfinite precision": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(measurement_precision_mm=float("nan")),
             "outside range": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(value=55),
             "fixed with range": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(constraint={"kind": "fixed", "min_mm": 1}),
             "invalid dimension": lambda feature: feature["section_dimensions"][0]["outer_envelope"]["width_u_mm"].update(value=True),
@@ -127,6 +147,7 @@ class IntentRevisionTests(unittest.TestCase):
         changes = (
             lambda data: data["dimensions_mm"]["x"].update(value=99),
             lambda data: data["dimensions_mm"]["x"].update(constraint={"kind": "range", "min_mm": 1, "max_mm": 999}),
+            lambda data: data["dimensions_mm"]["x"].update(measurement_precision_mm=0.0001),
             lambda data: data["printability"]["profile"].update(path="different-printer.json"),
             lambda data: data["features"][0].update(acceptance="Optional feature"),
             lambda data: data["features"][0].update(section_dimensions=[{
@@ -140,6 +161,22 @@ class IntentRevisionTests(unittest.TestCase):
                 updated = self.revision(self.path, self.original)
                 change(updated)
                 self.assertTrue(any("changes a fixed target" in error for error in validate_revision(updated, self.root)))
+        precise = deepcopy(self.original)
+        precise["dimensions_mm"]["x"]["measurement_precision_mm"] = 0.0001
+        precise["features"][0]["section_dimensions"] = [{
+            "plane": {"axis": "z", "coordinate_mm": 10},
+            "outer_envelope": {"width_u_mm": {"value": 54, "measurement_precision_mm": 0.0001}},
+        }]
+        for remove in (False, True):
+            changed = deepcopy(precise)
+            for item in (changed["dimensions_mm"]["x"], changed["features"][0]["section_dimensions"][0]["outer_envelope"]["width_u_mm"]):
+                if remove:
+                    item.pop("measurement_precision_mm")
+                else:
+                    item["measurement_precision_mm"] = 0.01
+            differences = semantic_diff(precise, changed)
+            self.assertEqual(len(differences), 2)
+            self.assertTrue(all(item["classification"] == "target-change" for item in differences))
 
     def test_interface_order_is_not_a_target_revision_but_loose_is(self):
         original = deepcopy(self.original)

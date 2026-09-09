@@ -75,12 +75,12 @@ packed plate envelope. Build reports independently measure the final physical
 part union as `backendData.semanticAssembly.boundsMm`; they must never copy the
 intent target into that evidence. Each `parts[part].semantic.boundsMm` records
 only that physical part. For BRep backends, the hash-bound STEP readback bounds
-must satisfy the intent's allowed dimension intervals, with 0.0001 mm numerical
-tolerance at their boundaries. This numerical tolerance is not printer accuracy
-or the ordinary modeling allowance. Report
-bounds, whose endpoints are rounded to four decimals, use 0.0002 mm recording
-tolerance; they cannot override the precise readback check. The former 0.5 mm
-allowance must not hide a real design-size error. The
+must satisfy the intent's allowed dimension intervals with a default 0.01 mm
+measurement tolerance, using the raw measured value. A dimension item can set
+`measurement_precision_mm` from 0.0001 through 0.01 to tighten this tolerance
+when explicitly required. This is measurement acceptance, not printer accuracy.
+Recorded bounds retain their separate 0.0002 mm rounding allowance; final raw
+STEP readback receives only the selected measurement tolerance. The
 approximate Hybrid mesh envelope retains its 0.5 mm audit tolerance, and
 representation readback of an exported STEP/STL retains a separate 0.05 mm
 tolerance. `source: "inferred"` describes confidence; it does
@@ -95,7 +95,9 @@ expressed using this existing range field. For example, 54 mm uses `value: 54`
 and `constraint: {kind: "range", min_mm: 53.9, max_mm: 54.1}`. Explicit user
 tolerances, limits and functional fits take precedence; do not apply this allowance
 to minimum walls, floor thickness, clearances or collision checks. Stop calibrating
-inside the agreed interval. Keep raw measurements; rounding is for presentation.
+inside the accepted interval. `a3d measure` saves and returns measured lengths
+to two decimals; Python measurement helpers and raw STEP acceptance stay unrounded.
+Canonical geometry record precision is unchanged.
 Changing an already bound fixed target to a range requires an intent revision.
 
 A feature can optionally declare `section_dimensions` when its requirement is
@@ -111,9 +113,9 @@ the outside size at a particular height or other semantic plane:
 The nonempty list belongs to the feature's physical part. Each plane uses an
 absolute semantic coordinate; its in-plane `u/v` axes are `+Y/+Z` for `x`,
 `+X/+Z` for `y`, and `+X/+Y` for `z`. Declare `width_u_mm`, `depth_v_mm`, or
-both. Each metric accepts `value` and the same optional `constraint` range as
-above. Final compile measures the owner's hash-bound semantic STEP after all
-finishing, using 0.0001 mm numerical tolerance, independently of `--tol`.
+both. Each metric accepts `value`, optional `constraint`, and optional
+`measurement_precision_mm` as above. Final compile measures the owner's hash-bound
+semantic STEP after all finishing, using the selected precision independently of `--tol`.
 An empty section fails. The audit records the plane, actual value, target,
 delta and STEP hash; an assembly union or another part cannot substitute for
 the owning part. This requires a BRep owner and its semantic STEP artifact.

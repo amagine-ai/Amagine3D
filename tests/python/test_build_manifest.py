@@ -24,6 +24,7 @@ from build_manifest import (  # noqa: E402
     semantic_assembly_record,
     semantic_envelope_errors,
     semantic_envelope_tolerance_mm,
+    semantic_envelope_record_rounding_mm,
     semantic_evidence_errors,
     validate_manifest,
 )
@@ -547,6 +548,11 @@ class BuildManifestTests(unittest.TestCase):
             self.assertTrue(any(
                 "union of parts" in item for item in validate_manifest(report)
             ))
+            # Ordinary dimension allowances must not widen canonical record consistency.
+            report = _valid_report(Path(directory))
+            bounds = report["backendData"]["semanticAssembly"]["boundsMm"]
+            bounds["max"][0] = bounds["size"][0] = 1.00021
+            self.assertTrue(any("union of parts" in item for item in validate_manifest(report)))
 
             report = _valid_report(Path(directory))
             report["backendData"]["semanticAssembly"]["legacyBounds"] = {}
@@ -569,7 +575,7 @@ class BuildManifestTests(unittest.TestCase):
             accepted_intent = {
                 "dimensions_mm": {
                     axis: {"value": value}
-                    for axis, value in zip("xyz", (1.00019, 1.0, 1.0), strict=True)
+                    for axis, value in zip("xyz", (1.01019, 1.0, 1.0), strict=True)
                 }
             }
             self.assertEqual(
@@ -577,9 +583,14 @@ class BuildManifestTests(unittest.TestCase):
                 [1.0, 1.0, 1.0],
             )
             rejected_intent = deepcopy(accepted_intent)
-            rejected_intent["dimensions_mm"]["x"]["value"] = 1.00021
+            rejected_intent["dimensions_mm"]["x"]["value"] = 1.01021
             with self.assertRaisesRegex(ValueError, "differs from intent"):
                 semantic_assembly_record(parts, digest, rejected_intent)
+            accepted_intent["dimensions_mm"]["x"].update(value=1.00029, measurement_precision_mm=0.0001)
+            semantic_assembly_record(parts, digest, accepted_intent)
+            accepted_intent["dimensions_mm"]["x"]["value"] = 1.00031
+            with self.assertRaisesRegex(ValueError, "differs from intent"):
+                semantic_assembly_record(parts, digest, accepted_intent)
 
     def test_real_loft_overshoot_is_design_error_while_mesh_tolerance_is_separate(self):
         intent = {"dimensions_mm": {
@@ -591,7 +602,8 @@ class BuildManifestTests(unittest.TestCase):
         observed = {"size": [82.077456067, 62.258062358, 95.0000001]}
         for backend in ("brep-part", "brep-assembly", "brep-color-regions"):
             errors = semantic_envelope_errors(observed, intent,
-                tolerance_mm=semantic_envelope_tolerance_mm(backend))
+                tolerance_mm=semantic_envelope_tolerance_mm(backend),
+                record_rounding_mm=semantic_envelope_record_rounding_mm(backend))
             self.assertEqual(len(errors), 2)
             self.assertIn("target 82..82 mm", errors[0])
             self.assertIn("observed 82.0774561 mm", errors[0])
@@ -611,20 +623,26 @@ class BuildManifestTests(unittest.TestCase):
             "x": {"value": 54, "constraint": {"kind": "range", "min_mm": 53.9, "max_mm": 54.1}},
             "y": {"value": 1}, "z": {"value": 1},
         }}
-        for width in (54.09942521921779, 54.0001013664441, 53.9):
+        for width in (54.09942521921779, 54.0001013664441, 53.9, 54.109, 53.891):
             self.assertEqual(semantic_envelope_errors(
-                {"size": [width, 1, 1]}, intent, tolerance_mm=0.0001), [])
-        # Both values display as 54.10; a rounded report must not conceal an
-        # actual excursion beyond the declared range and numerical allowance.
-        self.assertEqual(f"{54.10015:.2f}", f"{54.1:.2f}")
-        self.assertTrue(semantic_envelope_errors(
-            {"size": [54.10015, 1, 1]}, intent, tolerance_mm=0.0001))
-        self.assertTrue(semantic_envelope_errors(
-            {"size": [54, 1.001, 1]}, intent, tolerance_mm=0.0001))
+                {"size": [width, 1, 1]}, intent), [])
+        # Both display as 54.11; acceptance must use raw values, not rounding.
+        self.assertEqual(f"{54.109:.2f}", f"{54.111:.2f}")
+        for width in (54.111, 53.889):
+            self.assertTrue(semantic_envelope_errors({"size": [width, 1, 1]}, intent))
+        for height, passes in ((1.009, True), (0.991, True), (1.011, False), (0.989, False)):
+            self.assertEqual(not semantic_envelope_errors({"size": [54, height, 1]}, intent), passes)
         strict = deepcopy(intent)
-        strict["dimensions_mm"]["x"].pop("constraint")
+        strict["dimensions_mm"]["x"]["measurement_precision_mm"] = 0.0001
         self.assertTrue(semantic_envelope_errors(
-            {"size": [54.09942521921779, 1, 1]}, strict, tolerance_mm=0.0001))
+            {"size": [54.10015, 1, 1]}, strict))
+        self.assertEqual(semantic_envelope_errors({"size": [54.10005, 1, 1]}, strict), [])
+        # An explicit approximation override cannot erase an explicit precision target.
+        self.assertTrue(semantic_envelope_errors(
+            {"size": [54.10015, 1, 1]}, strict, tolerance_mm=0.5))
+        strict["dimensions_mm"]["x"].pop("constraint")
+        self.assertTrue(semantic_envelope_errors({"size": [54.00015, 1, 1]}, strict))
+        self.assertEqual(semantic_envelope_errors({"size": [54.00005, 1, 1]}, strict), [])
 
     def test_step_readback_cannot_hide_design_error_inside_representation_tolerance(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -632,7 +650,7 @@ class BuildManifestTests(unittest.TestCase):
             report = _valid_report(root)
             export_audit = report["backendData"]["exportAudit"]
             measured = export_audit["artifacts"]["step:part"]["observed"]["boundsMm"]
-            measured["max"][0] = measured["size"][0] = 1.00015
+            measured["max"][0] = measured["size"][0] = 1.01015
             export_path = root / "part_export-audit.json"
             export_path.write_text(json.dumps(export_audit), encoding="utf-8")
             report["artifacts"]["exportAudit"] = artifact_record(export_path)
@@ -642,6 +660,22 @@ class BuildManifestTests(unittest.TestCase):
             self.assertFalse(result["pass"])
             self.assertEqual(len(result["errors"]), 1)
             self.assertIn("hash-bound STEP readback: semantic envelope dimension x differs", result["errors"][0])
+            # Record allowance must not leak into the actual STEP check.
+            measured["max"][0] = measured["size"][0] = 1.00999
+            export_path.write_text(json.dumps(export_audit), encoding="utf-8")
+            report["artifacts"]["exportAudit"] = artifact_record(export_path)
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            self.assertTrue(audit(report_path)["pass"])
+            intent_path = Path(report["inputs"]["intent"]["path"])
+            intent = json.loads(intent_path.read_text())
+            intent["dimensions_mm"]["x"]["measurement_precision_mm"] = 0.0001
+            _update_bound_intent(report, intent)
+            measured["max"][0] = measured["size"][0] = 1.00015
+            export_path.write_text(json.dumps(export_audit), encoding="utf-8")
+            report["artifacts"]["exportAudit"] = artifact_record(export_path)
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            errors = audit(report_path)["errors"]
+            self.assertTrue(any("hash-bound STEP readback: semantic envelope dimension x differs" in error for error in errors))
 
     def test_endpoint_rounding_cannot_be_mistaken_for_geometric_size_error(self):
         nominal, kernel_padding = 10.0000999, 1e-7
@@ -652,6 +686,7 @@ class BuildManifestTests(unittest.TestCase):
                    "size": [round(high, 4) - round(low, 4), 1, 1]}
         intent = {"dimensions_mm": {axis: {"value": size}
             for axis, size in zip("xyz", [nominal, 1, 1])}}
+        intent["dimensions_mm"]["x"]["measurement_precision_mm"] = 0.0001
         self.assertGreater(rounded["size"][0] - nominal, 0.0001)
         semantic_assembly_record({"part": {"semantic": {"boundsMm": rounded}}}, "a" * 64, intent)
         self.assertEqual(semantic_envelope_errors(precise, intent, tolerance_mm=0.0001), [])

@@ -33,6 +33,7 @@ _NOTES = [
     "Finite sections do not prove global wall thickness, connectivity, or satisfaction of unsampled requirements.",
 ]
 _SUMMARY_SECTION_LIMIT = 8
+_LENGTH_REPORT_RESOLUTION_MM = 0.01
 
 
 def _xyz(value) -> list[float]:
@@ -186,8 +187,41 @@ def measure_step(path: str | Path, sections: Mapping[str, Plane] | None = None) 
     return result
 
 
+def _length_report(result: dict) -> dict:
+    """Project measured lengths for the CLI without altering geometry or planes."""
+    report = deepcopy(result)
+
+    def length(value):
+        if isinstance(value, list):
+            return [length(item) for item in value]
+        return round(value, 2) or 0.0
+
+    def envelope(value):
+        if value is not None:
+            for key in ("min_uv_mm", "max_uv_mm", "width_u_mm", "depth_v_mm",
+                        "center_uv_mm", "center_world_mm"):
+                value[key] = length(value[key])
+
+    for key in ("min", "max", "size"):
+        report["world_bounds_mm"][key] = length(report["world_bounds_mm"][key])
+    for cut in report["sections"]:
+        envelope(cut["outer_envelope"])
+        for island in cut["material_islands"]:
+            island["material_centroid_world_mm"] = length(island["material_centroid_world_mm"])
+            for boundary in (island["outer"], *island["holes"]):
+                envelope(boundary["envelope"])
+                boundary["perimeter_mm"] = length(boundary["perimeter_mm"])
+    report["length_report_resolution_mm"] = _LENGTH_REPORT_RESOLUTION_MM
+    report["notes"].append(
+        "Reported measured lengths use 0.01 mm resolution. Plane origins/directions and non-length "
+        "quantities retain their precision; Python measurement helpers return unrounded values. "
+        "Rounded readings are not canonical geometry or the raw values used for acceptance."
+    )
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Write a full report and print a bounded summary with final section sizes."""
+    """Write and summarize final section sizes at 0.01 mm length resolution."""
     from cad_compile import _workspace_path
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -216,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                 normal = {"x": (1, 0, 0), "y": (0, -1, 0), "z": (0, 0, 1)}[axis]
                 u_dir = (0, 1, 0) if axis == "x" else (1, 0, 0)
                 planes[f"{axis}={value!r}"] = Plane(origin=origin, x_dir=u_dir, z_dir=normal)
-        result = measure_step(model, planes)
+        result = _length_report(measure_step(model, planes))
         encoded = json.dumps(result, indent=2, allow_nan=False) + "\n"
         output.write_text(encoded, encoding="utf-8")
         fields = ("label", "plane", "status", "outer_envelope", "material_island_count",
@@ -227,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema": "brep-measurement-summary/v1", "input": result["input"],
             "fullResult": {"path": str(output), "sha256": sha256(encoded.encode("utf-8")).hexdigest()},
             "units": result["units"], "coordinate_frame": result["coordinate_frame"],
+            "length_report_resolution_mm": result["length_report_resolution_mm"],
             "world_bounds_mm": result["world_bounds_mm"], "solid_count": result["solid_count"],
             "sections": summaries, "section_count": len(result["sections"]),
             "returned_section_count": len(summaries),

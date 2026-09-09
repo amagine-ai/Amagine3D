@@ -27,6 +27,7 @@ from build_manifest import (
     SEMANTIC_ARTIFACT_TOLERANCE_MM,
     semantic_envelope_errors,
     semantic_envelope_tolerance_mm,
+    semantic_envelope_record_rounding_mm,
 )
 from material_plan import validate_material_plan, validate_material_sources
 from mesh_topology import MeshTopologyError, physical_body_count
@@ -1192,6 +1193,7 @@ def main() -> int:
                 {"size": list(semantic_dimensions)},
                 intent,
                 tolerance_mm=semantic_envelope_tolerance_mm(report.get("backend")),
+                record_rounding_mm=semantic_envelope_record_rounding_mm(report.get("backend")),
             )
             if envelope_errors:
                 raise ValueError("; ".join(envelope_errors))

@@ -515,3 +515,27 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 回归去重共81个Python测试方法通过：BuildSession 19、manifest 29、scene 28、公开作者示例5；新增方法仅7个。5个公开示例完整suite用时152.303秒，覆盖实际STEP/网格、安装与四颗紧固件、曲面修改后意图不变、真正越界拒绝。曲面负例的Y控制改为80.4，使实际包络越过新±0.1范围；未删除原错误断言。另17项纯片段/意图控制通过，包含范围内只测一次即exit0、混合fixed/range、原始值越界但显示舍入相同仍拒绝、空截面/NaN和draft行为；这些不冒充真实几何测试。日志：[公开示例](../workspace/quality-v7-audit/construction-binding-decoupling-review/public-validation-01/test.log)、[manifest与scene](../workspace/quality-v7-audit/construction-binding-decoupling-review/root-validation-01/)、[片段与意图控制](../workspace/quality-v7-audit/surface-range-update/receipt.json)。
 
 新约定不能改写历史严格判据或追认timeout。按±0.1 mm看，dev11与dev12的口宽都满足，二者小数差异不再是实质质量提升的依据。后续比较须先固定同一公差政策，在两组使用相同要求；原始结论另存，未知壁厚、缺交付和装配失败不因公差变化成为通过。尚未启动下一轮模型比较、正式holdout或读取封存内容，当前不宣称整体建模质量提高。
+
+### 后续校准修正：越界项向名义值提议，避免停在允许边缘
+
+范围残差原先同时用于判断合格和计算更新，可能把越界尺寸恰好推到允许边缘。纯数值耦合对照中，旧提议保存0.01步长后得到 `82.103 / 62.043 / 53.904 mm`，X再次越界；新提议只让越界项朝原名义值调整，同样保存后为 `82.004 / 62.0375 / 54.003 mm`，三项均在范围内。区间内尺寸仍不追逐名义值；一步接受仍比较原区间残差，固定尺寸精度、2 mm步长上限和30次评估上限保持不变。仅修改现有指南的提议计算并加一行说明，无新API、阈值或阶段。
+
+5组有限数值控制通过；实际接入后的指南代码块另有6项控制通过，覆盖已合格时只量一次、耦合控制保存两位、fixed不放宽、错误平面和非有限测量。固定尺寸受耦合时，保存两位仍可能不合格，必须重测；本修正不承诺非线性构造总能一步收敛。没有运行CAD或据此宣称实际建模质量提高。证据：[反例与审查](../workspace/quality-v7-audit/dimension-range-evaluation-review/calibration-boundary-review/review.md)、[实际指南片段控制](../workspace/quality-v7-audit/dimension-range-evaluation-review/calibration-boundary-review/product-snippet-validation/validation.json)。此修正发生于dev13冻结之后，不计入其候选 `001b845` 的效果。
+
+### dev-13：共同尺寸范围下，杯子更快完成但底脚退化
+
+固定 baseline `2105526` / candidate `001b845`，两杯、两外壳共同采用普通外形±0.1 mm，N=4。两杯最终同版 STEP 的五项外形尺寸均通过；candidate 在836.643秒自然结束，首次PASS为661.092秒，baseline首次PASS为872.082秒并在1200.054秒超时。外壳两路均超时，0次完整compile、没有最终绑定几何。原终态、缺交付、完整分母均保留，没有SDK故障、晚写或残留进程。
+
+同组96条足缘探针，baseline无短段，candidate有57条已知首次材料段小于2 mm。进一步复核三条实际STEP见证，确认约0.16、0.96、0.18 mm的外底脚回缩薄楔：由外底进入，在中央底板高度以下穿出外部，再经同一外部曲面进入；不是相对内外壁厚或杯口截断。其余短段及全局壁厚仍未分类。固定相机的两杯四视图可见该底脚形态差异，属于非盲观察。candidate“已消除底脚薄楔”的最终声明被实际反例否定，**本轮不能宣称整体建模质量改善**。详见[开发对比结论](../workspace/quality-evaluation-v1/development/dev-13-paired-ranges/inspection/development-quality-review.md)。
+
+两杯各用原冻结runtime、四个原样输入，在干净目录一次公开重编译，均PASS。各自重放STEP的DATA段与原终态逐字相同，独立读回均为有效单实体，原session文件未变；这只证明同版源码可重建，不追认原超时、底脚缺陷或其他未知。见[干净重放](../workspace/quality-evaluation-v1/development/dev-13-paired-ranges/inspection/clean-replay/review.md)。正式holdout未读取或执行。
+
+### 直接修改底层普通尺寸精度
+
+按用户进一步要求，普通固定尺寸、范围边界及最终外截面的实际测量容差统一为 **0.01 mm**，贯穿source记录、manifest、单色/彩色QA与独立STEP检查。`a3d measure`完整JSON和摘要中的测量长度保存到两位小数，并保持两者SHA绑定；几何计算与用于验收的原始测量不受输出舍入影响。显式精密要求可在原尺寸项设置 `measurement_precision_mm`，只允许从0.01收紧到0.0001 mm；该字段参与原有目标修订检查。独立STEP的`--expect`默认容差也改为0.01，显式`--tol`仍仅调整自己的诊断比较，无法放宽合同要求。
+
+既有0.0002 mm记录舍入补偿、0.05 mm表示一致性、几何记录自身一致性及壁厚/底板/间隙/碰撞/内核规则保留。未增加建模阶段。当前校准指南仍只调整越界项、朝名义值提议，使用各尺寸所选精度；实际代码块的6项纯数值控制通过，显式严格尺寸仍可能无法用两位控制量满足，必须重测。该改动发生于dev13冻结之后，不计入其候选效果。
+
+三组干净公开compile实测：固定40 mm目标下，实际40.009 mm通过，40.011 mm由尺寸gate拒绝；最初声明0.0001 mm精度时，40.009 mm同样被拒绝。各一次compile及raw STEP测量合计25.709秒，无重试；失败保留为诊断工件，通过案例仍有原有QA warnings及待视觉检查状态，不当作成品质量证明。见[完整编译对照](../workspace/quality-v7-audit/measurement-precision-review/public-compile-validation/results.md)。
+
+最终去重96个Python方法通过：manifest 29、intent revisions 15、BRep包络1、测量17、capability 12、公开作者示例5、color pipeline 17；新增方法仅2个。公开示例完整回归152.593秒；实际STEP覆盖默认/显式精度、fixed/range、独立`--expect`、`--tol`不能放宽合同、原始测量与两位输出一致绑定。彩色QA另用初始目标20.009 mm、实际宽20 mm验证默认精度。补跑发现前次全feature绑定规则下两份旧color fixture漏绑已观察实体，现补上真实detail/cutter/region绑定，原几何与断言保留；两个失败尝试和最早系统Python缺NumPy日志均保留，不算通过。只对最后独立tower方法重跑，没有把重复执行累计为新测试。证据：[最终精度验证记录](../workspace/quality-v7-audit/measurement-precision-review/result.md)。

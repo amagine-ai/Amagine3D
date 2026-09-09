@@ -12,8 +12,11 @@ Keep user requirements separate from construction controls. At first intent auth
 give ordinary exterior dimensions their nominal value and an explicit ±0.1 mm range;
 user tolerances and functional fit requirements take precedence. This is a modeling
 allowance, not printer accuracy. Preserve existing fixed targets and agreed ranges
-during repair. Prefer 0.01 mm steps for ordinary editable lengths and recheck geometry.
-Report ordinary dimensions to 0.01 mm; keep raw evidence unrounded.
+during repair. Ordinary dimension checks use 0.01 mm measurement precision;
+explicit precision requests can tighten `measurement_precision_mm` in the contract.
+Save ordinary editable lengths in 0.01 mm steps and recheck geometry. `a3d measure`
+saves and returns lengths to two decimals; raw STEP acceptance and existing geometry
+record precision are unchanged by that display rounding.
 
 ## Start with one source and a visible construction
 

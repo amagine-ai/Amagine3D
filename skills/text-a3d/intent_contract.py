@@ -27,6 +27,8 @@ PART_INSTALLATIONS = {"adhesive", "interface", "loose"}
 INTERFACE_CONNECTIONS = connection_kinds()
 ASSEMBLY_AXES = {"+X", "+Y", "+Z", "-X", "-Y", "-Z"}
 INTENT_SCHEMA = "evidence-cad-intent/v5"
+DEFAULT_DIMENSION_PRECISION_MM = 0.01
+MIN_DIMENSION_PRECISION_MM = 0.0001
 ID_PATTERN = re.compile(r"[a-z][a-z0-9_-]*")
 FEATURE_ID_PATTERN = re.compile(
     r"[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*"
@@ -127,6 +129,15 @@ def _non_negative_number(value) -> bool:
     )
 
 
+def dimension_measurement_precision_mm(item: dict) -> float:
+    """Return the ordinary dimension allowance, which a target may only tighten."""
+    value = item.get("measurement_precision_mm", DEFAULT_DIMENSION_PRECISION_MM) if isinstance(item, dict) else None
+    if (not _positive_number(value)
+            or not MIN_DIMENSION_PRECISION_MM <= value <= DEFAULT_DIMENSION_PRECISION_MM):
+        raise ValueError("measurement_precision_mm must be finite and between 0.0001 and 0.01 mm")
+    return float(value)
+
+
 def dimension_limits(data: dict, axis: str, tolerance_mm: float = 0.0) -> tuple[float, float]:
     """Return allowed independently measured dimensions; inferred values stay fixed.
 
@@ -137,6 +148,7 @@ def dimension_limits(data: dict, axis: str, tolerance_mm: float = 0.0) -> tuple[
     item = dimensions.get(axis) if isinstance(dimensions, dict) else None
     if axis not in {"x", "y", "z"} or not isinstance(item, dict) or not _positive_number(item.get("value")):
         raise ValueError(f"dimensions_mm.{axis}.value must be finite and positive")
+    dimension_measurement_precision_mm(item)
     if not _non_negative_number(tolerance_mm):
         raise ValueError("dimension measurement tolerance must be finite and non-negative")
     constraint = item.get("constraint", {"kind": "fixed"})
@@ -715,8 +727,8 @@ def validate_section_dimensions(feature: dict, index: int) -> list[str]:
             errors.append(f"{label}.outer_envelope requires width_u_mm and/or depth_v_mm")
             continue
         for metric, item in dimensions.items():
-            if not isinstance(item, dict) or not set(item) <= {"value", "constraint"}:
-                errors.append(f"{label}.outer_envelope.{metric} accepts only value and optional constraint")
+            if not isinstance(item, dict) or not set(item) <= {"value", "constraint", "measurement_precision_mm"}:
+                errors.append(f"{label}.outer_envelope.{metric} accepts only value, optional constraint and measurement_precision_mm")
                 continue
             constraint = item.get("constraint", {})
             if isinstance(constraint, dict) and not set(constraint) <= {"kind", "min_mm", "max_mm"}:
@@ -876,6 +888,10 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                 continue
             if not _positive_number(item.get("value")):
                 errors.append(f"dimensions_mm.{axis}.value must be positive")
+            try:
+                dimension_measurement_precision_mm(item)
+            except ValueError as error:
+                errors.append(f"dimensions_mm.{axis}.{error}")
             if item.get("source") not in SOURCES:
                 errors.append(f"dimensions_mm.{axis}.source must be evidence-scoped")
             if item.get("confidence") not in CONFIDENCE:

@@ -249,13 +249,49 @@ class BrepMeasurementsTests(unittest.TestCase):
                 check = local[0]
                 self.assertEqual(check["observed"]["part"], owner)
                 self.assertEqual(check["observed"]["coordinate_frame"], "semantic")
-                self.assertEqual(check["expected"]["measurement_precision_mm"], 0.0001)
+                self.assertEqual(check["expected"]["measurement_precision_mm"], 0.01)
                 if name == "empty section":
                     self.assertIsNone(check["observed"]["actual_mm"])
                 else:
                     self.assertAlmostEqual(check["observed"]["actual_mm"], 52)
                     if not expected and sections[0]["outer_envelope"]["width_u_mm"]["value"] == 54:
                         self.assertAlmostEqual(check["observed"]["delta_mm"], -2)
+
+    def test_section_dimensions_compare_raw_values_at_the_selected_precision(self):
+        width = 20.123456
+        path = self.work / "precision.step"
+        export_step(Box(width, 12, 10), path)
+        cases = [
+            ("default fixed inside", {"value": width - 0.009}, True, 0.01),
+            ("default fixed outside", {"value": width - 0.011}, False, 0.01),
+            ("default range inside", {"value": 20, "constraint": {
+                "kind": "range", "min_mm": 19.9, "max_mm": width - 0.009}}, True, 0.01),
+            ("default range outside", {"value": 20, "constraint": {
+                "kind": "range", "min_mm": 19.9, "max_mm": width - 0.011}}, False, 0.01),
+            ("strict range inside", {"value": 20, "measurement_precision_mm": 0.0001,
+                "constraint": {"kind": "range", "min_mm": 19.9,
+                               "max_mm": width - 0.00005}}, True, 0.0001),
+            ("strict range outside", {"value": 20, "measurement_precision_mm": 0.0001,
+                "constraint": {"kind": "range", "min_mm": 19.9,
+                               "max_mm": width - 0.00015}}, False, 0.0001),
+        ]
+        for name, target, expected, precision in cases:
+            with self.subTest(name=name):
+                sections = [{"plane": {"axis": "z", "coordinate_mm": 0},
+                             "outer_envelope": {"width_u_mm": target}}]
+                intent_path, report_path = self._section_audit_inputs(
+                    path, sections, dimensions=(width, 12, 10))
+                with patch.object(sys, "argv", [step_check.__file__, str(path),
+                        "--intent", str(intent_path), "--report", str(report_path)]), \
+                        redirect_stdout(io.StringIO()) as output:
+                    code = step_check.main()
+                self.assertEqual(code, 0 if expected else 1, output.getvalue())
+                audit = json.loads(output.getvalue())
+                check = next(item for item in audit["checks"] if item["name"].startswith("section:"))
+                self.assertEqual(check["pass"], expected)
+                self.assertEqual(check["expected"]["measurement_precision_mm"], precision)
+                self.assertAlmostEqual(check["observed"]["actual_mm"], width, places=6)
+                self.assertGreater(abs(check["observed"]["actual_mm"] - round(width, 2)), 0.003)
 
     def test_step_section_audit_rejects_unbound_owner_frame_and_replaced_input(self):
         path = self.work / "unread.step"
@@ -395,6 +431,58 @@ class BrepMeasurementsTests(unittest.TestCase):
         self.assertVectorClose(y["plane"]["v_dir"], [0, 0, 1])
         self.assertVectorClose([z["outer_envelope"]["width_u_mm"], z["outer_envelope"]["depth_v_mm"]], [20, 12])
         self.assertNotEqual(z["label"], nearby["label"])
+
+    def test_cli_rounds_length_readings_without_moving_planes_or_rounding_areas(self):
+        path = self.work / "fractional.step"
+        body = Pos(0.123456, -0.234567, 5.001) * (
+            Box(20.123456, 12.654321, 10.002) - Cylinder(1.234567, 12))
+        export_step(body, path)
+        output_path = self.work / "fractional-measurements.json"
+        # A real STEP read supplies the CLI; also retain that raw result to
+        # verify the output projection cannot mutate a Python caller's data.
+        original_measure = measurements.measure_step
+        captured = []
+
+        def capture(*args, **kwargs):
+            result = original_measure(*args, **kwargs)
+            captured.append((result, deepcopy(result)))
+            return result
+
+        with patch.object(measurements, "measure_step", side_effect=capture) as measured, \
+                redirect_stdout(io.StringIO()) as output:
+            code = measurements.main([str(path), "--workspace", str(self.work),
+                "--section-z", "5.000001", "--section-z", "10.003", "--out", str(output_path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(measured.call_count, 1)
+        raw, raw_before = captured[0]
+        report = json.loads(output_path.read_text())
+        summary = json.loads(output.getvalue())
+        self.assertEqual(raw, raw_before)
+        self.assertEqual(report["length_report_resolution_mm"], 0.01)
+        self.assertEqual(summary["length_report_resolution_mm"], 0.01)
+        self.assertEqual(summary["fullResult"]["sha256"], sha256(output_path.read_bytes()).hexdigest())
+        self.assertEqual(summary["world_bounds_mm"], report["world_bounds_mm"])
+        self.assertEqual(report["world_bounds_mm"]["size"], [20.12, 12.65, 10.0])
+        self.assertAlmostEqual(raw["world_bounds_mm"]["size"][0], 20.123456, places=6)
+        for original, full, compact in zip(raw["sections"], report["sections"], summary["sections"]):
+            self.assertEqual(full["plane"], original["plane"])
+            self.assertEqual(compact["plane"], original["plane"])
+            self.assertEqual(compact["outer_envelope"], full["outer_envelope"])
+            self.assertAlmostEqual(full["sum_material_area_mm2"], original["sum_material_area_mm2"], places=8)
+        section = report["sections"][0]
+        self.assertEqual(section["outer_envelope"]["width_u_mm"], 20.12)
+        self.assertEqual(section["outer_envelope"]["center_world_mm"], [0.12, -0.23, 5.0])
+        island, raw_island = section["material_islands"][0], raw["sections"][0]["material_islands"][0]
+        self.assertEqual(island["outer"]["perimeter_mm"], round(raw_island["outer"]["perimeter_mm"], 2))
+        self.assertEqual(island["holes"][0]["perimeter_mm"], round(raw_island["holes"][0]["perimeter_mm"], 2))
+        self.assertAlmostEqual(island["holes"][0]["enclosed_area_mm2"],
+                               raw_island["holes"][0]["enclosed_area_mm2"], places=8)
+        self.assertAlmostEqual(island["relative_area_error_estimate"],
+                               raw_island["relative_area_error_estimate"], places=12)
+        self.assertAlmostEqual(report["sum_solid_volume_mm3"], raw["sum_solid_volume_mm3"], places=8)
+        self.assertEqual(report["sections"][1]["plane"]["origin_mm"][2], 10.003)
+        self.assertEqual(report["sections"][1]["status"], "empty")
+        self.assertIsNone(report["sections"][1]["outer_envelope"])
 
     def test_cli_rejects_escaped_paths_symlinks_overwrite_and_nonfinite_cuts(self):
         path = self.work / "box.step"

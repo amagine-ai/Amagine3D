@@ -11,8 +11,8 @@ import sys
 import numpy as np
 import trimesh
 
-from build_manifest import semantic_envelope_tolerance_mm
-from intent_contract import dimension_limits
+from build_manifest import semantic_envelope_tolerance_mm, semantic_envelope_record_rounding_mm
+from intent_contract import dimension_limits, dimension_measurement_precision_mm
 from coordinate_frames import (
     bounds_overlap,
     transform_bounds,
@@ -1143,9 +1143,14 @@ def main() -> int:
     report_frame = _report_coordinate_frame(report, report_artifact)
     if report_frame == "plate-print" and intent_dimensions is not None and semantic_dimensions is not None:
         envelope_tolerance = semantic_envelope_tolerance_mm(report.get("backend"))
+        record_rounding = semantic_envelope_record_rounding_mm(report.get("backend"))
         for index, axis in enumerate("xyz"):
             try:
-                lower, upper = dimension_limits(intent, axis, tolerance_mm=envelope_tolerance)
+                item = intent["dimensions_mm"][axis]
+                precision = dimension_measurement_precision_mm(item)
+                measurement_tolerance = (precision if envelope_tolerance is None or "measurement_precision_mm" in item
+                                         else envelope_tolerance)
+                lower, upper = dimension_limits(intent, axis, tolerance_mm=measurement_tolerance + record_rounding)
             except (ValueError, TypeError, KeyError, AttributeError) as error:
                 audit.add(f"semantic_envelope_dimension_{axis}", False,
                           {"error": f"invalid dimension constraint: {error}"},
@@ -1157,7 +1162,8 @@ def main() -> int:
                 semantic_dimensions[index],
                 {
                     "value": intent_dimensions[index],
-                    "tolerance": envelope_tolerance,
+                    "tolerance": measurement_tolerance,
+                    "record_rounding_mm": record_rounding,
                     "allowedRangeMm": [lower, upper],
                 },
                 category="dimensions",

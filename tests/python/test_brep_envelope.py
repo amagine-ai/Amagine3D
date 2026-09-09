@@ -1,7 +1,9 @@
-"""Calibrate exact design-envelope checks against analytic curved geometry."""
+"""Calibrate ordinary and precise dimension checks against analytic curved geometry."""
 
 import math
+import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -45,8 +47,48 @@ class BrepEnvelopePrecisionTests(unittest.TestCase):
                 semantic_assembly_record({"part": {
                     "semantic": _manifest_geometry_record(_stats(actual)),
                 }}, "a" * 64, intent)
+            # The public intent-only STEP audit must use the same raw dimension
+            # allowance and ranges, even when --tol would permit a larger error.
+            cases = [
+                ({"value": expected[0] - 0.009}, True),
+                ({"value": expected[0] - 0.011}, False),
+                ({"value": expected[0] - 0.00005, "measurement_precision_mm": 0.0001}, True),
+                ({"value": expected[0] - 0.00015, "measurement_precision_mm": 0.0001}, False),
+                ({"value": expected[0] - 2, "constraint": {"kind": "range",
+                    "min_mm": expected[0] - 2.1, "max_mm": expected[0] - 0.009}}, True),
+                ({"value": expected[0] - 2, "constraint": {"kind": "range",
+                    "min_mm": expected[0] - 2.1, "max_mm": expected[0] - 0.011}}, False),
+            ]
+            for item, passes in cases:
+                with self.subTest(intent_only=item):
+                    standalone = {"dimensions_mm": {
+                        axis: {"value": value} for axis, value in zip("xyz", expected)}}
+                    standalone["dimensions_mm"]["x"] = item
+                    intent_path = Path(directory) / "intent-only.json"
+                    intent_path.write_text(json.dumps(standalone), encoding="utf-8")
+                    command = subprocess.run([sys.executable, str(ROOT / "skills/text-a3d/step_check.py"),
+                        str(path), "--intent", str(intent_path), "--tol", "10"],
+                        capture_output=True, text=True, timeout=60)
+                    result = json.loads(command.stdout)
+                    self.assertEqual(command.returncode, 0 if passes else 1, command.stderr + command.stdout)
+                    checks = {check["name"]: check for check in result["checks"]}
+                    self.assertEqual(checks["intent_envelope_dimensions"]["pass"], passes)
+                    self.assertTrue(checks["intent_step_unchanged"]["pass"])
+                    raw = checks["intent_envelope_dimensions"]["observed"]["bounds_mm"]["size"][0]
+                    self.assertLess(abs(raw - expected[0]), 1e-5)
+                    self.assertNotIn("dimension_x", checks)
+            for delta, flags, passes in ((0.009, [], True), (0.011, [], False),
+                                         (0.011, ["--tol", "0.02"], True)):
+                with self.subTest(explicit_expect_delta=delta, flags=flags):
+                    command = subprocess.run([sys.executable, str(ROOT / "skills/text-a3d/step_check.py"),
+                        str(path), "--expect-x", str(expected[0] - delta), *flags],
+                        capture_output=True, text=True, timeout=60)
+                    result = json.loads(command.stdout)
+                    self.assertEqual(command.returncode, 0 if passes else 1, command.stderr + command.stdout)
+                    check = next(check for check in result["checks"] if check["name"] == "dimension_x")
+                    self.assertEqual(check["expected"]["tolerance"], 0.02 if flags else 0.01)
         smaller_intent = {"dimensions_mm": {
-            axis: {"value": size - (0.01 if axis == "x" else 0)}
+            axis: {"value": size - (0.011 if axis == "x" else 0)}
             for axis, size in zip("xyz", expected)
         }}
         errors = semantic_envelope_errors(
@@ -55,6 +97,10 @@ class BrepEnvelopePrecisionTests(unittest.TestCase):
         )
         self.assertEqual(len(errors), 1)
         self.assertIn("dimension x differs from intent", errors[0])
+        smaller_intent["dimensions_mm"]["x"]["value"] = expected[0] - 0.009
+        self.assertEqual(semantic_envelope_errors(geometry_record(shape)["boundsMm"], smaller_intent), [])
+        smaller_intent["dimensions_mm"]["x"]["measurement_precision_mm"] = 0.0001
+        self.assertTrue(semantic_envelope_errors(geometry_record(shape)["boundsMm"], smaller_intent))
 
 
 if __name__ == "__main__":

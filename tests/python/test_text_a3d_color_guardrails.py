@@ -430,6 +430,7 @@ class ColorPipelineTests(unittest.TestCase):
         include_display_component: bool = False,
         print_package_mode: str | None = None,
         red_continuity: str | None = None,
+        nominal_x_mm: float = 20,
     ) -> tuple[dict, Path, Path]:
         self.cad_helpers._FEATURES.clear()
         self.cad_helpers._EVENTS.clear()
@@ -464,7 +465,7 @@ class ColorPipelineTests(unittest.TestCase):
             "coordinate_system": COORDINATE_SYSTEM,
             "reference_files": [],
             "dimensions_mm": {
-                "x": {"value": 20, "source": "user", "confidence": "high"},
+                "x": {"value": nominal_x_mm, "source": "user", "confidence": "high"},
                 "y": {"value": 10, "source": "user", "confidence": "high"},
                 "z": {"value": 2, "source": "user", "confidence": "high"},
             },
@@ -535,6 +536,24 @@ class ColorPipelineTests(unittest.TestCase):
         intent_path = root / "tile_intent.json"
         intent_path.write_text(json.dumps(intent), encoding="utf-8")
         scene_path = _write_brep_scene(root, intent_path, "tile")
+        from geometry_binding import bind_brep_feature
+
+        scene = json.loads(scene_path.read_text(encoding="utf-8"))
+        # Bind the observed detail and checked cutter; this evidence fixture
+        # deliberately exports the original, uncut color-region parent.
+        for feature_id, role, operation, shape in (
+            ("thin-color-detail", "solid", "union", detail),
+            ("center-slot", "cutter", "subtract", cut_tool),
+        ):
+            node = bind_brep_feature(
+                node_id=f"{feature_id}-node",
+                feature_id=feature_id,
+                role=role,
+                shape=shape,
+                path=root / f"{feature_id}-bound.stl",
+            )
+            node.update(partId="tile", operation=operation)
+            scene["nodes"].append(node)
         if include_display_component:
             display_mesh = trimesh.Trimesh(
                 vertices=np.asarray(
@@ -545,17 +564,8 @@ class ColorPipelineTests(unittest.TestCase):
             )
             display_path = root / "status-surface.ply"
             display_mesh.export(display_path)
-            scene = json.loads(scene_path.read_text(encoding="utf-8"))
             scene["nodes"].extend(
                 [
-                    {
-                        "id": "center-slot-node",
-                        "partId": "tile",
-                        "featureId": "center-slot",
-                        "role": "cutter",
-                        "operation": "subtract",
-                        "recipe": {"kind": "box", "parameters": {}},
-                    },
                     {
                         "id": "status-surface",
                         "partId": "tile",
@@ -576,7 +586,7 @@ class ColorPipelineTests(unittest.TestCase):
                     },
                 ]
             )
-            scene_path.write_text(json.dumps(scene), encoding="utf-8")
+        scene_path.write_text(json.dumps(scene), encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()):
             report = self.cad_helpers.export_regions(
                 {"red": (left, "#CC2233"), "blue": (right, "#2255CC")},
@@ -896,7 +906,9 @@ class ColorPipelineTests(unittest.TestCase):
     def test_region_topology_and_manufacturing_printability_are_separate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            report, profile_path, intent_path = self._build_fixture(root)
+            report, profile_path, intent_path = self._build_fixture(
+                root, nominal_x_mm=20.009
+            )
             report_path = root / "tile_report.json"
 
             region = subprocess.run(
@@ -1113,6 +1125,17 @@ class ColorPipelineTests(unittest.TestCase):
             intent_path = root / "tower_intent.json"
             intent_path.write_text(json.dumps(intent), encoding="utf-8")
             scene_path = _write_brep_scene(root, intent_path, "tower")
+            from geometry_binding import bind_brep_feature
+
+            scene = json.loads(scene_path.read_text(encoding="utf-8"))
+            for feature_id, shape in (("lower-region", lower), ("upper-region", upper)):
+                node = bind_brep_feature(
+                    node_id=f"{feature_id}-node", feature_id=feature_id,
+                    role="solid", shape=shape, path=root / f"{feature_id}-bound.stl",
+                )
+                node.update(partId="tower", operation="union")
+                scene["nodes"].append(node)
+            scene_path.write_text(json.dumps(scene), encoding="utf-8")
             with contextlib.redirect_stdout(io.StringIO()):
                 report = self.cad_helpers.export_regions(
                     {"lower": (lower, "#CC2233"), "upper": (upper, "#2255CC")},

@@ -14,9 +14,9 @@ import trimesh
 
 from build_manifest import (
     SEMANTIC_ARTIFACT_TOLERANCE_MM,
-    BREP_ENVELOPE_TOLERANCE_MM,
-    SEMANTIC_ENVELOPE_TOLERANCE_MM,
+    semantic_envelope_errors,
 )
+from intent_contract import DEFAULT_DIMENSION_PRECISION_MM
 
 
 BUILD_SCHEMA = "evidence-a3d-build/v1"
@@ -203,7 +203,7 @@ def _bound_section_features(intent: dict | None, intent_path: str | None,
 
 def _audit_section_dimensions(audit, shape, features: list[dict]) -> None:
     from brep_measurements import measure_section
-    from intent_contract import dimension_limits
+    from intent_contract import dimension_limits, dimension_measurement_precision_mm
 
     for feature in features:
         for index, requirement in enumerate(feature["section_dimensions"]):
@@ -220,7 +220,8 @@ def _audit_section_dimensions(audit, shape, features: list[dict]) -> None:
             for metric, item in requirement["outer_envelope"].items():
                 target = {"dimensions_mm": {"x": item}}
                 lower, upper = dimension_limits(target, "x")
-                accepted_lower, accepted_upper = dimension_limits(target, "x", BREP_ENVELOPE_TOLERANCE_MM)
+                precision = dimension_measurement_precision_mm(item)
+                accepted_lower, accepted_upper = dimension_limits(target, "x", precision)
                 envelope = measured["outer_envelope"]
                 actual = envelope[metric] if envelope is not None else None
                 audit.add(f"{name}:{metric}", actual is not None and accepted_lower <= actual <= accepted_upper,
@@ -229,7 +230,7 @@ def _audit_section_dimensions(audit, shape, features: list[dict]) -> None:
                            "delta_mm": actual - item["value"] if actual is not None else None,
                            "material_island_count": measured["material_island_count"], "hole_count": measured["hole_count"]},
                           {"value_mm": item["value"], "min_mm": lower, "max_mm": upper,
-                           "measurement_precision_mm": BREP_ENVELOPE_TOLERANCE_MM})
+                           "measurement_precision_mm": precision})
 
 
 def audit_step(
@@ -239,9 +240,10 @@ def audit_step(
     expect_x: float | None = None,
     expect_y: float | None = None,
     expect_z: float | None = None,
-    tolerance: float = 0.5,
+    tolerance: float = DEFAULT_DIMENSION_PRECISION_MM,
     section_features: list[dict] | None = None,
     expected_step_sha256: str | None = None,
+    envelope_intent: dict | None = None,
 ) -> dict:
     audit = Audit()
     input_hash = _digest(step_path)
@@ -268,6 +270,14 @@ def audit_step(
             dimensions[index],
             {"value": expected, "tolerance": tolerance},
         )
+    if envelope_intent is not None:
+        from brep_measurements import _bounds
+
+        raw_bounds = _bounds(shape)
+        errors = semantic_envelope_errors(raw_bounds, envelope_intent)
+        audit.add("intent_envelope_dimensions", not errors,
+                  {"bounds_mm": raw_bounds, "errors": errors},
+                  {"dimensions_mm": envelope_intent.get("dimensions_mm")})
     _audit_section_dimensions(audit, shape, section_features or [])
     with tempfile.TemporaryDirectory() as directory:
         mesh_path = Path(directory) / "step-meshability.stl"
@@ -286,6 +296,8 @@ def audit_step(
     output_hash = _digest(step_path)
     if section_features:
         audit.add("section_step_unchanged", output_hash == input_hash, output_hash, input_hash)
+    if envelope_intent is not None:
+        audit.add("intent_step_unchanged", output_hash == input_hash, output_hash, input_hash)
     return {
         "bounds_mm": bounds,
         "checks": audit.checks,
@@ -336,13 +348,16 @@ def main() -> int:
         artifact_key = _artifact_key(report, step_path) if report is not None else None
         if report is not None and artifact_key is None:
             raise ValueError("STEP is not bound to exactly one build-report artifact")
-        dimensions = _report_dimensions(report, artifact_key) or _intent_dimensions(intent)
+        # Report matching keeps its representation tolerance. A standalone
+        # intent instead checks the raw STEP against each declared interval.
+        dimensions = (_report_dimensions(report, artifact_key) or _intent_dimensions(intent)
+                      if report is not None else None)
         tolerance = args.tol
         if tolerance is None:
             tolerance = (
                 SEMANTIC_ARTIFACT_TOLERANCE_MM
                 if report is not None
-                else SEMANTIC_ENVELOPE_TOLERANCE_MM
+                else DEFAULT_DIMENSION_PRECISION_MM
             )
         expect_solids = args.expect_solids
         if expect_solids is None:
@@ -363,6 +378,7 @@ def main() -> int:
             tolerance=tolerance,
             section_features=section_features,
             expected_step_sha256=report["artifacts"][artifact_key]["sha256"] if section_features else None,
+            envelope_intent=intent if report is None else None,
         )
     except Exception as error:
         result = {

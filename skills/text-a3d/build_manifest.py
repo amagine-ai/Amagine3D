@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 from material_plan import validate_material_plan, validate_material_sources
+from intent_contract import DEFAULT_DIMENSION_PRECISION_MM, dimension_measurement_precision_mm
 
 
 BUILD_SCHEMA = "evidence-a3d-build/v1"
@@ -32,8 +33,8 @@ ARTIFACT_REQUIREMENTS = {"not-applicable", "required"}
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 EXPORT_AUDIT_SCHEMA = "evidence-export-audit/v1"
 SEMANTIC_ENVELOPE_TOLERANCE_MM = 0.5
-# Unrounded BRep readback uses numerical precision, not tessellation tolerance.
-BREP_ENVELOPE_TOLERANCE_MM = 0.0001
+# Ordinary dimension allowance; individual intent targets may tighten it.
+BREP_ENVELOPE_TOLERANCE_MM = DEFAULT_DIMENSION_PRECISION_MM
 SEMANTIC_ARTIFACT_TOLERANCE_MM = 0.05
 SEMANTIC_RECORD_TOLERANCE_MM = 0.0002
 
@@ -359,35 +360,41 @@ def semantic_assembly_record(
     if not isinstance(intent_sha256, str) or not SHA256_PATTERN.fullmatch(intent_sha256):
         raise ValueError("semantic assembly requires a lowercase intent SHA-256")
     errors = semantic_envelope_errors(
-        bounds, intent, tolerance_mm=SEMANTIC_RECORD_TOLERANCE_MM
+        bounds, intent, record_rounding_mm=SEMANTIC_RECORD_TOLERANCE_MM
     )
     if errors:
         raise ValueError("; ".join(errors))
     return {"boundsMm": bounds, "intentSha256": intent_sha256}
 
 
-def semantic_envelope_tolerance_mm(backend: Any) -> float:
-    """Select precision for recorded bounds, not the unrounded STEP readback.
-
-    BRep exporters round each bound coordinate to four decimals. The existing
-    record tolerance covers endpoint rounding; readback is checked separately
-    against the stricter BRep numerical tolerance.
-    """
-
+def semantic_envelope_tolerance_mm(backend: Any) -> float | None:
+    """BRep uses each intent target's precision; meshes retain their approximation allowance."""
     return (
-        SEMANTIC_RECORD_TOLERANCE_MM
+        None
         if isinstance(backend, str) and backend in {"brep-part", "brep-assembly", "brep-color-regions"}
         else SEMANTIC_ENVELOPE_TOLERANCE_MM
     )
+
+
+def semantic_envelope_record_rounding_mm(backend: Any) -> float:
+    """Only BRep semantic records have the existing four-decimal endpoint loss."""
+    return (SEMANTIC_RECORD_TOLERANCE_MM
+            if isinstance(backend, str) and backend in {"brep-part", "brep-assembly", "brep-color-regions"}
+            else 0.0)
 
 
 def semantic_envelope_errors(
     bounds_mm: Any,
     intent: Any,
     *,
-    tolerance_mm: float = SEMANTIC_ENVELOPE_TOLERANCE_MM,
+    tolerance_mm: float | None = None,
+    record_rounding_mm: float = 0.0,
 ) -> list[str]:
-    """Compare a final semantic assembly envelope with immutable intent."""
+    """Compare raw dimensions with intent; record rounding is separate from readback.
+
+    An explicit tolerance is for a backend's approximate measurement. An
+    explicitly tightened intent target always retains its declared precision.
+    """
 
     from intent_contract import dimension_limits
 
@@ -395,6 +402,10 @@ def semantic_envelope_errors(
     observed_size = bounds_mm.get("size") if isinstance(bounds_mm, dict) else None
     if not isinstance(dimensions, dict):
         return ["intent dimensions_mm is unavailable"]
+    if not _finite_number(record_rounding_mm) or record_rounding_mm < 0:
+        return ["semantic envelope record rounding must be finite and non-negative"]
+    if tolerance_mm is not None and (not _finite_number(tolerance_mm) or tolerance_mm < 0):
+        return ["semantic envelope measurement tolerance must be finite and non-negative"]
     errors: list[str] = []
     for axis_index, axis in enumerate("xyz"):
         target = dimensions.get(axis)
@@ -409,7 +420,10 @@ def semantic_envelope_errors(
         else:
             try:
                 target_lower, target_upper = dimension_limits(intent, axis)
-                lower, upper = dimension_limits(intent, axis, tolerance_mm=tolerance_mm)
+                precision = dimension_measurement_precision_mm(target)
+                measurement_tolerance = (precision if tolerance_mm is None or "measurement_precision_mm" in target
+                                         else tolerance_mm)
+                lower, upper = dimension_limits(intent, axis, tolerance_mm=measurement_tolerance + record_rounding_mm)
             except (ValueError, TypeError, KeyError, AttributeError) as error:
                 errors.append(f"semantic envelope dimension {axis} has an invalid constraint: {error}")
                 continue
@@ -420,7 +434,8 @@ def semantic_envelope_errors(
                     f"observed {float(observed):.9g} mm, "
                     f"delta from nominal {float(observed) - float(expected):+.9g} mm; "
                     f"allowed {lower:.9g}..{upper:.9g} mm including "
-                    f"{tolerance_mm:g} mm measurement tolerance"
+                    f"{measurement_tolerance:g} mm measurement tolerance and "
+                    f"{record_rounding_mm:g} mm record rounding"
                 )
     return errors
 
@@ -1612,6 +1627,7 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
             semantic_bounds,
             intent,
             tolerance_mm=semantic_envelope_tolerance_mm(data.get("backend")),
+            record_rounding_mm=semantic_envelope_record_rounding_mm(data.get("backend")),
         ))
 
     parts = data.get("parts")
@@ -1649,7 +1665,6 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
                     for error in semantic_envelope_errors(
                         measured_bounds,
                         intent,
-                        tolerance_mm=BREP_ENVELOPE_TOLERANCE_MM,
                     )
                 )
             assembly_key = "step:assembly" if backend == "brep-assembly" else None
@@ -1675,7 +1690,6 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
                         for error in semantic_envelope_errors(
                             observed.get("boundsMm"),
                             intent,
-                            tolerance_mm=BREP_ENVELOPE_TOLERANCE_MM,
                         )
                     )
     elif backend == "hybrid-mesh":

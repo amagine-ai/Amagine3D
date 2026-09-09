@@ -160,6 +160,7 @@ def _intent_input_constraints() -> dict[str, Any]:
             "source": sorted(contract.SOURCES),
             "confidence": sorted(contract.CONFIDENCE),
             "constraint": "optional {kind: fixed} or {kind: range, min_mm, max_mm}; omitted means fixed",
+            "measurement_precision_mm": "optional raw measurement tolerance from 0.0001 to 0.01 mm; default 0.01; only tighten when explicitly required",
         },
         "parts": {
             "shape": "{part_id: {features: [...], ...}}; at least one feature overall",
@@ -192,8 +193,8 @@ def _intent_input_constraints() -> dict[str, Any]:
             "section_dimensions": {
                 "scope": "optional list of outer-section dimensions on the owning final semantic BRep STEP; not hole, passage or wall dimensions",
                 "plane": "{axis: x/y/z, coordinate_mm: finite number}; absolute semantic coordinates",
-                "outer_envelope": "width_u_mm and/or depth_v_mm, each {value, constraint?}; same fixed/range rules as dimensions_mm",
-                "precision": "0.0001 mm numerical precision; --tol cannot relax section targets",
+                "outer_envelope": "width_u_mm and/or depth_v_mm, each {value, constraint?, measurement_precision_mm?}; same fixed/range rules as dimensions_mm",
+                "precision": "0.01 mm default raw measurement tolerance; measurement_precision_mm can tighten to 0.0001 mm; --tol cannot relax section targets",
                 "details": "references/evidence-contract.md",
             },
         },

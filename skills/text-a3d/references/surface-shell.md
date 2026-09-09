@@ -30,12 +30,13 @@ For a legacy target without a typed section check, retain or add a final guard
 after finishing, before export. Set `TOP_WIDTH_MIN/MAX` from the agreed requirement,
 equal for a strict fixed target; never derive them from station controls or widen
 them during repair. Use the actual owner/plane and module-level imports of `Plane`,
-`measure_section`, and `BREP_ENVELOPE_TOLERANCE_MM` from `build_manifest`:
+`measure_section`, and `DEFAULT_DIMENSION_PRECISION_MM` from `intent_contract`.
+For an explicitly stricter requirement, use its declared precision in the guard:
 
 ```python
 if not build.is_draft:
     outer = measure_section(build.part(PART_NAME), Plane.XY.offset(TOP_PLANE_Z))["outer_envelope"]
-    eps = BREP_ENVELOPE_TOLERANCE_MM  # numerical noise, not manufacturing allowance
+    eps = DEFAULT_DIMENSION_PRECISION_MM  # ordinary 0.01 mm; tighten when explicitly required
     if outer is None or not TOP_WIDTH_MIN - eps <= outer["width_u_mm"] <= TOP_WIDTH_MAX + eps:
         raise ValueError(f"Final section requires {TOP_WIDTH_MIN}..{TOP_WIDTH_MAX} mm; measured {outer}")
 ```
@@ -48,8 +49,7 @@ one bounded update. Adapt the file, feature, plane and control mapping together:
 import json, os
 from pathlib import Path
 import numpy as np
-from intent_contract import dimension_limits
-from build_manifest import BREP_ENVELOPE_TOLERANCE_MM
+from intent_contract import dimension_limits, dimension_measurement_precision_mm
 from surface_shell_build import measure_finished, STATIONS, TOP_PLANE_Z
 
 intent = json.loads(Path(os.environ.get("AMAGINE3D_INTENT_PATH") or "surface_shell_intent.json").read_text())
@@ -58,7 +58,7 @@ if section["plane"] != {"axis": "z", "coordinate_mm": TOP_PLANE_Z}:
     raise ValueError("Match the callback's measured plane to the original contract")
 metrics = [intent["dimensions_mm"][a] for a in "xy"] + [section["outer_envelope"]["width_u_mm"]]
 lower, upper = np.array([dimension_limits({"dimensions_mm": {"x": m}}, "x",
-                                         BREP_ENVELOPE_TOLERANCE_MM) for m in metrics]).T
+                                         dimension_measurement_precision_mm(m)) for m in metrics]).T
 controls = np.array([STATIONS[2][1], STATIONS[2][2], STATIONS[-1][1]])
 actual = measure_finished(controls)  # rebuild; return measured dimensions as an array
 if not np.isfinite(actual).all():
@@ -72,7 +72,9 @@ jacobian = np.column_stack([
     (measure_finished(controls + np.eye(3)[i] * h) - actual) / h
     for i in range(3)
 ])
-change = np.linalg.solve(jacobian, -error)
+# Aim only violated dimensions toward nominal values, away from range edges.
+proposal_error = np.where(error != 0, actual - np.array([m["value"] for m in metrics]), 0.0)
+change = np.linalg.solve(jacobian, -proposal_error)
 change *= min(1.0, 2.0 / max(np.max(np.abs(change)), 1e-12))
 ```
 
