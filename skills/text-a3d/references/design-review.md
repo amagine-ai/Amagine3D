@@ -126,6 +126,11 @@ the source's end profile still has the requested width. Compare centers in a sha
 frame for lean or offset. A section hole does not prove an insertion path, and a
 finite set of sections does not establish global minimum wall thickness. Python
 callers can query `measure_section` or `measure_step` for other oriented planes.
+For a critical size affected by lofts or finishing, use `measure_section` in the
+source after all edits and assert its measured value against the unchanged brief
+target. `examples/surface_shell_build.py` checks the envelope in that same pass
+and reports all deviations together. Rechecking only the
+edited region can miss changes elsewhere in a smooth surface.
 
 Preserve the previous display GLB before overwriting build outputs, then compare
 revisions with `a3d compare BEFORE.glb AFTER.glb --view side`. It uses a shared

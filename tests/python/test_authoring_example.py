@@ -224,6 +224,34 @@ class PublicAuthoringExampleTests(unittest.TestCase):
             for key in ("runId", "sourceHash", "sceneHash", "reportHash"):
                 self.assertNotEqual(second[key], first[key], key)
 
+            # A finishing edit changes the actual top section while every loft
+            # control and target stays unchanged. The example must catch that
+            # coupled change before exporting another draft as ready.
+            finishing = '''from cad_helpers import checked_fillet
+build.finish("surface-shell", lambda body: checked_fillet(
+    body, [edge for edge in body.edges() if edge.bounding_box().min.Z > HEIGHT - 0.01],
+    0.5, "test-rim-rounding", part_name="surface-shell"))
+'''
+            source = source_path.read_text()
+            self.assertEqual(source.count("# Keep dimensional checks"), 1)
+            # Simultaneous shoulder drift must appear in that same feedback,
+            # instead of being concealed behind the first failed top check.
+            station = "(30.0, 100.0, 80.0, 14.0, 0.0, 0.0)"
+            self.assertEqual(source.count(station), 1)
+            source = source.replace(station, "(30.0, 100.2, 80.2, 14.0, 0.0, 0.0)")
+            source_path.write_text(source.replace("# Keep dimensional checks", finishing + "\n# Keep dimensional checks"))
+            result = subprocess.run(
+                [str(ROOT / "bin" / "a3d"), "draft", source_path.name, "--intent", intent_path.name],
+                cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            draft = json.loads(result.stdout)
+            self.assertEqual(draft["artifacts"], {})
+            self.assertIn("Top outer width at z=90.0: expected 82.0, measured", draft["issues"][0]["detail"])
+            self.assertIn("Envelope X: expected 100.0, measured", draft["issues"][0]["detail"])
+            self.assertIn("Envelope Y: expected 80.0, measured", draft["issues"][0]["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 """Preview with a3d draft --intent, then compile; a BRep loft owns the shell."""
-from build123d import Pos, RectangleRounded, loft
+from build123d import Plane, Pos, RectangleRounded, loft
+from brep_measurements import measure_section
 from build_session import BuildSession
 
 # Millimetres. Each station independently controls z, width, depth, corner
@@ -14,6 +15,9 @@ STATIONS = (
     (90.0, 82.0, 66.0, 10.0, 2.0, -1.0),
 )
 WALL_INSET, FLOOR, CUTTER_OVERSHOOT = 3.0, 3.0, 1.0
+# Final acceptance from the example brief, separate from editable loft controls.
+TOP_PLANE_Z, TOP_OUTER_WIDTH = 90.0, 82.0
+TARGET_ENVELOPE = (100.0, 80.0, 90.0)
 RULED = True  # Stable, slightly faceted shoulders; smooth lofts need new checks.
 HEIGHT = STATIONS[-1][0]
 assert STATIONS[0][0] == 0 and 0 < FLOOR < HEIGHT
@@ -55,5 +59,24 @@ assert len(shell.solids()) == 1 and shell.is_valid
 assert shell.is_inside((0, 0, FLOOR / 2)), "The base must remain closed"
 assert not shell.is_inside((0, 0, FLOOR + 0.1)), "The cavity must reach its floor"
 assert not shell.is_inside((*STATIONS[-1][4:], HEIGHT - 0.1)), "The top must remain open"
+
+# Keep dimensional checks after all material and finishing edits: changing a
+# lower station can also change a smooth loft's rounded upper end.
+final_shape = build.part("surface-shell")
+dimension_errors = [
+    f"Envelope {axis}: expected {target}, measured {actual} mm"
+    for axis, target, actual in zip("XYZ", TARGET_ENVELOPE, final_shape.bounding_box().size)
+    if abs(actual - target) > 1e-4
+]
+top = measure_section(final_shape, Plane.XY.offset(TOP_PLANE_Z))
+if top["outer_envelope"] is None:
+    dimension_errors.append("The required top section is missing")
+else:
+    actual_width = top["outer_envelope"]["width_u_mm"]
+    if abs(actual_width - TOP_OUTER_WIDTH) > 1e-4:
+        dimension_errors.append(
+            f"Top outer width at z={TOP_PLANE_Z}: expected {TOP_OUTER_WIDTH}, measured {actual_width} mm"
+        )
+assert not dimension_errors, "; ".join(dimension_errors)
 
 build.export()

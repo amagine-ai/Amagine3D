@@ -1,5 +1,6 @@
 """Compile through a3d; all placement derives from one viewing-face and cover datum."""
 import json
+from math import isfinite
 from pathlib import Path
 
 from build123d import Align, Box, Pos
@@ -15,20 +16,39 @@ OUT = build.out_dir
 P = json.loads((ROOT / "installed_module_parameters.json").read_text())
 ALIGN = (Align.CENTER, Align.CENTER, Align.MIN)
 
+
+def interval_box(*, x, y, z):
+    """Construct a Box from explicit (lower, upper) bounds in millimeters."""
+    x0, x1 = x
+    y0, y1 = y
+    z0, z1 = z
+    if not all(isfinite(v) for v in (x0, x1, y0, y1, z0, z1)) or x1 <= x0 or y1 <= y0 or z1 <= z0:
+        raise ValueError("Box intervals must have finite, strictly increasing endpoints")
+    return Pos(x0, y0, z0) * Box(x1-x0, y1-y0, z1-z0, align=(Align.MIN,)*3)
+
+
 # The viewing face is top +Z. The module inserts from bottom -Z with the cover absent.
 COVER_Z = P["cover_thickness"]
 TOP_Z = P["height"]
 SEAT_Z = TOP_Z - P["viewing_land"]
 MODULE_BOTTOM_Z = SEAT_Z - P["module_thickness"]
 COVER_DATUM = Pos(0, 0, COVER_Z)
-MODULE = Pos(0, 0, MODULE_BOTTOM_Z)
-window = Pos(0, 0, SEAT_Z - 0.1) * Box(P["window_width"], P["window_depth"], P["viewing_land"] + 1.1, align=ALIGN)
-module = MODULE * Box(P["module_width"], P["module_depth"], P["module_thickness"], align=ALIGN)
-cavity = Pos(0, 0, COVER_Z - 1) * Box(P["module_width"] + 2*P["module_side_gap"], P["module_depth"] + 2*P["module_side_gap"], SEAT_Z - COVER_Z + 1, align=ALIGN)
+MODULE_X = (-P["module_width"]/2, P["module_width"]/2)
+MODULE_Y = (-P["module_depth"]/2, P["module_depth"]/2)
+WINDOW_X = (-P["window_width"]/2, P["window_width"]/2)
+WINDOW_Y = (-P["window_depth"]/2, P["window_depth"]/2)
+WINDOW_Z = (SEAT_Z - 0.1, TOP_Z + 1.0)
+window = interval_box(x=WINDOW_X, y=WINDOW_Y, z=WINDOW_Z)
+module = interval_box(x=MODULE_X, y=MODULE_Y, z=(MODULE_BOTTOM_Z, SEAT_Z))
+cavity = interval_box(
+    x=(MODULE_X[0]-P["module_side_gap"], MODULE_X[1]+P["module_side_gap"]),
+    y=(MODULE_Y[0]-P["module_side_gap"], MODULE_Y[1]+P["module_side_gap"]),
+    z=(COVER_Z - 1, SEAT_Z),
+)
 outer = COVER_DATUM * Box(P["width"], P["depth"], TOP_Z - COVER_Z, align=ALIGN)
-build.add("frame-body", outer)
-build.cut("module-space", cavity)
-build.cut("viewing-window", window)
+build.add("frame-body", outer, part_name="frame")
+build.cut("module-space", cavity, part_name="frame")
+build.cut("viewing-window", window, part_name="frame")
 
 locator = collar_socket(
     interface_id="cover-location", width_mm=P["locator_width"], depth_mm=P["locator_depth"],
@@ -36,14 +56,14 @@ locator = collar_socket(
     radial_clearance_mm=P["locator_radial_gap"], collar_wall_mm=P["locator_wall"], axial_overshoot_mm=0.3,
 )
 collar, socket = COVER_DATUM * locator.male, COVER_DATUM * locator.female_cutter
-build.cut("frame-locator", socket)
+build.cut("frame-locator", socket, part_name="frame")
 base = Box(P["width"], P["depth"], COVER_Z, align=ALIGN)
 pad_height = MODULE_BOTTOM_Z - P["retainer_gap"] - COVER_Z
 pads = [Pos(sign*(P["module_width"]-P["retainer_width"])/2, 0, COVER_Z) * Box(P["retainer_width"], P["retainer_depth"], pad_height, align=ALIGN) for sign in (-1, 1)]
 retainers = pads[0] + pads[1]
-build.add("cover-body", base)
-build.add("cover-collar", collar)
-build.add("module-retainers", retainers)
+build.add("cover-body", base, part_name="cover")
+build.add("cover-collar", collar, part_name="cover")
+build.add("module-retainers", retainers, part_name="cover")
 
 fasteners = []
 for index, (sx, sy) in enumerate(((-1, -1), (-1, 1), (1, -1), (1, 1))):
@@ -54,9 +74,9 @@ for index, (sx, sy) in enumerate(((-1, -1), (-1, 1), (1, -1), (1, 1))):
     clearance, pilot, boss = f"cover-{name}", f"frame-{name}-pilot", f"frame-{name}-boss"
     # These receivers are already inside the thick frame corners. Observe the
     # existing material instead of claiming a union that adds zero volume.
-    build.observe(boss, datum * pair.receiver_boss, role="solid")
-    build.cut(pilot, datum * pair.pilot_cutter)
-    build.cut(clearance, datum * pair.clearance_cutter)
+    build.observe(boss, datum * pair.receiver_boss, role="solid", part_name="frame")
+    build.cut(pilot, datum * pair.pilot_cutter, part_name="frame")
+    build.cut(clearance, datum * pair.clearance_cutter, part_name="cover")
     f = P["fastening"]
     fasteners.append({
         "id": name, "axis": {"originMm": origin, "direction": [0, 0, 1]},
@@ -81,8 +101,11 @@ if P["show_module_reference"]:
 # Exact linear sweep of the proposed rectangular module before the bottom cover
 # is attached. Its optional visual surface never supplies these witnesses.
 entry_z = -P["module_thickness"]
-insertion = Pos(0, 0, entry_z) * Box(P["module_width"], P["module_depth"], SEAT_Z-entry_z, align=ALIGN)
-optical_path = Pos(0, 0, SEAT_Z-0.1) * Box(P["window_width"]-0.2, P["window_depth"]-0.2, P["viewing_land"]+1.1, align=ALIGN)
+insertion = interval_box(x=MODULE_X, y=MODULE_Y, z=(entry_z, SEAT_Z))
+optical_path = interval_box(
+    x=(WINDOW_X[0]+0.1, WINDOW_X[1]-0.1),
+    y=(WINDOW_Y[0]+0.1, WINDOW_Y[1]-0.1), z=WINDOW_Z,
+)
 installation = bind_installation_check(
     feature_id="module-space", envelope=module, out_dir=OUT / "installation-witnesses",
     obstacle_parts=["frame"], support_parts=["frame"], retainer_parts=["cover"],

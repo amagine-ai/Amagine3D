@@ -82,6 +82,11 @@ geometry, interface and installation checks remain independent. Paired interface
 raw screw interfaces and installation checks pass through `export`; screw recipe
 nodes are derived from the interface's feature IDs. See the installed-module example.
 
+The installed-module example uses a local `interval_box` with explicit lower/upper
+bounds for each axis; a lower-bound datum cannot also be used as a centered Box's
+position. Reuse the module and window intervals for cavities and installation
+paths so geometry and its witnesses share the same datums.
+
 For explicit bindings or regional color exports, the existing `BrepFeature`,
 `write_scene` and exporters remain available. Use `with build.capture():` if
 additional existing helper parameters or observations need the session's evidence.

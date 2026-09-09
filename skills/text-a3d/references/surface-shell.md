@@ -14,6 +14,14 @@ and `FLOOR` control the section inset and base thickness. Section insets do not
 guarantee constant 3D normal thickness on sloping walls; check measured wall
 thickness and shoulder overhang after changes.
 
+The example checks its 100×80×90 mm envelope and 82 mm final outer width on the
+z=90 plane after all geometry edits, using `bounding_box` and `measure_section`.
+It reports all dimensional deviations together. Keep these brief targets separate
+from loft controls. A new station or fillet can change a previously correct
+section; the assertion reports target and measured width before export in both
+draft and compile. Use the requested datum and size for the actual model, and
+retain the complete shape's preview and independent final STEP checks.
+
 `RULED=True` allows visible shoulder transitions. Smooth lofts are also useful
 when the profiles remain valid; changing this setting requires fresh geometry
 and wall checks. G2 continuity is not required. Simplify or split the BRep

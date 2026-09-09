@@ -17,6 +17,9 @@ resolve component envelopes, usable internal space, exterior passages, support,
 retention and assembly access. An opening must connect the exterior to its target
 cavity. Missing component dimensions call for reversible, explicit assumptions;
 they do not by themselves reduce a functional device to an appearance model.
+For a housing with installed components, start from the shared datums in
+`examples/installed_module_build.py` and its matching intent example. Establish
+the cavity, mounting and access with simple solids before rounding the exterior.
 
 For appearance-led work, inspect the supplied images or establish a reference
 using the image guidance below. Read `references/surface-design.md` to choose
@@ -30,6 +33,7 @@ names and preview it before writing the full intent:
 ```python
 build = BuildSession(__file__, part_names=("housing", "cover"))
 build.add("housing-body", housing_solid, part_name="housing")
+build.cut("viewing-window", window_cutter, part_name="housing")
 build.add("cover-body", cover_solid, part_name="cover")
 build.export()
 ```
@@ -68,7 +72,7 @@ construction choices such as section stations, cutter overshoot and loft mode;
 expose controlling dimensions near its top. Choose an API example to adapt:
 
 - One BRep part: `examples/simple_brep_intent.py` and `simple_brep_build.py`.
-- Separate manufactured parts: `examples/assembly_intent.py` and `assembly_build.py`.
+- A simple mating pair: `examples/assembly_intent.py` and `assembly_build.py`.
 - A section-controlled shell: `references/surface-shell.md`.
 
 `BuildSession.add`/`cut` derive scene bindings and operation evidence. Submit final
@@ -112,6 +116,8 @@ distinguishes process advisories from defects requiring a change.
 
 For a dimension at a specified height, measure final STEP with
 `a3d measure MODEL.step --section-z HEIGHT`; repeat section options as needed.
+For sizes that lofts or finishing can change, retain geometry assertions as shown in
+`references/surface-shell.md`; recheck them after any geometry edit.
 For a shape edit, save the previous display GLB and use
 `a3d compare BEFORE.glb AFTER.glb --view front` for a shared camera and scale.
 Inputs must share coordinates and units. A projected change does not score quality,

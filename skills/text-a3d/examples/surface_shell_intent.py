@@ -22,7 +22,7 @@ write_intent(
             {"id": "shell-cavity", "kind": "cavity", "face": "top", "direction": "+Z",
              "edge_crossing": "forbidden",
              "evidence": "Proposed open-top hollow shell with a closed base",
-             "acceptance": "Real top opening with an annular rim, at least 1.6 mm walls and a closed 3 mm floor"},
+             "acceptance": "Real top opening with an annular rim, 82 mm outer width at z=90 mm, at least 1.6 mm walls and a closed 3 mm floor"},
         ],
     }},
     support_policy="support-free", minimum_wall_target_mm=1.6,
