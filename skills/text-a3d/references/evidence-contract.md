@@ -74,13 +74,18 @@ in semantic coordinates. It is not a per-part size and not the rotated or
 packed plate envelope. Build reports independently measure the final physical
 part union as `backendData.semanticAssembly.boundsMm`; they must never copy the
 intent target into that evidence. Each `parts[part].semantic.boundsMm` records
-only that physical part. Intent-to-semantic envelope comparison uses a
-0.5 mm tolerance, while representation readback of an exported STEP/STL uses a
-separate 0.05 mm tolerance. `source: "inferred"` describes confidence; it does
+only that physical part. For BRep backends, the hash-bound STEP readback bounds
+must satisfy intent dimensions within 0.0001 mm numerical tolerance. Report
+bounds, whose endpoints are rounded to four decimals, use 0.0002 mm recording
+tolerance; they cannot override the precise readback check. The former 0.5 mm
+allowance must not hide a real design-size error. The
+approximate Hybrid mesh envelope retains its 0.5 mm audit tolerance, and
+representation readback of an exported STEP/STL retains a separate 0.05 mm
+tolerance. `source: "inferred"` describes confidence; it does
 not grant permission to resize. An axis can explicitly declare
 `"constraint": {"kind":"range","min_mm":100,"max_mm":125}` beside its `value`,
 `source`, and `confidence`. Both the selected value and final measured envelope
-must satisfy that declared range (the final audit retains its 0.5 mm tolerance).
+must satisfy that declared range with the applicable measurement tolerance.
 Without a range, the value remains fixed.
 
 The parameter panel does not amend or regenerate this immutable intent. Direct

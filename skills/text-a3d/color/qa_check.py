@@ -25,7 +25,8 @@ from coordinate_frames import (
 )
 from build_manifest import (
     SEMANTIC_ARTIFACT_TOLERANCE_MM,
-    SEMANTIC_ENVELOPE_TOLERANCE_MM,
+    semantic_envelope_errors,
+    semantic_envelope_tolerance_mm,
 )
 from material_plan import validate_material_plan, validate_material_sources
 from mesh_topology import MeshTopologyError, physical_body_count
@@ -1187,16 +1188,13 @@ def main() -> int:
                 raise ValueError(
                     "intent/build report has no complete semantic assembly envelope"
                 )
-            semantic_deltas = [
-                abs(observed - expected)
-                for observed, expected in zip(
-                    semantic_dimensions, intent_dimensions, strict=True
-                )
-            ]
-            if max(semantic_deltas) > SEMANTIC_ENVELOPE_TOLERANCE_MM:
-                raise ValueError(
-                    "backendData.semanticAssembly does not match intent dimensions_mm"
-                )
+            envelope_errors = semantic_envelope_errors(
+                {"size": list(semantic_dimensions)},
+                intent,
+                tolerance_mm=semantic_envelope_tolerance_mm(report.get("backend")),
+            )
+            if envelope_errors:
+                raise ValueError("; ".join(envelope_errors))
             target = intent.get("printability", {}).get("minimum_wall_target_mm")
             if not isinstance(target, (int, float)) or isinstance(target, bool) or target <= 0:
                 raise ValueError("intent minimum wall target must be positive")

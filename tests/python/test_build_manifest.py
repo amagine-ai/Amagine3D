@@ -22,6 +22,8 @@ from build_manifest import (  # noqa: E402
     identity_matrix,
     new_run_id,
     semantic_assembly_record,
+    semantic_envelope_errors,
+    semantic_envelope_tolerance_mm,
     validate_manifest,
 )
 from tests.python.intent_fixture import (  # noqa: E402
@@ -425,14 +427,14 @@ class BuildManifestTests(unittest.TestCase):
                 for item in validate_manifest(report)
             ))
 
-    def test_semantic_envelope_tolerance_is_closed_at_half_a_millimeter(self):
+    def test_brep_envelope_accepts_record_rounding_without_half_mm_design_freedom(self):
         with tempfile.TemporaryDirectory() as directory:
             parts = _valid_report(Path(directory))["parts"]
             digest = "a" * 64
             accepted_intent = {
                 "dimensions_mm": {
                     axis: {"value": value}
-                    for axis, value in zip("xyz", (1.5, 1.0, 1.0), strict=True)
+                    for axis, value in zip("xyz", (1.00019, 1.0, 1.0), strict=True)
                 }
             }
             self.assertEqual(
@@ -440,9 +442,64 @@ class BuildManifestTests(unittest.TestCase):
                 [1.0, 1.0, 1.0],
             )
             rejected_intent = deepcopy(accepted_intent)
-            rejected_intent["dimensions_mm"]["x"]["value"] = 1.5001
+            rejected_intent["dimensions_mm"]["x"]["value"] = 1.00021
             with self.assertRaisesRegex(ValueError, "differs from intent"):
                 semantic_assembly_record(parts, digest, rejected_intent)
+
+    def test_real_loft_overshoot_is_design_error_while_mesh_tolerance_is_separate(self):
+        intent = {"dimensions_mm": {
+            axis: {"value": value, "source": "user"}
+            for axis, value in zip("xyz", (82.0, 62.0, 95.0))
+        }}
+        # Dev-03 STEP readback, also confirmed by mesh extrema. Nominal section
+        # widths do not constrain the interpolating loft's global envelope.
+        observed = {"size": [82.077456067, 62.258062358, 95.0000001]}
+        for backend in ("brep-part", "brep-assembly", "brep-color-regions"):
+            errors = semantic_envelope_errors(observed, intent,
+                tolerance_mm=semantic_envelope_tolerance_mm(backend))
+            self.assertEqual(len(errors), 2)
+            self.assertIn("target 82..82 mm", errors[0])
+            self.assertIn("observed 82.0774561 mm", errors[0])
+            self.assertIn("delta from nominal +0.077456067", errors[0])
+        self.assertEqual(semantic_envelope_errors(observed, intent,
+            tolerance_mm=semantic_envelope_tolerance_mm("hybrid-mesh")), [])
+        for axis, upper in (("x", 82.1), ("y", 62.3)):
+            intent["dimensions_mm"][axis]["constraint"] = {
+                "kind": "range", "min_mm": intent["dimensions_mm"][axis]["value"],
+                "max_mm": upper,
+            }
+        self.assertEqual(semantic_envelope_errors(observed, intent,
+            tolerance_mm=semantic_envelope_tolerance_mm("brep-part")), [])
+
+    def test_step_readback_cannot_hide_design_error_inside_representation_tolerance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            export_audit = report["backendData"]["exportAudit"]
+            measured = export_audit["artifacts"]["step:part"]["observed"]["boundsMm"]
+            measured["max"][0] = measured["size"][0] = 1.00015
+            export_path = root / "part_export-audit.json"
+            export_path.write_text(json.dumps(export_audit), encoding="utf-8")
+            report["artifacts"]["exportAudit"] = artifact_record(export_path)
+            report_path = root / "part_report.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            result = audit(report_path)
+            self.assertFalse(result["pass"])
+            self.assertEqual(len(result["errors"]), 1)
+            self.assertIn("hash-bound STEP readback: semantic envelope dimension x differs", result["errors"][0])
+
+    def test_endpoint_rounding_cannot_be_mistaken_for_geometric_size_error(self):
+        nominal, kernel_padding = 10.0000999, 1e-7
+        low, high = -nominal / 2 - kernel_padding, nominal / 2 + kernel_padding
+        precise = {"size": [high - low, 1, 1]}
+        rounded = {"min": [round(low, 4), 0, 0],
+                   "max": [round(high, 4), 1, 1],
+                   "size": [round(high, 4) - round(low, 4), 1, 1]}
+        intent = {"dimensions_mm": {axis: {"value": size}
+            for axis, size in zip("xyz", [nominal, 1, 1])}}
+        self.assertGreater(rounded["size"][0] - nominal, 0.0001)
+        semantic_assembly_record({"part": {"semantic": {"boundsMm": rounded}}}, "a" * 64, intent)
+        self.assertEqual(semantic_envelope_errors(precise, intent, tolerance_mm=0.0001), [])
 
     def test_build_check_rejects_brep_semantic_bounds_that_miss_step_readback(self):
         with tempfile.TemporaryDirectory() as directory:

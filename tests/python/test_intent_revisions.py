@@ -48,10 +48,12 @@ class IntentRevisionTests(unittest.TestCase):
         original = deepcopy(self.original)
         item = original["dimensions_mm"]["x"]
         item["value"], item["source"] = 40, "inferred"
-        self.assertEqual(dimension_limits(original, "x"), (39.5, 40.5))
+        self.assertEqual(dimension_limits(original, "x"), (40.0, 40.0))
+        self.assertEqual(dimension_limits(original, "x", tolerance_mm=0.5), (39.5, 40.5))
         item["constraint"] = {"kind": "range", "min_mm": 35, "max_mm": 45}
         self.assertEqual(validate(original, self.root), [])
-        self.assertEqual(dimension_limits(original, "x"), (34.5, 45.5))
+        self.assertEqual(dimension_limits(original, "x"), (35.0, 45.0))
+        self.assertEqual(dimension_limits(original, "x", tolerance_mm=0.5), (34.5, 45.5))
         item["value"] = 46
         self.assertTrue(any("within its declared range" in error for error in validate(original, self.root)))
 

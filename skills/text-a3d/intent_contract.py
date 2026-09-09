@@ -127,10 +127,10 @@ def _non_negative_number(value) -> bool:
     )
 
 
-def dimension_limits(data: dict, axis: str, tolerance_mm: float = 0.5) -> tuple[float, float]:
+def dimension_limits(data: dict, axis: str, tolerance_mm: float = 0.0) -> tuple[float, float]:
     """Return allowed independently measured dimensions; inferred values stay fixed.
 
-    The caller supplies the measurement tolerance used by its audit. A range is
+    The caller explicitly supplies any measurement tolerance used by its audit. A range is
     an explicit design freedom, not a request to change the measured geometry.
     """
     dimensions = data.get("dimensions_mm") if isinstance(data, dict) else None

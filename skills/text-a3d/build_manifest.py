@@ -32,6 +32,8 @@ ARTIFACT_REQUIREMENTS = {"not-applicable", "required"}
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 EXPORT_AUDIT_SCHEMA = "evidence-export-audit/v1"
 SEMANTIC_ENVELOPE_TOLERANCE_MM = 0.5
+# Unrounded BRep readback uses numerical precision, not tessellation tolerance.
+BREP_ENVELOPE_TOLERANCE_MM = 0.0001
 SEMANTIC_ARTIFACT_TOLERANCE_MM = 0.05
 SEMANTIC_RECORD_TOLERANCE_MM = 0.0002
 
@@ -356,13 +358,35 @@ def semantic_assembly_record(
         raise ValueError("semantic assembly requires valid final semantic part bounds")
     if not isinstance(intent_sha256, str) or not SHA256_PATTERN.fullmatch(intent_sha256):
         raise ValueError("semantic assembly requires a lowercase intent SHA-256")
-    errors = semantic_envelope_errors(bounds, intent)
+    errors = semantic_envelope_errors(
+        bounds, intent, tolerance_mm=SEMANTIC_RECORD_TOLERANCE_MM
+    )
     if errors:
         raise ValueError("; ".join(errors))
     return {"boundsMm": bounds, "intentSha256": intent_sha256}
 
 
-def semantic_envelope_errors(bounds_mm: Any, intent: Any) -> list[str]:
+def semantic_envelope_tolerance_mm(backend: Any) -> float:
+    """Select precision for recorded bounds, not the unrounded STEP readback.
+
+    BRep exporters round each bound coordinate to four decimals. The existing
+    record tolerance covers endpoint rounding; readback is checked separately
+    against the stricter BRep numerical tolerance.
+    """
+
+    return (
+        SEMANTIC_RECORD_TOLERANCE_MM
+        if isinstance(backend, str) and backend in {"brep-part", "brep-assembly", "brep-color-regions"}
+        else SEMANTIC_ENVELOPE_TOLERANCE_MM
+    )
+
+
+def semantic_envelope_errors(
+    bounds_mm: Any,
+    intent: Any,
+    *,
+    tolerance_mm: float = SEMANTIC_ENVELOPE_TOLERANCE_MM,
+) -> list[str]:
     """Compare a final semantic assembly envelope with immutable intent."""
 
     from intent_contract import dimension_limits
@@ -384,15 +408,19 @@ def semantic_envelope_errors(bounds_mm: Any, intent: Any) -> list[str]:
             errors.append(f"semantic envelope dimension {axis} is unavailable")
         else:
             try:
-                lower, upper = dimension_limits(intent, axis, tolerance_mm=SEMANTIC_ENVELOPE_TOLERANCE_MM)
+                target_lower, target_upper = dimension_limits(intent, axis)
+                lower, upper = dimension_limits(intent, axis, tolerance_mm=tolerance_mm)
             except (ValueError, TypeError, KeyError, AttributeError) as error:
                 errors.append(f"semantic envelope dimension {axis} has an invalid constraint: {error}")
                 continue
             if not lower <= float(observed) <= upper:
                 errors.append(
                     f"semantic envelope dimension {axis} differs from intent: "
-                    f"expected {lower}..{upper} mm including "
-                    f"{SEMANTIC_ENVELOPE_TOLERANCE_MM} mm audit tolerance, observed {float(observed)}"
+                    f"target {target_lower:g}..{target_upper:g} mm, "
+                    f"observed {float(observed):.9g} mm, "
+                    f"delta from nominal {float(observed) - float(expected):+.9g} mm; "
+                    f"allowed {lower:.9g}..{upper:.9g} mm including "
+                    f"{tolerance_mm:g} mm measurement tolerance"
                 )
     return errors
 
@@ -1526,7 +1554,11 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
     if not isinstance(semantic_bounds, dict):
         errors.append("backendData.semanticAssembly.boundsMm is unavailable")
     else:
-        errors.extend(semantic_envelope_errors(semantic_bounds, intent))
+        errors.extend(semantic_envelope_errors(
+            semantic_bounds,
+            intent,
+            tolerance_mm=semantic_envelope_tolerance_mm(data.get("backend")),
+        ))
 
     parts = data.get("parts")
     backend = data.get("backend")
@@ -1538,10 +1570,13 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
         )
         audited = export_audit.get("artifacts") if isinstance(export_audit, dict) else None
         if isinstance(parts, dict) and isinstance(audited, dict):
+            measured_parts = {}
             for part_id, part in parts.items():
                 semantic = part.get("semantic") if isinstance(part, dict) else None
                 step = audited.get(f"step:{part_id}")
                 observed = step.get("observed") if isinstance(step, dict) else None
+                if isinstance(observed, dict):
+                    measured_parts[part_id] = {"semantic": observed}
                 if not isinstance(semantic, dict) or not isinstance(observed, dict) or not _bounds_match(
                     semantic.get("boundsMm"),
                     observed.get("boundsMm"),
@@ -1551,6 +1586,18 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
                         f"parts.{part_id}.semantic.boundsMm does not match its "
                         "hash-bound STEP readback"
                     )
+            # A report rounded to the nominal target must not conceal a real
+            # deviation that still fits the separate representation tolerance.
+            measured_bounds = _union_bounds_from_parts(measured_parts)
+            if len(measured_parts) == len(parts) and measured_bounds is not None:
+                errors.extend(
+                    "hash-bound STEP readback: " + error
+                    for error in semantic_envelope_errors(
+                        measured_bounds,
+                        intent,
+                        tolerance_mm=BREP_ENVELOPE_TOLERANCE_MM,
+                    )
+                )
             assembly_key = "step:assembly" if backend == "brep-assembly" else None
             if assembly_key is not None:
                 assembly_step = audited.get(assembly_key)
@@ -1567,6 +1614,15 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
                     errors.append(
                         "backendData.semanticAssembly.boundsMm does not match the "
                         "hash-bound assembly STEP readback"
+                    )
+                if isinstance(observed, dict):
+                    errors.extend(
+                        "hash-bound assembly STEP readback: " + error
+                        for error in semantic_envelope_errors(
+                            observed.get("boundsMm"),
+                            intent,
+                            tolerance_mm=BREP_ENVELOPE_TOLERANCE_MM,
+                        )
                     )
     elif backend == "hybrid-mesh":
         artifacts = data.get("artifacts")
