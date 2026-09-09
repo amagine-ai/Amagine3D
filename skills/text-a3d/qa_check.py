@@ -1381,11 +1381,11 @@ def main() -> int:
                         "forbidden_actions": [
                             "Do not lower the wall target or rely on slicer compensation alone."
                         ],
-                        "goal": f"Raise local wall thickness to at least {target:g} mm.",
+                        "goal": f"Verify sampled risks before editing; repair confirmed thickness defects to at least {target:g} mm.",
                         "preferred_actions": [
-                            "Increase the named wall or shell parameter.",
-                            "Thicken only the reported risk region when outer dimensions are fixed.",
-                            "Remove decorative recess depth before changing user dimensions.",
+                            "Locate the reported sample or risk region in the final STEP using the recorded frame.",
+                            "Check whether a low max-sphere value reflects a thin wall or wedge, convex curvature, or a free rim.",
+                            "Repair confirmed defects while preserving user targets and form; retain unresolved findings and rerun QA.",
                         ],
                     },
                 )
@@ -1411,12 +1411,12 @@ def main() -> int:
                     severity="warning",
                     repair={
                         "forbidden_actions": [
-                            "Do not dismiss a named thin region because its total area is small."
+                            "Do not dismiss a confirmed local thickness defect because its total area is small."
                         ],
-                        "goal": f"Raise every sampled local wall to at least {target:g} mm.",
+                        "goal": f"Verify sampled risks before editing; repair confirmed thickness defects to at least {target:g} mm.",
                         "preferred_actions": [
-                            "Repair the named feature IDs intersecting the risk bounds.",
-                            "Inspect unnamed risk bounds before changing unrelated geometry.",
+                            "Inspect the sample or risk region in the final STEP; distinguish a thin wall or wedge from convex curvature or a free rim.",
+                            "Treat overlapping feature IDs and bounds as candidates; confirm the affected geometry before changing source parameters, then rerun QA.",
                         ],
                     },
                 )

@@ -1827,9 +1827,17 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    help_requested = len(sys.argv) == 2 and sys.argv[1] in {"-h", "--help"}
+    if len(sys.argv) != 2 or help_requested:
         print(f"usage: {Path(sys.argv[0]).name} scene.json")
-        return 2
+        if help_requested:
+            print(
+                "\nValidate an existing scene JSON file; this command does not generate it.\n"
+                "BuildSession.export() generates the scene from your build source.\n"
+                "For a3d compile SCENE.json --intent INTENT.json --source BUILD.py,\n"
+                "SCENE.json may not exist yet; the compiler runs the source to create it."
+            )
+        return 0 if help_requested else 2
     path = Path(sys.argv[1])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))

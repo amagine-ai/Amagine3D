@@ -142,7 +142,11 @@ class BuildSession:
                 raise AuthoringError("build feature", [f"supply part_name from {sorted(self._part_names)} for feature {feature_id!r}"])
             return owner
         if feature_id not in self._owners:
-            raise AuthoringError("build feature", [f"feature {feature_id!r} is not declared in intent"])
+            raise AuthoringError("build feature", [
+                f"feature {feature_id!r} is not declared in intent; add/cut/observe bind intent features. "
+                "For construction-only pieces, see references/authoring-example.md: "
+                "finish plus a physical observation of the declared feature."
+            ])
         owner = self._owners[feature_id]
         if part_name is not None and part_name != owner:
             raise AuthoringError("build feature", [f"feature {feature_id!r} belongs to {owner!r} in intent, not {part_name!r}"])

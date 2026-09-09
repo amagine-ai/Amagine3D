@@ -443,3 +443,27 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 主入口从 **176行/10,048字节→107行/5,894字节**。首次可执行入口变为选择一份build、复制并按brief改controls、draft、看预览；匹配intent的设置和安装/打印细节在几何可见后进入已有指南。原图像/供应商来源规则移入现有design-review，未删除。曲面例外在通用复制步骤之前说明，其必要intent设置后也先草模再compile。现有模型的耦合尺寸校准入口前移，不再依赖先读surface-design再点击深层链接。这个字数和路由变化尚无新模型效果证据，不能算作质量通过。
 
 最终实现的 **130 个去重方法通过**：56项截面测量/manifest/intent revisions（55.559秒），以及74项公共真实编译示例/compiler/capability/共享入口（199.068秒）。真实STEP控制覆盖固定/范围、空截面、`--tol 10`无法放宽、X/Y/Z绝对平面与u/v方向；最终公开编译覆盖原示例、同合同壁厚参数修改、允许失败尺寸草模及拒绝最终顶口偏差。初轮公共负例曾错误预期包络失败发生于build-check，实际由源码export先拒绝；单独保存重现工件后修正测试预期，原失败日志不删除。独立checker绑定完善前的70项通过日志也按旧SHA单列，未冒充最终实现结果。真正新增仅3个方法，历史覆盖由237→240，不表示当前版本全量重跑240项。证据：[当前实现回归目录](../workspace/quality-v7-audit/local-section-contract-product-check/)。这些是机制与示例验证，下一轮模型运行仍须独立验收。
+
+### dev-10：外壳草模提前，杯子足缘退化，最终质量仍未改善
+
+`dev-10` 冻结 `f3610fdf4d1cf6408e49e30f940e514ed560b27e`，沿用 dev-09 的模型、medium、runtime、harness 和原开发 case，每例仍限1,200秒；杯子与外壳均超时，实际 **1200.042 / 1200.032秒**。杯子5次完成的正式编译中1次失败、4次PASS，首次PASS为 **636.302秒**，晚于dev-09的524.509秒；截止前约3秒又启动第6次，未完成。最后完整PASS `940b5ed3-6075-412b-a1a9-86fcf6b5884f` 的32文件快照完整，但截止源已将口缘0.5改成1.0 mm，当前 `desk-cup_report.json` 缺失，旧STEP不能反向绑定到新源，最终交付失败。截止及after-exit库存一致、清理后无残留或晚写；本轮无可见SDK断流，也没有自动补跑。证据：[执行和截止报告](../workspace/quality-evaluation-v1/development/dev-10/inspection/development-transport-review.md)。
+
+首、末完整成功STEP分别独立复测，包络均为 **81.999981688×62.000080853×95.000000200 mm**，通过；z95顶口均为 **54.075825369496 mm**，仍不满足固定54 mm。相比dev-09的54.458773461 mm，偏差缩小但没有通过。两件同一组96条足缘探针均有 **32条 `<2 mm`**，最短 **0.303930057261 mm**，另2条整线存在未定区间；最短探针本身交叉核对一致。实际BRep面与共享拓扑边确认最短处是外底进入、同一外部B-spline面退出后再进入，属于真实外脚回缩薄楔；不是相对内外壁厚，也不是顶口端面截断。dev-09首、末快照的同组足缘样本均无短段或未知，因此dev-10在这组足缘指标上退化。五条中央底板仍各为3.5 mm，不证明整块底板或全局壁厚。证据：[独立几何及交付复核](../workspace/quality-evaluation-v1/development/dev-10/inspection/cup-independent-review/review.md)。
+
+杯子首、末成功源仍把同宽z0/z3站点与后续站点一起smooth loft，没有独立脚柱或联合校准回调。原seed intent仍无typed `section_dimensions`，未被harness或模型暗补；因此不能把新增截面验收机制的公开回归当作这轮旧合同已检查54 mm。模型已读到同SHA官方测量的54.075825 mm，随后有“接近54”及“保持54”的可见表述；不能沿用上一轮“不小于54”的解释。其后主要调整口缘与内缩来响应局部薄区告警，未证明该告警属于相对薄壁，也没有证明最终壁厚合格。
+
+外壳在 **80.508秒**复制现有安装示例，**399.344秒**取得首草模结果、**635.868秒**首次草模成功，均早于dev-09的1069.313 / 1190.604秒；本次确实先草模、后profile和intent。首草模前显式文档/API返回由dev-09的85,809字符降至 **40,855字符**，但后续仍陷入构造ID漏声明、非法kind、immutable intent修订和display引用绑定返工。6次完整compile全部失败；最后一轮已达到真实装配/安装审计，frame与cover重叠 **6544.021708 mm³**，屏幕与PCB插入路径分别和frame重叠约 **19372.000204 / 2345.999737 mm³**，后盖也阻挡free-travel。该失败轮65个绑定文件全部匹配截止，真实失败不能由草模提前掩盖。证据：[完整失败工件绑定](../workspace/quality-evaluation-v1/development/dev-10/inspection/complete-snapshot-cutoff-bindings.json)。
+
+本轮只支持外壳更早获得几何反馈，**入口压缩未证明建模质量改善，杯子足缘反而退化**。杯子还经历了`a3d scene --help`被当文件、手写空scene、普通Python导入失败等绕路，之后才进入能自动刷新scene的正式compile；实际命令和可见消息已逐条绑定，不能直接断言删移一句说明导致了绕路。后续scene帮助、告警解释和构造ID衔接相关改动仍待模型效果验证，不能标为已成功或已解决；正式封存配对验收仍未启动。证据：[scene路线原始绑定](../workspace/quality-evaluation-v1/development/dev-10/inspection/cup-scene-detour-evidence.json)。
+
+### dev-10 后：修复实际查询入口，保留物理失败，验证可行构造
+
+模型确实读到了主SKILL前部的曲面联合校准说明，但没有执行；不能再把它归因为入口不可见。它实际调用的 `a3d guide strategy` 只有一般loft建议，现替换其中一条，直接指向已有 `surface-shell.md` 与完整 `build_geometry/measure_finished` 回调，不扩充主入口的曲面规则。主SKILL只恢复两行真实能力说明：`BuildSession.export()` 自动生成scene/report，compile的scene路径可尚不存在。`a3d scene -h/--help` 现在返回帮助；无参数及合法/非法JSON的原行为保持。六项真实公开CLI控制通过，普通JSON输出与冻结旧实现逐字相同。证据：[路由审查](../workspace/quality-v7-audit/surface-routing-review/review.md)、[公开scene控制](../workspace/quality-v7-audit/scene-help-proposal/product-cli-validation.json)。
+
+单色/彩色QA与compact结果的厚度建议现在先定位实际STEP样本，区分真实薄壁/薄楔和曲率/自由口缘，再修改确认的问题。`max-sphere`不是自动识别相对壁面的测量；具体告警仍需定位，不能因此认定本轮告警为误报。只改建议，算法、样本、数值、严重度和通过条件保持不变，未知不变成通过。隔离AST与compact结果控制、独立产品审查分别保留。证据：[告警建议的依据与边界](../workspace/quality-v7-audit/thickness-advisory-proposal/README.md)、[产品审查](../workspace/quality-v7-audit/post-dev10-product-review/review.md)。
+
+外壳隔离原型把七个内部支撑/导向步骤保留为 `finish` 内逐件 `checked_union`，把实际融合支撑材料观察到原有两项mount需求；原23-feature intent逐字不变。第一次观察Compound不水密失败，唯一修复仅融合观察材料。随后公开compile越过纯ID绑定障碍，最终STEP与原草模制造件的包络/体积差和双向BRep差集体积全为0；原来的6544.021708 mm³实体重叠、屏幕/PCB插入及free-travel失败仍然被拒绝。现有authoring指南用通用 `module-mount` 展示该模式，unknown ID错误指向它，校验仍严格拒绝未知ID。安装指南只替换原sweep段，要求它参与实际通道/支撑/停止行程的设计，引用已有内存检查。没有新API或新强制阶段，也没有把材料观察当作空间/安装证明。证据：[构造绑定等价实验](../workspace/quality-v7-audit/construction-feature-binding-prototype/README.md)。
+
+杯子另做有界人工机制原型：从dev10最后完整PASS复制源码，原intent/profile逐字不变，三项站点控制在完整含圆缘几何上联合校准，并在原外loft、共用内腔之间融合真实3 mm短脚。9次校准约20.891秒，加1次公开draft和1次compile共11次构建；成品STEP包络 **82×62×95 mm** 在原精度内，z95口宽 **54.000000001272 mm**，同一96条足缘探针由32条短段降为0，全部明确，最短14.787807711 mm；五条中央底板仍3.5 mm。预览保留开口、收脚/丰腹/收肩/后移关系，短直脚台阶可见；这是非盲观察。局部mesh告警0.00722 mm仍未解决，有限探针不证明全壁厚。该原型证明这两项缺陷能在原约束下同时修复，**不代表模型自行采用、A/B通过或整体质量提高**。证据：[完整原型与64项SHA记录](../workspace/quality-v7-audit/cup-finished-geometry-prototype/report.md)。
+
+当前最终代码合并回归 **150个Python方法通过（43.986秒）**，公开CLI **12项通过（1.963秒）**。未新增测试方法；首次混合suite因同名color `cad_helpers` 的搜索路径污染失败，既有布尔见证测试改为显式加载单色文件后重跑；另一次错写capability测试模块名的命令失败也保留，改用真实模块后通过。中间重复运行不累计。独立静态审查确认数值/严重度/验收逻辑未改；安装sweep中“is exact”的过强措辞恢复为“can be exact”。下一轮仍须冻结候选并保持原case/seed/模型/时限；当前没有正式holdout结论。

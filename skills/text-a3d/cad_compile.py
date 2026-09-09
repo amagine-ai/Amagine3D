@@ -898,6 +898,12 @@ def _issue(
     repair_hint: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
+    if not repair_hint and check in THICKNESS_CHECKS:
+        repair_hint = (
+            "Locate the sample or risk region in final STEP before editing: max-sphere "
+            "can reflect curvature or a free rim. Feature IDs/bounds are candidates. "
+            "Repair confirmed thickness defects; preserve targets, form and function."
+        )
     issue = {
         "code": code,
         "message": str(message).strip() or "unspecified failure",

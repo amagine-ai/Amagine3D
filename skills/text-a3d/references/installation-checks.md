@@ -62,10 +62,14 @@ from the insertion obstacle group, but included in installed clearance and
 retention checks. Select `free_travel_mm` and `stop_travel_mm` from the intended
 movement and clearances, not from universal example values.
 
-Author the complete insertion sweep from the actual path. An axis-aligned box
-can be exact for a rectangular component translating on that axis; a bounding-box
-sweep of a shaped component can be overly conservative. Use the shaped or
-segmented sweep when needed rather than simplifying the component to pass.
+Define the complete insertion sweep beside the component envelope, before laying
+out the cavity, supports and retainers. Use the same bounds and datums to leave
+its route clear through every part present during insertion; reserve the specified
+free travel when placing stops. If support material conflicts with a required
+route, resolve its location or assembly sequence rather than shrink the witness
+or drop that obstacle. An axis-aligned box can be exact for a rectangular component
+translating on that axis; use the actual shaped or segmented sweep for other paths.
+The in-memory `check_installation` below can check this construction before export.
 
 For a functional aperture, construct the required optical, cable or other
 passage volume using its effective cross-section. Extend it from the actual

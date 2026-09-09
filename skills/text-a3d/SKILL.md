@@ -64,6 +64,8 @@ Submit finishing through `BuildSession.finish`, with `checked_fillet` or
 `checked_chamfer`, then `export`. Editing the inspection copy from `build.part()`
 does not change exports. Never silently keep unfinished geometry after a failed finish.
 Validate the separate intent with `a3d intent`, then use the public compile boundary:
+`BuildSession.export()` generates the scene and report from the authored solids;
+the scene path passed to compile need not exist yet.
 
 ```bash
 a3d compile "<name>_scene.json" --intent "<name>_intent.json" \

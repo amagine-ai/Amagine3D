@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 from hashlib import sha256
+import importlib.util
 import io
 import json
 import os
@@ -732,7 +733,13 @@ class CadCompileTests(unittest.TestCase):
 
     def test_agent_summary_preserves_real_boolean_gap_points_and_component_selection(self):
         from build123d import Box, Compound, Pos
-        import cad_helpers
+        # Color QA may precede this test and add its same-named module to sys.path.
+        spec = importlib.util.spec_from_file_location(
+            "single_cad_helpers_compile_test", SKILL / "cad_helpers.py"
+        )
+        cad_helpers = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {spec.name: cad_helpers}):
+            spec.loader.exec_module(cad_helpers)
 
         body = Box(10, 10, 10)
         cases = (

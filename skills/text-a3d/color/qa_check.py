@@ -1582,7 +1582,7 @@ def main() -> int:
                            "single_line_floor_mm": floor,
                            "criterion": "area-weighted-p05"},
                           category="printability", severity="warning", repair={
-                              "goal": f"Raise local wall thickness to at least {target:g} mm."
+                              "goal": f"Verify sampled risks before editing; repair confirmed thickness defects to at least {target:g} mm."
                           })
                 audit.add(
                     "printability_local_thin_region",
@@ -1602,10 +1602,10 @@ def main() -> int:
                     category="printability",
                     severity="warning",
                     repair={
-                        "goal": f"Raise every sampled local wall to at least {target:g} mm.",
+                        "goal": f"Verify sampled risks before editing; repair confirmed thickness defects to at least {target:g} mm.",
                         "preferred_actions": [
-                            "Repair the named feature IDs intersecting the risk bounds.",
-                            "Inspect unnamed risk bounds before changing unrelated geometry.",
+                            "Inspect the sample or risk region in the final STEP; distinguish a thin wall or wedge from convex curvature or a free rim.",
+                            "Treat overlapping feature IDs and bounds as candidates; confirm the affected geometry before changing source parameters, then rerun QA.",
                         ],
                     },
                 )

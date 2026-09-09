@@ -41,7 +41,8 @@ isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the sam
 geometry source for final compile. A source without intent can declare
 `BuildSession(__file__, part_names=("housing", "cover"))` and use
 `build.add("cover-body", solid, part_name="cover")` (also on `cut`/`observe`).
-Final intent must declare these same parts, features and owners. Pass optional
+The `add`/`cut`/`observe` bindings must match final intent parts, features and owners;
+construction-only operation IDs can use the grouping pattern below. Pass optional
 preview component envelopes as `build.export(draft_references={"module": solid})`;
 they do not become manufactured parts or final installation evidence.
 
@@ -79,8 +80,8 @@ build.export()
 
 For a final fillet, use `build.finish("housing", lambda body:
 checked_fillet(body, body.edges(), RADIUS, "edge-rounding"))`. `finish` commits
-the returned solid and checked evidence; if the operation ID names an intent
-feature, it also binds that feature. Implementation-only operation IDs need no
+the returned solid and checked evidence; a declared fillet/chamfer ID also binds
+that intent feature. Implementation-only operation IDs need no
 additional intent feature. In either case,
 selectors must come from the callback's body. `build.part("housing")` returns a
 copy for inspection, so changing that copy alone does not change exported geometry.
@@ -89,6 +90,29 @@ copy for inspection, so changing that copy alone does not change exported geomet
 omitting shape observes the current owning part. Naming a whole-part observation
 "floor" does not measure floor thickness. Use `role="solid"` to identify a solid
 feature already contained in the part, such as a screw boss within a thick corner.
+For several additions implementing one declared `kind: mount`, retain each checked
+operation and observe the real mounting material under that existing feature:
+
+```python
+from cad_helpers import checked_union
+
+pieces = [("bottom-rail", bottom), ("left-guide", left), ("right-guide", right)]
+def add_pieces(body):
+    for operation_id, piece in pieces:
+        body = checked_union(body, piece, operation_id, part_name="frame")
+    return body
+
+build.finish("frame", add_pieces)
+build.observe("module-mount", bottom + left + right, role="solid", part_name="frame")
+```
+
+Here `bottom`, `left` and `right` are the actual modeled support solids. Fuse their
+material union for a watertight observation; a Compound of touching solids can
+retain non-manifold contact faces. This mount observation is not a cavity or an
+installation proof. Keep the original cavity cuts, component envelopes, paths,
+installation checks and independent hole/interface bindings. Reuse the declared
+mount ID for its same-owner display anchor.
+
 A missed cut still fails, and final
 geometry, interface and installation checks remain independent. Paired interfaces,
 raw screw interfaces and installation checks pass through `export`; screw recipe

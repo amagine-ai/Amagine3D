@@ -63,7 +63,7 @@ Read $AMAGINE3D_SKILL_DIR/references/multipart-connections.md only for direct fa
 - Bind permanent button color through intent and scene material/color records, then verify 3MF and the preview.`,
   strategy: `Geometry strategy
 - Author manufactured geometry as BRep solids with editable source and genuine STEP.
-- Product envelopes favor lofts through meaningful sections with independently controlled width, depth, shape and placement.
+- For hollow lofts or dimensions that drift after finishing, read $AMAGINE3D_SKILL_DIR/references/surface-shell.md; adapt examples/surface_shell_build.py's build_geometry / measure_finished callbacks to the current source and station mapping.
 - Use simple sections and ruled or segmented lofts when the intended form permits coarser transitions; validate the solid and actual wall thickness.
 - Analytic profiles, extrusions, revolutions and sweeps remain appropriate for simpler geometry; construct cavities and mechanical interfaces in the same BRep body.
 - STL, 3MF and GLB meshes are derived exports. Autonomous mesh/SDF master authoring is not supported.
