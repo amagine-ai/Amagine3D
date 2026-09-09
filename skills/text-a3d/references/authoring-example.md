@@ -42,8 +42,9 @@ isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the sam
 geometry source for final compile. A source without intent can declare
 `BuildSession(__file__, part_names=("housing", "cover"))` and use
 `build.add("cover-body", solid, part_name="cover")` (also on `cut`/`observe`).
-The `add`/`cut`/`observe` bindings must match final intent parts, features and owners;
-construction-only operation IDs can use the grouping pattern below. Pass optional
+With intent, declared IDs bind its features to their owners. Extra `add`/`cut` IDs
+with explicit `part_name` record checked construction operations only; `observe`
+requires a declared ID. Final export still requires every intent feature. Pass optional
 preview component envelopes as `build.export(draft_references={"module": solid})`;
 they do not become manufactured parts or final installation evidence.
 
@@ -91,19 +92,13 @@ copy for inspection, so changing that copy alone does not change exported geomet
 omitting shape observes the current owning part. Naming a whole-part observation
 "floor" does not measure floor thickness. Use `role="solid"` to identify a solid
 feature already contained in the part, such as a screw boss within a thick corner.
-For several additions implementing one declared `kind: mount`, retain each checked
-operation and observe the real mounting material under that existing feature:
+For several additions implementing one declared `kind: mount`, add the pieces with
+internal operation IDs, then bind the actual mounting material once:
 
 ```python
-from cad_helpers import checked_union
-
 pieces = [("bottom-rail", bottom), ("left-guide", left), ("right-guide", right)]
-def add_pieces(body):
-    for operation_id, piece in pieces:
-        body = checked_union(body, piece, operation_id, part_name="frame")
-    return body
-
-build.finish("frame", add_pieces)
+for operation_id, piece in pieces:
+    build.add(operation_id, piece, part_name="frame")
 build.observe("module-mount", bottom + left + right, role="solid", part_name="frame")
 ```
 

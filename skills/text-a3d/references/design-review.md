@@ -13,7 +13,9 @@ if reclassified as detail; adhesive is an intentional assembly choice, not an
 exception to select because it has fewer checks.
 
 Distinguish source-backed requirements from initial engineering assumptions before
-writing intent. Correct mistaken assumptions using new evidence and explain their
+writing intent. Give ordinary exterior dimensions a nominal value and the initial
+±0.1 mm range described in the main skill; retain explicit user tolerances and
+resolve functional fits separately. Correct mistaken assumptions using new evidence and explain their
 effect on function; do not overwrite a valid target simply to match the current
 artifact. If the immutable contract cannot express a necessary change, state the
 conflict and proposed replacement against the original request rather than

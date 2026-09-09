@@ -28,6 +28,7 @@ from build_manifest import (  # noqa: E402
     validate_manifest,
 )
 from tests.python.intent_fixture import (  # noqa: E402
+    PROFILE,
     intent_ref,
     write_intent,
 )
@@ -48,20 +49,30 @@ def _valid_report(root: Path) -> dict:
         "valid": True,
         "volumeMm3": 1,
     }
+    intent_path, _ = write_intent(
+        root, part="part", feature_owners={"part-body": "part"},
+        dimensions_mm=(1, 1, 1), filename="intent.json",
+    )
+    scene_path = root / "scene.json"
+    scene_path.write_text(json.dumps({
+        "schema": "evidence-semantic-scene/v1", "revision": "rev-1",
+        "intentRef": intent_ref(intent_path), "units": "mm",
+        "coordinateSystem": {"handedness": "right", "up": "Z"},
+        "materials": [], "parts": [{"id": "part", "representationMaster": "brep"}],
+        "nodes": [{
+            "id": "part-body", "partId": "part", "featureId": "part-body",
+            "role": "solid", "operation": "union",
+            "recipe": {"kind": "roundedBox", "parameters": {
+                "sizeMm": [1, 1, 1], "radiusMm": 0.0,
+            }},
+        }], "interfaces": [],
+    }), encoding="utf-8")
     inputs = {}
-    for name, schema in (
-        ("intent", "evidence-cad-intent/v5"),
-        ("scene", "evidence-semantic-scene/v1"),
-        ("profile", "evidence-bambu-printer-profile/v1"),
+    for name, path, schema in (
+        ("intent", intent_path, "evidence-cad-intent/v5"),
+        ("scene", scene_path, "evidence-semantic-scene/v1"),
+        ("profile", PROFILE, "evidence-bambu-printer-profile/v1"),
     ):
-        path = root / f"{name}.json"
-        payload = {"schema": schema}
-        if name == "intent":
-            payload["dimensions_mm"] = {
-                axis: {"confidence": "high", "source": "user", "value": 1}
-                for axis in "xyz"
-            }
-        path.write_text(json.dumps(payload), encoding="utf-8")
         inputs[name] = {
             **artifact_record(path),
             "schema": schema,
@@ -179,6 +190,20 @@ def _valid_report(root: Path) -> dict:
     }
 
 
+def _update_bound_intent(report: dict, intent: dict) -> None:
+    """Keep a deliberately edited fixture coherent at both binding boundaries."""
+    path = Path(report["inputs"]["intent"]["path"])
+    path.write_text(json.dumps(intent), encoding="utf-8")
+    digest = artifact_record(path)["sha256"]
+    report["inputs"]["intent"]["sha256"] = digest
+    report["backendData"]["semanticAssembly"]["intentSha256"] = digest
+    scene_path = Path(report["inputs"]["scene"]["path"])
+    scene = json.loads(scene_path.read_text(encoding="utf-8"))
+    scene["intentRef"] = intent_ref(path)
+    scene_path.write_text(json.dumps(scene), encoding="utf-8")
+    report["inputs"]["scene"]["sha256"] = artifact_record(scene_path)["sha256"]
+
+
 class BuildManifestTests(unittest.TestCase):
     def test_run_ids_are_canonical_uuids_in_environment_and_manifest(self):
         canonical = "123e4567-e89b-42d3-a456-426614174000"
@@ -281,6 +306,73 @@ class BuildManifestTests(unittest.TestCase):
             self.assertEqual(validate_manifest(report), [])
             self.assertTrue(audit(path)["pass"])
 
+    def test_independent_audit_requires_noncritical_physical_bindings_not_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            intent_path = Path(report["inputs"]["intent"]["path"])
+            intent = json.loads(intent_path.read_text())
+            intent["features"].append({
+                "id": "attachment", "part": "part", "kind": "detail",
+                "evidence": "A physical attachment is required",
+                "acceptance": "The attachment is bound to this owner",
+            })
+            self.assertNotIn("attachment", intent["printability"]["critical_features"])
+            _update_bound_intent(report, intent)
+            scene_path = Path(report["inputs"]["scene"]["path"])
+            scene = json.loads(scene_path.read_text())
+            attachment = deepcopy(scene["nodes"][0])
+            attachment.update(id="attachment", featureId="attachment")
+            scene["nodes"].append(attachment)
+            report["events"] = [{"kind": "union", "id": "attachment", "part": "part", "added_mm3": 1}]
+            report["features"]["attachment"] = deepcopy(report["parts"]["part"]["semantic"])
+            path = root / "part_report.json"
+
+            def check(changed_scene):
+                scene_path.write_text(json.dumps(changed_scene))
+                report["inputs"]["scene"]["sha256"] = artifact_record(scene_path)["sha256"]
+                path.write_text(json.dumps(report))
+                return audit(path)
+
+            self.assertTrue(check(scene)["pass"])
+            missing = deepcopy(scene)
+            missing["nodes"].pop()
+            display = deepcopy(missing)
+            display["nodes"].append({
+                "id": "attachment-appearance", "partId": "part", "featureId": "attachment",
+                "role": "display-only", "operation": "none", "physicalFeatureRef": "part-body",
+                "recipe": {"kind": "displayComponent", "parameters": {
+                    "sourceMesh": "attachment.ply", "appearance": {
+                        "baseColor": "#111417", "metallic": 0.0, "roughness": 0.28,
+                    },
+                }},
+            })
+            for name, changed in (("event and observation only", missing), ("display impostor", display)):
+                with self.subTest(name=name):
+                    result = check(changed)
+                    self.assertFalse(result["pass"])
+                    self.assertTrue(any("missing physical feature bindings" in error and "attachment" in error
+                                        for error in result["errors"]), result)
+
+    def test_independent_audit_requires_same_scene_intent_path_and_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = _valid_report(root)
+            scene_path = Path(report["inputs"]["scene"]["path"])
+            scene = json.loads(scene_path.read_text())
+            copy_path = root / "different_intent.json"
+            copy_path.write_bytes(Path(report["inputs"]["intent"]["path"]).read_bytes())
+            scene["intentRef"] = intent_ref(copy_path)
+            scene_path.write_text(json.dumps(scene))
+            report["inputs"]["scene"]["sha256"] = artifact_record(scene_path)["sha256"]
+            errors = semantic_evidence_errors(report, root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("same intent path and hash", errors[0])
+            scene["intentRef"] = intent_ref(Path(report["inputs"]["intent"]["path"]))
+            scene_path.write_text(json.dumps(scene))
+            errors = semantic_evidence_errors(report, root)
+            self.assertTrue(any("inputs.scene hash does not match" in error for error in errors), errors)
+
     def test_mesh_master_cannot_claim_step(self):
         with tempfile.TemporaryDirectory() as directory:
             report = _valid_report(Path(directory))
@@ -303,10 +395,7 @@ class BuildManifestTests(unittest.TestCase):
                 "section_dimensions": [{"plane": {"axis": "z", "coordinate_mm": 1},
                                         "outer_envelope": {"width_u_mm": {"value": 1}}}],
             }])
-            intent_path.write_text(json.dumps(intent))
-            digest = artifact_record(intent_path)["sha256"]
-            report["inputs"]["intent"]["sha256"] = digest
-            report["backendData"]["semanticAssembly"]["intentSha256"] = digest
+            _update_bound_intent(report, intent)
             self.assertEqual(semantic_evidence_errors(report, root), [])
 
             for name in ("missing STEP", "print coordinates", "mesh owner"):
@@ -517,6 +606,26 @@ class BuildManifestTests(unittest.TestCase):
         self.assertEqual(semantic_envelope_errors(observed, intent,
             tolerance_mm=semantic_envelope_tolerance_mm("brep-part")), [])
 
+    def test_ordinary_dimension_range_accepts_print_scale_errors_without_rounding_evidence(self):
+        intent = {"dimensions_mm": {
+            "x": {"value": 54, "constraint": {"kind": "range", "min_mm": 53.9, "max_mm": 54.1}},
+            "y": {"value": 1}, "z": {"value": 1},
+        }}
+        for width in (54.09942521921779, 54.0001013664441, 53.9):
+            self.assertEqual(semantic_envelope_errors(
+                {"size": [width, 1, 1]}, intent, tolerance_mm=0.0001), [])
+        # Both values display as 54.10; a rounded report must not conceal an
+        # actual excursion beyond the declared range and numerical allowance.
+        self.assertEqual(f"{54.10015:.2f}", f"{54.1:.2f}")
+        self.assertTrue(semantic_envelope_errors(
+            {"size": [54.10015, 1, 1]}, intent, tolerance_mm=0.0001))
+        self.assertTrue(semantic_envelope_errors(
+            {"size": [54, 1.001, 1]}, intent, tolerance_mm=0.0001))
+        strict = deepcopy(intent)
+        strict["dimensions_mm"]["x"].pop("constraint")
+        self.assertTrue(semantic_envelope_errors(
+            {"size": [54.09942521921779, 1, 1]}, strict, tolerance_mm=0.0001))
+
     def test_step_readback_cannot_hide_design_error_inside_representation_tolerance(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -598,10 +707,7 @@ class BuildManifestTests(unittest.TestCase):
             intent_path = Path(report["inputs"]["intent"]["path"])
             intent = json.loads(intent_path.read_text(encoding="utf-8"))
             intent["dimensions_mm"]["x"]["value"] = 2
-            intent_path.write_text(json.dumps(intent), encoding="utf-8")
-            digest = artifact_record(intent_path)["sha256"]
-            report["inputs"]["intent"]["sha256"] = digest
-            report["backendData"]["semanticAssembly"]["intentSha256"] = digest
+            _update_bound_intent(report, intent)
             report_path = root / "wrong-envelope_report.json"
             report_path.write_text(json.dumps(report), encoding="utf-8")
 

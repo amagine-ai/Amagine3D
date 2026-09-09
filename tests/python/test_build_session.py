@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from build123d import Align, Box, Cylinder, Location, Pos, Rectangle, import_step
+from build123d import Align, Box, Compound, Cylinder, Location, Pos, Rectangle, import_step
 import numpy as np
 import trimesh
 
@@ -91,6 +91,73 @@ class BuildSessionTests(unittest.TestCase):
         self.assertEqual(len(final), 1)
         self.assertAlmostEqual(final[0]["volume_mm3"], 992)
 
+    def test_construction_operations_keep_real_events_without_binding_requirements(self):
+        build = self.session()
+        intent_before = build.intent_path.read_bytes()
+        for operation in (build.add, build.cut):
+            for owner in (None, "other"):
+                with self.subTest(operation=operation.__name__, owner=owner), self.assertRaises(AuthoringError):
+                    operation("stock", Box(1, 1, 1), part_name=owner)
+        self.assertFalse(build._parts)
+        build.add("stock", Box(10, 10, 10), part_name="unit-q")
+        initial = build._evidence.events[0]
+        self.assertEqual((initial["id"], initial["kind"], initial["part"]), ("stock", "add", "unit-q"))
+        self.assertAlmostEqual(initial["added_mm3"], 1000)
+        self.assertEqual(initial["tool"]["solid_count"], 1)
+        build.cut("rough-opening", self.pocket(), part_name="unit-q")
+        self.assertAlmostEqual(build.part("unit-q").volume, 992)
+        # Reusing an unbound construction name remains an event, not a feature.
+        build.add("stock", Pos(0, 0, 4)*Box(2, 2, 2), part_name="unit-q")
+        self.assertAlmostEqual(build.part("unit-q").volume, 1000)
+        self.assertFalse(build._features)
+        self.assertFalse(build._evidence.features)
+        with self.assertRaisesRegex(AuthoringError, "not declared"):
+            build.observe("stock", part_name="unit-q")
+        build.observe("body", role="solid")
+        build.cut("pocket", self.pocket())
+        with self.assertRaises(AuthoringError):
+            build.add("body", Box(1, 1, 1), part_name="unit-q")
+        report = self.export(build)
+        self.assertEqual(build.intent_path.read_bytes(), intent_before)
+        self.assertEqual([(e["id"], e["kind"]) for e in report["events"]],
+                         [("stock", "add"), ("rough-opening", "cut"), ("stock", "union"), ("pocket", "cut")])
+        self.assertAlmostEqual(report["events"][2]["added_mm3"], 8)
+        self.assertTrue({"stock", "rough-opening"}.isdisjoint(report["features"]))
+        self.assertEqual({n["featureId"] for n in json.loads(build.scene_path.read_text())["nodes"]},
+                         {"body", "pocket"})
+        self.assertAlmostEqual(import_step(build.out_dir/"unit-q.step").volume, 992, places=5)
+
+    def test_construction_initial_add_checks_material_and_rolls_back(self):
+        for phase in ("", "compile"):
+            build = self.session("initial-"+(phase or "direct"))
+            before = deepcopy(build._evidence)
+            with self.subTest(phase=phase), patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": phase}):
+                for minimum in (-1, float("nan"), float("inf"), True, "1"):
+                    with self.subTest(minimum=minimum), self.assertRaises(cad_helpers.BuildInvariantError):
+                        build.add("stock", Box(1, 1, 1), part_name="unit-q", min_added_mm3=minimum)
+                for geometry in (Rectangle(1, 1), Compound(children=[Box(1, 1, 1), Pos(3, 0, 0)*Box(1, 1, 1)])):
+                    with self.assertRaises(cad_helpers.BuildInvariantError):
+                        build.add("stock", geometry, part_name="unit-q")
+                output = io.StringIO()
+                tiny = Box(.01, .01, .01)
+                with redirect_stdout(output), self.assertRaises(cad_helpers.BuildInvariantError):
+                    build.add("stock", tiny, part_name="unit-q")
+                if phase:
+                    issue = json.loads(output.getvalue())["issues"][0]
+                    self.assertEqual(issue["code"], "SOURCE.INITIAL_ADD_BELOW_MINIMUM")
+                    self.assertAlmostEqual(issue["observed"]["addedMm3"], tiny.volume, places=12)
+                self.assertEvidenceEqual(build._evidence, before)
+                self.assertFalse(build._parts)
+                self.assertFalse(build._features)
+                build.add("stock", tiny, part_name="unit-q", min_added_mm3=0)
+                self.assertAlmostEqual(build.part("unit-q").volume, 1e-6, places=12)
+                self.assertGreater(build._evidence.events[0]["added_mm3"], 0)
+                self.assertEqual(build._evidence.events[0]["kind"], "add")
+        # The already-declared first-add path retains its previous behavior.
+        declared = self.session("declared-initial")
+        declared.add("body", Box(.01, .01, .01), min_added_mm3=1)
+        self.assertEqual(declared._evidence.events, [])
+
     def test_finish_commits_fillet_before_cut_to_real_step_and_stl(self):
         build = self.session(feature_ids=("body", "rim", "pocket", "foot"))
         original = Box(10, 10, 10)
@@ -128,19 +195,21 @@ class BuildSessionTests(unittest.TestCase):
 
     def test_failed_cut_rolls_back_and_same_feature_can_be_retried(self):
         for phase in ("", "compile"):
-            build = self.session(phase or "direct")
-            with self.subTest(phase=phase), patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": phase}):
-                build.add("body", Box(10, 10, 10))
-                before = deepcopy(build._evidence)
-                output = io.StringIO()
-                with redirect_stdout(output), self.assertRaises(cad_helpers.BuildInvariantError):
-                    build.cut("pocket", Pos(30, 0, 0) * Box(2, 2, 2))
-                self.assertEvidenceEqual(build._evidence, before)
-                self.assertAlmostEqual(build.part("unit-q").volume, 1000)
-                if phase:
-                    self.assertEqual(json.loads(output.getvalue())["issues"][0]["code"], "SOURCE.CUT_MISSED_OWNER")
-                build.cut("pocket", self.pocket())
-                self.assertAlmostEqual(build.part("unit-q").volume, 992)
+            for feature in ("pocket", "rough-cut"):
+                build = self.session((phase or "direct")+"-"+feature)
+                with self.subTest(phase=phase, feature=feature), patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": phase}):
+                    build.add("body", Box(10, 10, 10))
+                    before = deepcopy(build._evidence)
+                    output = io.StringIO()
+                    with redirect_stdout(output), self.assertRaises(cad_helpers.BuildInvariantError):
+                        build.cut(feature, Pos(30, 0, 0) * Box(2, 2, 2), part_name="unit-q")
+                    self.assertEvidenceEqual(build._evidence, before)
+                    self.assertAlmostEqual(build.part("unit-q").volume, 1000)
+                    if phase:
+                        self.assertEqual(json.loads(output.getvalue())["issues"][0]["code"], "SOURCE.CUT_MISSED_OWNER")
+                    build.cut(feature, self.pocket(), part_name="unit-q")
+                    self.assertAlmostEqual(build.part("unit-q").volume, 992)
+                    self.assertEqual(feature in build._features, feature == "pocket")
 
     def test_same_source_previews_without_intent_then_exports_with_contract(self):
         from cad_draft import run_draft
@@ -220,7 +289,8 @@ build.export(draft_references={"module": Pos(0, 0, 4) * Box(4, 4, 2)})
         source.write_text(f'''from build123d import Box, Pos
 from build_session import BuildSession
 build = BuildSession(__file__, out_dir={str(fixture.out_dir)!r}, scene_path={str(fixture.scene_path)!r})
-build.add("body", Box(10, 10, 10))
+build.add("initial-stock", Box(10, 10, 10), part_name="unit-q")
+build.observe("body", role="solid")
 build.cut("pocket", Pos(0, 0, 5) * Box(2, 2, 4))
 build.export()
 ''')
@@ -230,6 +300,7 @@ build.export()
         result = run_draft(source, workspace=fixture.out_dir, intent=fixture.intent_path)
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["intent"]["path"], str(fixture.intent_path))
+        self.assertNotIn("initial-stock", result["constructionFeatures"])
         self.assertTrue(all(p.read_bytes() == b"existing-final" for p in final_paths))
         self.assertFalse((Path(result["result"]).parent / "draft-scene.json").exists())
         with self.assertRaises(AuthoringError):
@@ -338,15 +409,17 @@ build.export()
         self.assertAlmostEqual(build.part("unit-q").volume, 992)
 
     def test_addition_measures_actual_connected_material(self):
-        build = self.session()
-        build.add("body", Box(10, 10, 10))
-        before = deepcopy(build._evidence)
-        with self.assertRaises(cad_helpers.BuildInvariantError):
-            build.add("pocket", Pos(30, 0, 0) * Box(2, 2, 2))
-        self.assertEvidenceEqual(build._evidence, before)
-        build.add("pocket", Pos(5, 0, 0) * Box(2, 2, 2))
-        self.assertAlmostEqual(build.part("unit-q").volume, 1004)
-        self.assertEqual(build._evidence.events[0]["added_mm3"], 4)
+        for feature in ("pocket", "construction-boss"):
+            build = self.session(feature)
+            build.add("body", Box(10, 10, 10))
+            before = deepcopy(build._evidence)
+            with self.subTest(feature=feature), self.assertRaises(cad_helpers.BuildInvariantError):
+                build.add(feature, Pos(30, 0, 0) * Box(2, 2, 2), part_name="unit-q")
+            self.assertEvidenceEqual(build._evidence, before)
+            build.add(feature, Pos(5, 0, 0) * Box(2, 2, 2), part_name="unit-q")
+            self.assertAlmostEqual(build.part("unit-q").volume, 1004)
+            self.assertEqual(build._evidence.events[0]["added_mm3"], 4)
+            self.assertEqual(feature in build._features, feature == "pocket")
 
     def test_contained_boss_observation_does_not_add_material(self):
         build = self.session(feature_ids=("body", "boss"))

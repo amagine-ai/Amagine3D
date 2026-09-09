@@ -186,6 +186,12 @@ print(json.dumps([P['width'], P['module_width']]))
             source_path = work / "surface_shell_build.py"
             scene_path = work / "surface_shell_scene.json"
             intent_hash = sha256(intent_path.read_bytes()).hexdigest()
+            intent = json.loads(intent_path.read_text())
+            top_width = intent["features"][0]["section_dimensions"][0]["outer_envelope"]["width_u_mm"]
+            for dimension in (*intent["dimensions_mm"].values(), top_width):
+                self.assertEqual(dimension["constraint"]["kind"], "range")
+                self.assertAlmostEqual(dimension["constraint"]["min_mm"], dimension["value"] - 0.1)
+                self.assertAlmostEqual(dimension["constraint"]["max_mm"], dimension["value"] + 0.1)
 
             def read_and_measure(inset):
                 result = json.loads((work / "surface-shell_compile-result.json").read_text())
@@ -345,12 +351,14 @@ print(json.dumps(actual))
             np.testing.assert_allclose(audit["bounds_mm"]["size"], [100, 80, 90], atol=1e-5)
             self.assertEqual(sha256(intent_path.read_bytes()).hexdigest(), intent_hash)
 
-            # Whole-envelope drift is rejected earlier during export. Absence
-            # of a later section audit is not evidence that the section passed.
+            # Drift outside the agreed +/-0.1 mm envelope is rejected during
+            # export. The offset neighbouring profile makes the Y envelope
+            # grow by only half this station's depth change.
+            # Absence of a later section audit does not mean it passed.
             station = "(30.0, 100.0, 80.0, 14.0, 0.0, 0.0)"
             source = source_path.read_text()
             self.assertEqual(source.count(station), 1)
-            source_path.write_text(source.replace(station, "(30.0, 100.2, 80.2, 14.0, 0.0, 0.0)"))
+            source_path.write_text(source.replace(station, "(30.0, 100.2, 80.4, 14.0, 0.0, 0.0)"))
             result = subprocess.run(
                 [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],

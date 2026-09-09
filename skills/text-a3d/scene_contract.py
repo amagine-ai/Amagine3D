@@ -1686,6 +1686,16 @@ def validate(data: dict, base_dir: Path | None = None) -> list[str]:
                     f"part {part_id} must contain at least one solid or separate node"
                 )
 
+    missing_features = set(intent_feature_owners) - physical_features
+    if missing_features:
+        missing = ", ".join(f"{feature!r} (owner {intent_feature_owners[feature]!r})"
+                            for feature in sorted(missing_features))
+        errors.append(
+            "missing physical feature bindings for immutable intent: " + missing
+            + "; bind the actual declared features to their owners. "
+              "Operation events and display-only nodes do not supply these bindings."
+        )
+
     interfaces = data.get("interfaces", [])
     interface_ids: list[str] = []
     if not isinstance(interfaces, list):

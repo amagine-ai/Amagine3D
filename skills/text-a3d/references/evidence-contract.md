@@ -75,7 +75,9 @@ packed plate envelope. Build reports independently measure the final physical
 part union as `backendData.semanticAssembly.boundsMm`; they must never copy the
 intent target into that evidence. Each `parts[part].semantic.boundsMm` records
 only that physical part. For BRep backends, the hash-bound STEP readback bounds
-must satisfy intent dimensions within 0.0001 mm numerical tolerance. Report
+must satisfy the intent's allowed dimension intervals, with 0.0001 mm numerical
+tolerance at their boundaries. This numerical tolerance is not printer accuracy
+or the ordinary modeling allowance. Report
 bounds, whose endpoints are rounded to four decimals, use 0.0002 mm recording
 tolerance; they cannot override the precise readback check. The former 0.5 mm
 allowance must not hide a real design-size error. The
@@ -87,6 +89,14 @@ not grant permission to resize. An axis can explicitly declare
 `source`, and `confidence`. Both the selected value and final measured envelope
 must satisfy that declared range with the applicable measurement tolerance.
 Without a range, the value remains fixed.
+
+At initial authoring, ordinary exterior dimensions default to nominal ±0.1 mm,
+expressed using this existing range field. For example, 54 mm uses `value: 54`
+and `constraint: {kind: "range", min_mm: 53.9, max_mm: 54.1}`. Explicit user
+tolerances, limits and functional fits take precedence; do not apply this allowance
+to minimum walls, floor thickness, clearances or collision checks. Stop calibrating
+inside the agreed interval. Keep raw measurements; rounding is for presentation.
+Changing an already bound fixed target to a range requires an intent revision.
 
 A feature can optionally declare `section_dimensions` when its requirement is
 the outside size at a particular height or other semantic plane:

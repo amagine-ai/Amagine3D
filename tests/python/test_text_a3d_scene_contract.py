@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+from copy import deepcopy
 from hashlib import sha256
 import io
 import json
@@ -149,6 +150,32 @@ def _scene(root: Path) -> dict:
         ],
     }
     return bind_scene_intent(root, scene, manufacturing=manufacturing)
+
+
+def _scene_with_noncritical_requirement(root: Path, role: str = "separate") -> dict:
+    data = _scene(root)
+    data["nodes"].append({
+        "id": "required-detail",
+        "partId": "base",
+        "featureId": "required-detail",
+        "role": role,
+        "operation": {"solid": "union", "cutter": "subtract", "separate": "none"}[role],
+        "recipe": _geometry_recipe(root, "required-detail.stl"),
+    })
+    intent_path = root / data["intentRef"]["path"]
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent["features"].append({
+        "id": "required-detail",
+        "part": "base",
+        "kind": "detail",
+        "evidence": "The fixture requires a physical detail on the base.",
+        "acceptance": "The required detail remains bound to its physical owner.",
+    })
+    # Freeze this complete requirement before a test removes/replaces its node.
+    # Do not infer a smaller intent from the subsequently damaged scene.
+    intent_path.write_text(json.dumps(intent), encoding="utf-8")
+    data["intentRef"]["sha256"] = sha256(intent_path.read_bytes()).hexdigest()
+    return data
 
 
 def _self_tapping_scene(root: Path) -> dict:
@@ -370,6 +397,56 @@ class SemanticSceneContractTests(unittest.TestCase):
             root = Path(directory)
             data = _scene(root)
             self.assertEqual(scene_contract.validate(data, root), [])
+
+    def test_missing_noncritical_requirement_is_rejected_without_rebinding_intent(self):
+        for role in ("solid", "cutter", "separate"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                data = _scene_with_noncritical_requirement(root, role)
+                intent_path = root / data["intentRef"]["path"]
+                original_intent = intent_path.read_bytes()
+                original_binding = deepcopy(data["intentRef"])
+                intent = json.loads(original_intent)
+                self.assertNotIn("required-detail", intent["printability"]["critical_features"])
+                self.assertEqual(scene_contract.validate(data, root), [])
+
+                data["nodes"].pop()
+                errors = scene_contract.validate(data, root)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("missing physical feature bindings", errors[0])
+                self.assertIn("'required-detail' (owner 'base')", errors[0])
+                self.assertEqual(intent_path.read_bytes(), original_intent)
+                self.assertEqual(data["intentRef"], original_binding)
+
+    def test_display_or_wrong_owner_cannot_replace_a_noncritical_requirement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = _scene_with_noncritical_requirement(root)
+            intent_path = root / data["intentRef"]["path"]
+            original_intent = intent_path.read_bytes()
+            original_binding = deepcopy(data["intentRef"])
+            self.assertEqual(scene_contract.validate(data, root), [])
+
+            display = deepcopy(data)
+            display["nodes"][-1] = {
+                **deepcopy(data["nodes"][3]),
+                "id": "required-detail",
+                "featureId": "required-detail",
+                "physicalFeatureRef": "base-shell",
+            }
+            errors = scene_contract.validate(display, root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("missing physical feature bindings", errors[0])
+            self.assertIn("'required-detail' (owner 'base')", errors[0])
+
+            wrong_owner = deepcopy(data)
+            wrong_owner["nodes"][-1]["partId"] = "button"
+            errors = scene_contract.validate(wrong_owner, root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("intent owner 'base' for feature 'required-detail'", errors[0])
+            self.assertEqual(intent_path.read_bytes(), original_intent)
+            for candidate in (data, display, wrong_owner):
+                self.assertEqual(candidate["intentRef"], original_binding)
 
     def test_physical_nodes_reject_the_removed_source_mesh_recipe(self):
         with tempfile.TemporaryDirectory() as directory:

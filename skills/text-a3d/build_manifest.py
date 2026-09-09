@@ -1527,6 +1527,43 @@ def _bound_json(reference: Any, base_dir: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _scene_binding_errors(inputs: Any, base_dir: Path) -> list[str]:
+    """Recheck the same bound scene/intent at the independent final audit boundary."""
+    from scene_contract import validate as validate_scene
+
+    paths, objects, hashes = {}, {}, {}
+    try:
+        for label in ("intent", "scene"):
+            reference = inputs.get(label) if isinstance(inputs, dict) else None
+            if (not isinstance(reference, dict) or not isinstance(reference.get("path"), str)
+                    or not reference["path"].strip()):
+                raise ValueError(f"inputs.{label} needs a bound file path")
+            path = Path(reference["path"])
+            path = (path if path.is_absolute() else base_dir / path).resolve()
+            payload = path.read_bytes()
+            if digest_bytes(payload) != reference.get("sha256"):
+                raise ValueError(f"inputs.{label} hash does not match its file")
+            value = json.loads(payload)
+            if not isinstance(value, dict):
+                raise ValueError(f"inputs.{label} must be a JSON object")
+            paths[label], objects[label], hashes[label] = path, value, reference["sha256"]
+        reference = objects["scene"].get("intentRef")
+        if (not isinstance(reference, dict) or not isinstance(reference.get("path"), str)
+                or not reference["path"].strip()):
+            raise ValueError("scene.intentRef must bind the manifest intent")
+        path = Path(reference["path"])
+        path = (path if path.is_absolute() else paths["scene"].parent / path).resolve()
+        if path != paths["intent"] or reference.get("sha256") != hashes["intent"]:
+            raise ValueError("scene.intentRef must bind the same intent path and hash as the manifest")
+        errors = ["bound scene: " + error
+                  for error in validate_scene(objects["scene"], paths["scene"].parent)]
+        if any(digest_file(path) != hashes[label] for label, path in paths.items()):
+            errors.append("bound scene or intent changed during semantic audit")
+        return errors
+    except (OSError, ValueError, TypeError) as error:
+        return [f"bound scene/intent cannot be verified: {error}"]
+
+
 def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
     """Verify final semantic bounds against hash-bound intent and geometry evidence."""
 
@@ -1565,6 +1602,7 @@ def semantic_evidence_errors(data: Any, base_dir: Path) -> list[str]:
                 errors.append(f"section dimensions for {feature.get('id')} require owning part {owner} with a semantic BRep STEP")
     scene_reference = inputs.get("scene") if isinstance(inputs, dict) else None
     scene = _bound_json(scene_reference, base_dir)
+    errors.extend(_scene_binding_errors(inputs, base_dir))
     if isinstance(data.get("materialPlan"), dict):
         errors.extend(validate_material_sources(data["materialPlan"], intent, scene))
     if not isinstance(semantic_bounds, dict):

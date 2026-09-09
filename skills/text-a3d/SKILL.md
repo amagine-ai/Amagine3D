@@ -8,9 +8,12 @@ description: Create or modify printable 3D models and their editable sources.
 Work only in the current session workspace, using public `a3d` commands and the
 managed runtime. Keep editable source beside its artifacts. Manufactured parts
 use build123d BRep solids and genuine STEP masters; derive meshes from them.
-Keep user requirements separate from construction controls. A fixed dimension,
-including one in feature acceptance, remains an equality during repair; only an
-explicitly declared range permits variation. Never resize a target to pass QA.
+Keep user requirements separate from construction controls. At first intent authoring,
+give ordinary exterior dimensions their nominal value and an explicit ±0.1 mm range;
+user tolerances and functional fit requirements take precedence. This is a modeling
+allowance, not printer accuracy. Preserve existing fixed targets and agreed ranges
+during repair. Prefer 0.01 mm steps for ordinary editable lengths and recheck geometry.
+Report ordinary dimensions to 0.01 mm; keep raw evidence unrounded.
 
 ## Start with one source and a visible construction
 
@@ -82,8 +85,9 @@ Preserve defining form and function when replacing a failed construction.
 
 Inspect the current `preview` or failure's `diagnosticPreview` with `view_image`;
 an older successful render may be stale. Compare the final STEP against all
-intent targets. For a size at a height use `a3d measure MODEL.step --section-z HEIGHT`;
-typed section dimensions are checked on final STEP at 0.0001 mm numerical precision.
+intent targets. For a size at a height use `a3d measure MODEL.step --section-z HEIGHT`.
+Typed section checks use the agreed ranges on final STEP. Stop dimension calibration
+when all targets are within their ranges; numerical precision is not a design target.
 For a shape edit, `a3d compare BEFORE.glb AFTER.glb --view front` uses a shared
 camera and scale when coordinates and units match. Section insets and finite
 thickness samples do not prove global minimum walls: inspect witness location,

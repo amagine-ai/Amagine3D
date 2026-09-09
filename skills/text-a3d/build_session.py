@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from hashlib import sha256
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -128,7 +129,7 @@ class BuildSession:
             cad_helpers._raise_deferred_source_issues()
         self._commit_evidence(working)
 
-    def _owner_for_new_feature(self, feature_id: str, part_name: str | None = None) -> str:
+    def _check_new_feature(self, feature_id: str, part_name: str | None) -> None:
         self._check_mutation()
         if part_name is not None and (not isinstance(part_name, str) or not part_name.strip()):
             raise AuthoringError("build feature", ["part_name must be a nonempty string"])
@@ -136,6 +137,9 @@ class BuildSession:
             raise AuthoringError("build feature", ["feature ID must be a nonempty string"])
         if feature_id in self._features or feature_id in self._evidence.features:
             raise AuthoringError("build feature", [f"feature {feature_id!r} is already bound"])
+
+    def _owner_for_new_feature(self, feature_id: str, part_name: str | None = None) -> str:
+        self._check_new_feature(feature_id, part_name)
         if self._intent is None:
             owner = part_name or (next(iter(self._part_names)) if len(self._part_names) == 1 else None)
             if owner not in self._part_names:
@@ -143,14 +147,22 @@ class BuildSession:
             return owner
         if feature_id not in self._owners:
             raise AuthoringError("build feature", [
-                f"feature {feature_id!r} is not declared in intent; add/cut/observe bind intent features. "
-                "For construction-only pieces, see references/authoring-example.md: "
-                "finish plus a physical observation of the declared feature."
+                f"feature {feature_id!r} is not declared in intent; observe binds an existing requirement. "
+                "Construction add/cut operations require an explicit part_name and do not bind requirements."
             ])
         owner = self._owners[feature_id]
         if part_name is not None and part_name != owner:
             raise AuthoringError("build feature", [f"feature {feature_id!r} belongs to {owner!r} in intent, not {part_name!r}"])
         return owner
+
+    def _owner_for_operation(self, feature_id: str, part_name: str | None) -> tuple[str, bool]:
+        if self._intent is not None and isinstance(feature_id, str) and feature_id not in self._owners:
+            self._check_new_feature(feature_id, part_name)
+            if part_name not in self._part_names:
+                raise AuthoringError("build operation", [
+                    f"construction operation {feature_id!r} requires an explicit part_name from {sorted(self._part_names)}"])
+            return part_name, False
+        return self._owner_for_new_feature(feature_id, part_name), True
 
     @staticmethod
     def _solid(shape, *, single: bool = False) -> None:
@@ -162,30 +174,66 @@ class BuildSession:
     def _remember(self, feature_id: str, owner: str, role: str, shape: Shape) -> None:
         self._features[feature_id] = {"owner": owner, "role": role, "shape": deepcopy(shape)}
 
+    def _initial_add(self, feature_id: str, owner: str, shape: Shape, minimum: float) -> None:
+        """Record actual initialization of an owner, without claiming a union."""
+        if (isinstance(minimum, bool) or not isinstance(minimum, (int, float))
+                or not math.isfinite(minimum) or minimum < 0):
+            raise cad_helpers.BuildInvariantError("min_added_mm3 must be finite and non-negative")
+        self._solid(shape, single=True)
+        added = float(shape.volume)
+        if not math.isfinite(added) or added <= 0:
+            raise cad_helpers.BuildInvariantError("initial add must contain finite positive material volume")
+        stats = cad_helpers._stats(shape)
+        if added < minimum:
+            cad_helpers._defer_source_issue({
+                "check": "initial-add", "code": "SOURCE.INITIAL_ADD_BELOW_MINIMUM",
+                "featureId": feature_id, "partId": owner,
+                "expected": {"minimumAddedMm3": float(minimum)},
+                "observed": {"addedMm3": added, "addition": stats},
+            }, f"initial add {feature_id!r} contains {added:.6f} mm^3; below min_added_mm3")
+            cad_helpers._raise_deferred_source_issues()
+        cad_helpers._evidence().events.append({
+            "id": feature_id, "kind": "add", "part": owner,
+            "added_mm3": added, "tool": stats,
+        })
+
     def add(self, feature_id: str, shape: Shape, *, min_added_mm3: float = 0.001,
             part_name: str | None = None) -> Shape:
-        """Add actual material to its owning part. Returns a copy; submit further edits with finish()."""
-        owner = self._owner_for_new_feature(feature_id, part_name)
+        """Add material; undeclared IDs need explicit owner and record only events.
+
+        Returns a copy; submit further edits with finish().
+        """
+        owner, bind_feature = self._owner_for_operation(feature_id, part_name)
         snapshot = deepcopy(shape)
         self._solid(snapshot)
         with self._transaction():
-            result = cad_helpers.checked_union(
-                self.part(owner), snapshot, feature_id, min_added_mm3=min_added_mm3, part_name=owner,
-            ) if owner in self._parts else deepcopy(snapshot)
-            cad_helpers.observe(snapshot, feature_id, role="solid", part_name=owner)
-        self._remember(feature_id, owner, "solid", snapshot)
+            if owner in self._parts:
+                result = cad_helpers.checked_union(
+                    self.part(owner), snapshot, feature_id, min_added_mm3=min_added_mm3, part_name=owner)
+            else:
+                if not bind_feature:
+                    self._initial_add(feature_id, owner, snapshot, min_added_mm3)
+                result = deepcopy(snapshot)
+            if bind_feature:
+                cad_helpers.observe(snapshot, feature_id, role="solid", part_name=owner)
+        if bind_feature:
+            self._remember(feature_id, owner, "solid", snapshot)
         self._parts[owner] = deepcopy(result)
         return self.part(owner)
 
     def cut(self, feature_id: str, tool: Shape, *, min_removed_mm3: float = 0.001,
             part_name: str | None = None) -> Shape:
-        """Cut the owning part and record its effect. Returns a copy; submit further edits with finish()."""
-        owner = self._owner_for_new_feature(feature_id, part_name)
+        """Cut material; undeclared IDs need explicit owner and record only events.
+
+        Returns a copy; submit further edits with finish().
+        """
+        owner, bind_feature = self._owner_for_operation(feature_id, part_name)
         body, snapshot = self.part(owner), deepcopy(tool)
         with self._transaction():
             result = cad_helpers.checked_cut(
                 body, snapshot, feature_id, min_removed_mm3=min_removed_mm3, part_name=owner)
-        self._remember(feature_id, owner, "cutter", snapshot)
+        if bind_feature:
+            self._remember(feature_id, owner, "cutter", snapshot)
         self._parts[owner] = deepcopy(result)
         return self.part(owner)
 

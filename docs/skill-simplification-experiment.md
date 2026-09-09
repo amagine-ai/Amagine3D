@@ -491,3 +491,27 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 产品仅在已有surface-shell指南把“保留”改为“保留或补上缺失检查”，以五行top-only `ValueError` 片段说明真实owner、固定目标、完整收尾之后/导出之前与draft豁免；不把重复目标断言加回已有typed验收的示例，不新增API或解析acceptance文字。该实际文档片段另有8项逻辑控制（目标内外、dev11观测值、缺截面、NaN/无穷、draft不测量）全部通过；这些是提供数值的分支控制，不能冒充重新建造几何。三项公开控制用的是四尺寸assert插入版，明确与最终文档片段区分。证据：[实际片段逻辑控制](../workspace/quality-v7-audit/legacy-final-assertion-proposal/product-guide-validation/logic-controls.json)。
 
 曲面段落还把旧源“adapt callbacks”替换为具体迁移：完整构造/finish移入返回fresh BuildSession的函数，保留原intent的普通Python路径，局部stations同时进入外形、内腔和station_at，最终验收/export与可导入试算分开。dev11源是模块级构造且station_at读全局，因此这些是实际迁移陷阱，不是又一套solver；原有限差分方法和30次上限保持。主入口删除重复断言句，不新增入口。上述是已验证机制及迁移说明，尚未证明模型采用、完整质量通过或正式A/B改善；下一轮必须保持原开发输入与预算验证。
+
+### dev-12：更接近固定口宽，但两例仍超时，最终要求未全部通过
+
+`dev-12` 冻结 `2105526741e9319ed72b81f27b3d525a032816c2`，保持原两开发case、旧cup seed/intent、runtime/harness、同模型medium、每例1,200秒和并发2。杯子与外壳均timeout，实际 **1200.060 / 1200.024秒**，保留原 **05:40:28.702 / 05:40:28.695 UTC** 截止。本轮没有可见SDK/provider断流或重连错误，只有固定启动warning；这不证明不可见设施状态完全正常，也不把工具间空档当作思考证据。没有反馈模型、自动补跑或正式holdout。两例cleanup和独立session路径/cwd复核均0残留，没有发信号；杯子102文件、外壳50文件的cutoff→after-exit→current逐一相同，**0晚写、0不稳定**，冻结完整性通过。证据：[终态与过程报告](../workspace/quality-evaluation-v1/development/dev-12/inspection/development-transport-review.md)、[清理复核](../workspace/quality-evaluation-v1/development/dev-12/inspection/post-cleanup-verification.json)。
+
+杯子 **56.765秒**首草模成功、**88.912秒**读取完整曲面指南、**154.132秒**首改源；7次草模全部成功。共 **4次completed compile，其中1失败、3PASS**，首PASS **520.773秒**，最后PASS **1122.612秒**。这是一个模型会话里的连续迭代，不是3或4个独立样本。最终轮 `0914af1f-c86a-47c5-aba8-a95c51b75c43` 的 **32个文件全部匹配cutoff**，源SHA `7390b413…`、STEP `4364f2de…`、report `ecf7b63a…` 和预览同版；历史PASS单独保留，最终交付只判断真实终态。模型在超时前没有最终回复或turn.completed，但已有同版完整工件，不能把transport timeout等同于零产物。证据：[全部完成轮与终态绑定](../workspace/quality-evaluation-v1/development/dev-12/inspection/complete-snapshot-terminal-bindings.json)。
+
+**1168.534秒**官方测量绑定最后一次正式STEP，整体包络 **81.999989583716×62.000026054283×95.000000100000 mm**，z95外口 **54.0001013664441 mm**。相对固定54 mm的误差0.0001013664441 mm，比原 **1e−4 mm** 容差多约 **1.36644e−6 mm**，因此严格判据仍失败，不能四舍五入成通过。它明显比dev11的54.099425 mm接近目标，但这项数值改善不等于全模型合格。最后可见消息报54.0001并称尺寸与报告一致，没有明确承认该边界超差。源确实采用5 mm真实直脚extrusion，但没有加入旧合同最终尺寸guard或联合校准callback；仍手调站点和内缩量。首PASS后WALL_INSET 6→7→7.75，p05仍1.80754 mm，最终min0.00567、采样区域违反比例0.060866及两项warning保留；口/底有限截面和模型对曲率/自由口缘的归因不能证明全壁厚或实际警告原因。独立同版足缘/装配结果另记，不拿首PASS测量充当最终版。证据：[同版官方测量及精度判断](../workspace/quality-evaluation-v1/development/dev-12/inspection/cup-final-official-measurement-binding.json)。
+
+外壳在 **32.410秒**读到新版−Y安装源，但首源前文档/API实际返回 **78,434字符**，随后还读完整连接/安装/意图/打印资料；**534.338秒**才写16.6KB源码。**548.076秒**首草模发现PCB底托与owner相隔1 mm，修复后 **602.851秒**草模成功，晚于dev11的297.226秒。区间Box已采用，不能继续归因旧起点/中心错误。intent先经历导入路径、back方向和cover thickness失败，**823.519秒**有效；首compile **876.526秒**又遇`screen-bottom-seat`未声明。模型补声明后进入不可变intent/修订证据返工，v2直到 **1090.697秒**通过。最终 **3次完整compile全失败**，后两轮依次是display与physical reference同名、`nodes[27].physicalFeatureRef must reference a non-display feature`。最后失败轮12文件匹配cutoff，但缺1项且没有完整report/最终preview交付，尚未到安装与制造验收；成功草模不代表最终装配通过。
+
+原始7条完成compile全部由observer捕获，共11次快照；每个PASS均32文件/0gap/同版预览，失败的gap原样保留。零SDK错误不能消除已发生的source/contract/display衔接成本：外壳读到新示例仍没完成最终绑定，杯子更早达到包络并把口宽逼近精度边界，但未采用现有成品guard，之后继续围绕相同warning做完整导出循环。当前只能确认这些具体数值与路线变化，**仍不能宣称整体建模质量提高**。记录和源码/日志SHA见[本轮收据](../workspace/quality-evaluation-v1/development/dev-12/inspection/review-receipt.json)；后续机制或示例改动须另行验证，不能追认本轮成功。
+
+### dev-12 后：按打印用途约定尺寸范围，拆开构造操作与需求绑定
+
+用户指出普通3D打印不应围绕小数点后多位反复调整。按这一新方向，初次意图编写时，普通外形使用名义值±0.1 mm的已有 `constraint.range`，普通可编辑长度优先取0.01 mm步长，显示通常保留两位。显式用户公差与功能配合优先；范围是建模偏差约定，不是设备精度保证。原始几何/测量、内核数值精度、壁厚/底板/间隙/碰撞检查不舍入、不放宽；已绑定合同的修改仍可追溯。没有新增schema、配置层或公共API。主SKILL 108→112行，曲面指南仍119行；曲面例子只增加四个尺寸范围及一项说明，名义尺寸/截面位置/壁厚/底板和其他意图内容不变。校准先量实际几何，对允许范围内的尺寸立即停止，不继续追逐名义值；保留严格固定尺寸路线。
+
+冻结dev12终态另做一次源参数舍入对照：只把三项可编辑长度 `81.93421/61.81177/55.24615` 保存为 `81.93/61.81/55.25`，其余源码字节相同，原intent/profile和冻结runtime不变。一次managed draft加一次实际STEP测量用时14.795秒；原始XYZ为 `81.99584459675134 / 61.99848575489486 / 95.00000010000028 mm`，z95外口为 `54.00512665990029 mm`。新普通外形±0.1范围下四项满足，最大偏差约0.0052 mm；原固定1e−4列仍记录X/Y/口宽失败。没有solver、最终compile、壁厚或整体质量通过声明。证据：[舍入对照](../workspace/quality-v7-audit/ordinary-dimension-rounding-prototype/)。先前6次精确校准的隔离原型仍保留，但不把追逐1e−5作为普通尺寸的产品要求。
+
+`BuildSession.add/cut` 现在允许用明确合法owner记录未声明的内部构造ID，只留下真实材料操作事件，不强制向意图增加需求。每项已声明物理feature仍须同owner真实绑定；未声明observe、错误owner、重复绑定与失败材料操作继续拒绝并回滚。首次内部add记录实际初始化，不伪称union。正式scene和独立build-check都补齐所有声明物理feature检查，事件、报告观察值或同ID显示节点不能替代缺失绑定。真实cutters、finish、observe、安装和紧固件链路保留。独立审查限定：绑定完整性不证明功能或任意recipe的最终材料；旧hybrid独立审计会按当前BRep-only scene规则新拒绝。证据：[独立审查](../workspace/quality-v7-audit/construction-binding-decoupling-review/final-binding-static-review-01/review.md)。
+
+回归去重共81个Python测试方法通过：BuildSession 19、manifest 29、scene 28、公开作者示例5；新增方法仅7个。5个公开示例完整suite用时152.303秒，覆盖实际STEP/网格、安装与四颗紧固件、曲面修改后意图不变、真正越界拒绝。曲面负例的Y控制改为80.4，使实际包络越过新±0.1范围；未删除原错误断言。另17项纯片段/意图控制通过，包含范围内只测一次即exit0、混合fixed/range、原始值越界但显示舍入相同仍拒绝、空截面/NaN和draft行为；这些不冒充真实几何测试。日志：[公开示例](../workspace/quality-v7-audit/construction-binding-decoupling-review/public-validation-01/test.log)、[manifest与scene](../workspace/quality-v7-audit/construction-binding-decoupling-review/root-validation-01/)、[片段与意图控制](../workspace/quality-v7-audit/surface-range-update/receipt.json)。
+
+新约定不能改写历史严格判据或追认timeout。按±0.1 mm看，dev11与dev12的口宽都满足，二者小数差异不再是实质质量提升的依据。后续比较须先固定同一公差政策，在两组使用相同要求；原始结论另存，未知壁厚、缺交付和装配失败不因公差变化成为通过。尚未启动下一轮模型比较、正式holdout或读取封存内容，当前不宣称整体建模质量提高。
