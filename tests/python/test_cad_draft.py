@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from build123d import import_step
 from PIL import Image
@@ -59,6 +60,8 @@ class CadDraftTests(unittest.TestCase):
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["issues"], [])
         self.assertFalse(result["deliveryReady"])
+        self.assertEqual(result["constructionFeatures"], {})
+        self.assertIn("not intent requirements", result["constructionFeatureScope"])
         self.assertNotIn("pass", result)
         self.assertNotIn("deliverables", result)
         self.assertEqual(before, {path: path.read_bytes() for path in protected})
@@ -156,14 +159,37 @@ class CadDraftTests(unittest.TestCase):
         self.assertTrue((Path(result["result"]).parent / "draft-preview.png").is_file())
 
     def test_mutated_geometry_bytes_are_not_bound_as_ready_draft(self):
-        source = self.source()
-        source.write_text(source.read_text() + "import os\nfrom pathlib import Path\n(Path(os.environ['AMAGINE3D_DRAFT_DIR']) / 'draft-preview.png').write_bytes(b'changed')\n")
-        command = self.cli("draft", source.name)
-        result = json.loads(command.stdout)
-        self.assertEqual(command.returncode, 1)
-        self.assertEqual(result["issues"][0]["code"], "DRAFT.INCOMPLETE")
-        self.assertNotIn("repairHint", result["issues"][0])
-        self.assertEqual(result["artifacts"], {})
+        mutations = ("(root / 'draft-preview.png').write_bytes(b'changed')", '''
+p = root / "draft-geometry.json"
+data = json.loads(p.read_text())
+data["constructionFeatures"] = {"feature": {"owner": "absent", "role": "solid"}}
+p.write_text(json.dumps(data))
+''')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                source = self.source()
+                source.write_text(source.read_text() + "import json, os\nfrom pathlib import Path\nroot = Path(os.environ['AMAGINE3D_DRAFT_DIR'])\n" + mutation + "\n")
+                command = self.cli("draft", source.name)
+                result = json.loads(command.stdout)
+                self.assertEqual(command.returncode, 1)
+                self.assertEqual(result["issues"][0]["code"], "DRAFT.INCOMPLETE")
+                self.assertNotIn("repairHint", result["issues"][0])
+                self.assertEqual(result["artifacts"], {})
+                self.assertNotIn("constructionFeatures", result)
+
+    def test_construction_metadata_rejects_invalid_fields_before_geometry_export(self):
+        invalid = ([], {" ": {"owner": "body", "role": "solid"}}, {"f": None},
+                   {"f": {"owner": "body"}}, {"f": {"owner": "body", "role": "solid", "acceptance": "passed"}},
+                   {"f": {"owner": "unknown", "role": "solid"}}, {"f": {"owner": "module", "role": "solid"}},
+                   {"f": {"owner": [], "role": "solid"}}, {"f": {"owner": "body", "role": "requirement"}},
+                   {"f": {"owner": "body", "role": []}})
+        output = self.workspace / "metadata-draft"
+        with patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": "draft",
+                                    "AMAGINE3D_DRAFT_DIR": str(output), "AMAGINE3D_DRAFT_RUN_ID": "metadata-test"}):
+            for features in invalid:
+                with self.subTest(features=features), self.assertRaisesRegex(ValueError, "construction"):
+                    export_draft({"body": object()}, references={"module": object()}, construction_features=features)
+        self.assertFalse(output.exists())
 
     def test_intent_option_is_bounded_and_input_mutation_rejects_preview(self):
         intent, _ = write_intent(self.workspace, part="body", feature_owners={"body": "body"})
@@ -312,6 +338,7 @@ data = json.loads(p.read_text())
         record = build_manifest(["export_draft"])["query"]["export_draft"]
         self.assertTrue(record["available"])
         self.assertEqual(record["provider"], "cad_draft")
+        self.assertIn("construction_features", record["parameters"])
         self.assertIn("export_draft(parts)", record["description"])
         self.assertIn("BuildSession", record["description"])
         self.assertIn("a3d compile", record["description"])

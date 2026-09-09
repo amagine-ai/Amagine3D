@@ -295,7 +295,10 @@ class BuildSession:
         self._check_mutation()
         if self.is_draft:
             from cad_draft import export_draft
-            return export_draft(self._parts, references=draft_references)
+            construction_features = {feature_id: {"owner": feature["owner"], "role": feature["role"]}
+                                     for feature_id, feature in self._features.items()}
+            return export_draft(self._parts, references=draft_references,
+                                construction_features=construction_features)
         missing = self._part_names - set(self._parts)
         if missing:
             raise AuthoringError("build parts", [f"parts have no geometry: {sorted(missing)}"])

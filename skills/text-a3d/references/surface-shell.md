@@ -22,10 +22,45 @@ section; the assertion reports target and measured width before export in both
 draft and compile. Use the requested datum and size for the actual model, and
 retain the complete shape's preview and independent final STEP checks.
 
+When several finished dimensions keep drifting together, calibrate the controls
+together. In a small local script, put the complete construction, cavity and
+finishing in a function; measure its final BRep on every call. Keep the targets
+fixed. The following is one update for three independent controls and three
+measured dimensions, using the existing NumPy runtime:
+
+```python
+import numpy as np
+
+actual = measure_finished(controls)  # rebuild; return measured dimensions as an array
+error = actual - targets
+h = 0.02  # mm; choose a small finite perturbation for these length controls
+jacobian = np.column_stack([
+    (measure_finished(controls + np.eye(3)[i] * h) - actual) / h
+    for i in range(3)
+])
+change = np.linalg.solve(jacobian, -error)
+change *= min(1.0, 2.0 / max(np.max(np.abs(change)), 1e-12))
+```
+
+Keep finite-difference probes and proposed changes within physically valid control
+bounds. Try this change, then half or a quarter if needed; accept only a reduction
+in the Euclidean norm of all target errors. Retest every target
+after each accepted update. Keep every trial's controls, measurements and failures,
+and cap the experiment at 30 geometry evaluations. Stop on invalid geometry,
+singular sensitivity or failure to improve; simplify the construction instead of
+enlarging tolerances. Save the resulting controls into the ordinary source, then
+run the full public compile. Numerical convergence says nothing about wall,
+foot, fit or visual quality; those checks still apply to the changed geometry.
+
 `RULED=True` allows visible shoulder transitions. Smooth lofts are also useful
 when the profiles remain valid; changing this setting requires fresh geometry
 and wall checks. G2 continuity is not required. Simplify or split the BRep
-construction when profiles become unstable.
+construction when profiles become unstable. Near a flat foot, a smooth loft can
+retreat before widening and leave a thin projecting edge. Union a short outer-foot
+extrusion with the loft before subtracting the common cavity, preserving the
+required floor and foot profile. This gives direct control of the lower wall;
+inspect the actual section near the join. Adding closely spaced stations alone
+does not establish a sound foot.
 
 Copy the two files into the current session workspace, then use the public path:
 

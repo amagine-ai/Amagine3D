@@ -26,6 +26,10 @@ from cad_diagnostics import SOURCE_DIAGNOSTICS_SCHEMA
 
 DRAFT_SCHEMA = "a3d-draft-result/v1"
 GEOMETRY_SCHEMA = "a3d-draft-geometry/v1"
+CONSTRUCTION_FEATURE_SCOPE = (
+    "Registered construction features only; not intent requirements or a complete operation inventory. "
+    "Some finish operations and native edits are not registered."
+)
 SOURCE_GUIDANCE = ("Before intent, use BuildSession(..., part_names=(...)) and export(); "
                    "for an existing intent-bound source, supply --intent INTENT.json. "
                    "export_draft(parts) is also supported. Final acceptance uses a3d compile.")
@@ -35,7 +39,26 @@ def _binding(path: Path) -> dict[str, str]:
     return {"path": str(path.resolve()), "sha256": sha256(path.read_bytes()).hexdigest()}
 
 
-def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | None = None) -> dict:
+def _construction_features(features: Mapping[str, Any], parts) -> dict[str, dict[str, str]]:
+    if not isinstance(features, Mapping):
+        raise ValueError("draft construction_features must map IDs to owner and role")
+    records = {}
+    for feature_id, feature in features.items():
+        if not isinstance(feature_id, str) or not feature_id.strip():
+            raise ValueError("every draft construction feature needs a nonempty ID")
+        if not isinstance(feature, Mapping) or set(feature) != {"owner", "role"}:
+            raise ValueError(f"draft construction feature {feature_id!r} needs only owner and role")
+        owner, role = feature["owner"], feature["role"]
+        if not isinstance(owner, str) or owner not in parts:
+            raise ValueError(f"draft construction feature {feature_id!r} owner must name a proposed part")
+        if not isinstance(role, str) or role not in {"solid", "cutter", "separate"}:
+            raise ValueError(f"draft construction feature {feature_id!r} role must be solid, cutter or separate")
+        records[feature_id] = {"owner": owner, "role": role}
+    return records
+
+
+def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | None = None,
+                 construction_features: Mapping[str, Mapping[str, str]] | None = None) -> dict:
     """Call export_draft(parts) from a3d draft to preview named BRep parts.
     BuildSession.export() uses this same preview path under a3d draft. Neither
     form bypasses the final intent, source or manufacturing checks in a3d compile.
@@ -43,6 +66,8 @@ def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | No
     No intent, features or manufacturing claims are required. All geometry is
     display-only; blue parts and orange references retain their source placement
     in millimetres, Z up. This call cannot run as a final compile export.
+    construction_features optionally maps registered IDs to owner/role; it does
+    not declare intent requirements or cover all finish operations/native edits.
     """
     if os.environ.get("AMAGINE3D_SOURCE_PHASE") != "draft":
         raise RuntimeError("export_draft requires a3d draft; use the complete intent and compile path for final artifacts")
@@ -61,6 +86,7 @@ def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | No
         raise ValueError("draft references must map names to BRep solids")
     if set(parts) & set(references):
         raise ValueError("draft part and reference names must be distinct")
+    construction_records = _construction_features({} if construction_features is None else construction_features, parts)
 
     from build123d import Compound, Unit, export_step
     from cpu_z_buffer import DEFAULT_MATERIAL, render_contact_sheet
@@ -95,6 +121,7 @@ def export_draft(parts: Mapping[str, Any], *, references: Mapping[str, Any] | No
     result = {"schema": GEOMETRY_SCHEMA, "status": "draft", "deliveryReady": False,
               "runId": run_id, "units": "mm", "coordinateSystem": {"handedness": "right", "up": "Z"},
               "objects": records,
+              "constructionFeatures": construction_records, "constructionFeatureScope": CONSTRUCTION_FEATURE_SCOPE,
               "artifacts": {"step": _binding(step), "glb": _binding(glb), "preview": _binding(preview)}}
     _write_json(manifest_path, result)
     return result
@@ -185,7 +212,14 @@ def run_draft(source: Path, *, workspace: Path, timeout_seconds: float = 120.0,
                 path = _workspace_path(output, Path(filename), f"draft {kind}", must_exist=True)
                 if manifest["artifacts"].get(kind) != _binding(path):
                     raise ValueError(f"draft {kind} does not match its recorded bytes")
+            construction_records = _construction_features(
+                manifest.get("constructionFeatures", {}),
+                {item["name"] for item in manifest["objects"] if item["role"] == "proposed-part"},
+            )
+            if manifest.get("constructionFeatureScope", CONSTRUCTION_FEATURE_SCOPE) != CONSTRUCTION_FEATURE_SCOPE:
+                raise ValueError("draft construction feature scope changed")
             result.update(status="draft", artifacts=manifest["artifacts"], objects=manifest["objects"])
+            result.update(constructionFeatures=construction_records, constructionFeatureScope=CONSTRUCTION_FEATURE_SCOPE)
             result["geometry"] = _binding(output / "draft-geometry.json")
         except (OSError, ValueError, KeyError, TypeError) as error:
             issue = {"code": "DRAFT.INCOMPLETE", "message": str(error)}

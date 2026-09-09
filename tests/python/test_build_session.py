@@ -175,16 +175,33 @@ build.export()
         source = self.work / "layout.py"
         source.write_text('''from build123d import Box, Pos
 from build_session import BuildSession
+from cad_helpers import checked_fillet
 build = BuildSession(__file__, part_names=("base", "lid"))
 build.add("plate", Box(20, 12, 3), part_name="base")
-build.cut("slot", Pos(0, 0, 1) * Box(2, 4, 4), part_name="base")
+for index, x in enumerate((-4, 4)):
+    build.cut(f"slot-{index}", Pos(x, 0, 1) * Box(2, 4, 4), part_name="base")
 build.add("lid-body", Pos(0, 0, 8) * Box(20, 12, 2), part_name="lid")
+build.finish("lid", lambda p: checked_fillet(p, p.edges(), .2, "lid-rounding"))
+build.observe("lid-surface", part_name="lid")
 build.export(draft_references={"module": Pos(0, 0, 4) * Box(4, 4, 2)})
 ''')
         result = run_draft(source, workspace=self.work)
         self.assertEqual(result["status"], "draft")
         self.assertEqual({o["name"] for o in result["objects"]}, {"base", "lid", "module"})
         self.assertEqual(len(import_step(result["artifacts"]["step"]["path"]).solids()), 3)
+        expected = {"plate": {"owner": "base", "role": "solid"},
+                    "slot-0": {"owner": "base", "role": "cutter"},
+                    "slot-1": {"owner": "base", "role": "cutter"},
+                    "lid-body": {"owner": "lid", "role": "solid"},
+                    "lid-surface": {"owner": "lid", "role": "separate"}}
+        self.assertEqual(result["constructionFeatures"], expected)
+        manifest = json.loads(Path(result["geometry"]["path"]).read_text())
+        self.assertEqual(manifest["constructionFeatures"], expected)
+        self.assertEqual(manifest["constructionFeatureScope"], result["constructionFeatureScope"])
+        self.assertIn("not intent requirements", result["constructionFeatureScope"])
+        self.assertIn("finish operations and native edits are not registered", result["constructionFeatureScope"])
+        self.assertNotIn("lid-rounding", result["constructionFeatures"])
+        self.assertFalse(list(self.work.glob("*intent*")))
         with self.assertRaises(AuthoringError):
             BuildSession(source, part_names=("base", "lid"))
         with patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": "draft", "AMAGINE3D_DRAFT_DIR": str(self.work / "manual")}):

@@ -43,6 +43,8 @@ after copying the build source, run `a3d draft SOURCE.py` before creating an
 intent or profile. The installed-module source owns its construction controls;
 its intent generator imports them without running geometry and keeps the brief's
 overall and component dimensions independent. No parameter JSON is needed.
+The draft's `constructionFeatures` lists registered IDs, owners and roles to reuse
+when writing intent; it is not the requirements or a complete list of operations.
 For the other examples, or a source that reads intent parameters, create the
 intent first and use `a3d draft SOURCE.py --intent INTENT.json`. Draft export is
 isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the same
