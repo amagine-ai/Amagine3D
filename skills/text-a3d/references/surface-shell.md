@@ -23,10 +23,11 @@ draft and compile. Use the requested datum and size for the actual model, and
 retain the complete shape's preview and independent final STEP checks.
 
 When finished dimensions keep drifting together, calibrate the controls together.
-The copied example's `build_geometry` constructs a fresh complete BRep, and
-`measure_finished` measures it without exporting. Keep any finishing inside
-`build_geometry`, so trials and final compile use the same construction. After
-creating the intent, a local calibration script can start with:
+For an existing model, adapt the example's `build_geometry` and `measure_finished`
+functions into its source, preserving its intent, part/feature IDs and actual
+station mapping. Keep finishing inside `build_geometry`, so trials and final
+compile use the same complete construction. For the copied standalone example,
+after creating its matching intent, a local calibration script can start with:
 
 ```python
 import numpy as np

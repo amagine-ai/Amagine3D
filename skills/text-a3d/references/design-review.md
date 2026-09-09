@@ -51,8 +51,8 @@ and focus on its modeled relationship to the enclosure.
 Resolve the installed condition as well as entry: what supports the component,
 what prevents unintended movement, and what closure or protection its use needs.
 Check these relationships on the first functional construction, before adding
-detail that depends on them. Declare applicable `installation_checks` on the
-receiving intent feature and bind the corresponding witness geometry using
+detail that depends on them. For final compilation, declare applicable
+`installation_checks` on the receiving intent feature and bind witness geometry using
 `installation-checks.md`; a reference node or an empty cavity alone proves none
 of these relationships. Choose requirements by function, without a universal
 fastener, cover or sealed-bottom rule.

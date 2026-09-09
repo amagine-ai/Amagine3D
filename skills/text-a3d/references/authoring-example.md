@@ -18,14 +18,38 @@ through the existing `write_scene` and STEP exporters. `surface-shell.md` explai
 the loft example's controls and wall-thickness checks.
 
 Run in the current session workspace (the runtime supplies `AMAGINE3D_SKILL_DIR`).
-Set `example_name=assembly` for the two-part example or `surface_shell` for the
-lofted enclosure, or `installed_module` for component installation. The profile below is an
-illustrative fallback; use the selected machine/nozzle or point the intent source
-at an existing valid profile.
+For a new single part, start with `simple_brep`; use `installed_module` for
+component installation. Both declare `part_names` and run before intent or profile:
 
 ```bash
 example_name=simple_brep
 cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
+a3d draft "${example_name}_build.py"
+```
+
+Inspect the returned preview with `view_image`, then develop the geometry in this
+source. The installed-module source owns its construction controls;
+its intent generator imports them without running geometry and keeps the brief's
+overall and component dimensions independent. No parameter JSON is needed.
+The draft's `constructionFeatures` lists registered IDs, owners and roles to reuse
+when writing intent; it is not the requirements or a complete list of operations.
+For `assembly` or `surface_shell`, set `example_name` and copy that build source.
+Before its first draft, run the profile/intent setup below through `a3d intent`,
+then use `a3d draft SOURCE.py --intent INTENT.json`; compile after reviewing the
+geometry. Other sources that read intent parameters also need intent first. Draft export is
+isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the same
+geometry source for final compile. A source without intent can declare
+`BuildSession(__file__, part_names=("housing", "cover"))` and use
+`build.add("cover-body", solid, part_name="cover")` (also on `cut`/`observe`).
+Final intent must declare these same parts, features and owners. Pass optional
+preview component envelopes as `build.export(draft_references={"module": solid})`;
+they do not become manufactured parts or final installation evidence.
+
+Create and validate the matching intent after exploration for the unbound examples,
+or before draft for the intent-bound examples. The profile is an illustrative fallback; use the
+selected machine/nozzle or point the intent source at an existing valid profile.
+
+```bash
 a3d profile --machine a1-mini --nozzle 0.4 --tool 0 --out "${example_name}_printer-profile.json"
 cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_intent.py" .
 python3 "${example_name}_intent.py"
@@ -36,24 +60,7 @@ a3d compile "${example_name}_scene.json" --intent "${example_name}_intent.json" 
 The intent source writes the target separately. The compiler executes the build
 with the bound intent, scene and output paths in environment variables. The build
 constructs physical objects; its session derives feature evidence and scene nodes
-from those objects, then exports. Inspect the returned preview with `view_image`.
-
-`simple_brep_build.py` and `installed_module_build.py` declare `part_names`:
-after copying the build source, run `a3d draft SOURCE.py` before creating an
-intent or profile. The installed-module source owns its construction controls;
-its intent generator imports them without running geometry and keeps the brief's
-overall and component dimensions independent. No parameter JSON is needed.
-The draft's `constructionFeatures` lists registered IDs, owners and roles to reuse
-when writing intent; it is not the requirements or a complete list of operations.
-For the other examples, or a source that reads intent parameters, create the
-intent first and use `a3d draft SOURCE.py --intent INTENT.json`. Draft export is
-isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the same
-geometry source for final compile. A source without intent can declare
-`BuildSession(__file__, part_names=("housing", "cover"))` and use
-`build.add("cover-body", solid, part_name="cover")` (also on `cut`/`observe`).
-Final intent must declare these same parts, features and owners. Pass optional
-preview component envelopes as `build.export(draft_references={"module": solid})`;
-they do not become manufactured parts or final installation evidence.
+from those objects, then exports. Inspect the current final preview with `view_image`.
 
 ## Reuse one feature identity
 

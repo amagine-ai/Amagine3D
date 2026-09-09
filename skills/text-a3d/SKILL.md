@@ -13,14 +13,12 @@ parts as build123d BRep solids with genuine STEP masters; derive meshes from the
 
 Start from the requested dimensions, defining contours and functional datums.
 Separate user requirements from your construction choices. For a functional device,
-resolve component envelopes, usable internal space, exterior passages, support,
-retention and assembly access. An opening must connect the exterior to its target
-cavity. Missing component dimensions call for reversible, explicit assumptions;
-they do not by themselves reduce a functional device to an appearance model.
-For a housing with installed components, start from the shared datums in
-`examples/installed_module_build.py`. It runs with `a3d draft` before any intent
-or profile; use its matching intent example after the geometry settles. Establish
-the cavity, mounting and access with simple solids before rounding the exterior.
+use component envelopes and shared datums to lay out the body, cavity and openings
+in the first draft. Missing component dimensions call for reversible, explicit
+assumptions; they do not reduce a functional device to an appearance model.
+For installed components, adapt the shared datums in `examples/installed_module_build.py`.
+Draft the body and cavity before intent or profile, then develop mounting and
+access on the visible construction before rounding the exterior.
 
 For appearance-led work, inspect the supplied images or establish a reference
 using the image guidance below. Read `references/surface-design.md` to choose
@@ -47,13 +45,15 @@ in intent. `examples/simple_brep_build.py` demonstrates both phases;
 `references/authoring-example.md` covers multipart ownership and component previews.
 Query needed signatures together with `a3d capabilities --symbol NAME`.
 
-Keep purchased reference components outside the manufactured part list. The final
-`NAME-display.glb` is an assembly preview and may include optional display-only
-references; it does not require a dummy component. Installation geometry remains
-necessary whether or not references are displayed. Read
-`references/installation-checks.md` when the design needs installation evidence.
-
 ## Compile the chosen construction
+
+For a functional device, verify usable space, openings from outside into the target cavity,
+support, retention and assembly access before final compile. Use `references/design-review.md`
+and bind applicable installed-component evidence with `references/installation-checks.md`.
+
+Keep purchased references outside manufactured parts. They may appear in the final
+`NAME-display.glb` assembly preview; no dummy component is required. Installation
+geometry remains necessary whether or not references are displayed.
 
 Use the selected printer and existing valid profile. Resolve usable print volume
 before fixing dimensions or details. For multipart work, use `a3d layout` on part
@@ -74,6 +74,7 @@ expose controlling dimensions near its top. Choose an API example to adapt:
 
 - One BRep part: `examples/simple_brep_intent.py` and `simple_brep_build.py`.
 - A simple mating pair: `examples/assembly_intent.py` and `assembly_build.py`.
+- Component installation: `examples/installed_module_intent.py` and its build source.
 - A section-controlled shell: `references/surface-shell.md`.
 
 `BuildSession.add`/`cut` derive scene bindings and operation evidence. Submit final
@@ -164,8 +165,7 @@ Route by the actual construction or unresolved question:
 - Pressable/sliding mechanism: `a3d guide pressable-control`.
 - Multipart assembly: `a3d guide multipart`; for fastening into printed plastic or
   serviceable enclosure closure, `references/multipart-connections.md`.
-- Component fit, insertion, support, retention or passage: `references/design-review.md`
-  and `references/installation-checks.md`.
+- Final component fit, insertion, support, retention or passage: `references/installation-checks.md`.
 - Non-manufactured display: `references/installed-displays.md`.
 - Permanent printed color: `a3d guide color`; for multiple regions inside one part or
   uncommon topology, `color/BACKEND.md`.
