@@ -281,7 +281,8 @@ class BambuProfileTests(unittest.TestCase):
         profile = bambu_profile.resolve_profile(
             bambu_profile.load_catalog(), machine_name=None, nozzle=0.4, tool_index=0
         )
-        self.assertEqual(profile["machine"]["id"], "a1-mini")
+        self.assertEqual(profile["machine"]["id"], "a1")
+        self.assertEqual(profile["machine"]["selected_tool"]["height_mm"], 256)
         self.assertTrue(profile["selection"]["assumed_default_machine"])
 
 

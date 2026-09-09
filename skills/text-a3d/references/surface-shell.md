@@ -110,7 +110,7 @@ establish wall thickness after the cavity is cut.
 Copy the two files into the current session workspace, then use the public path:
 
 ```bash
-a3d profile --machine a1-mini --nozzle 0.4 --tool 0 --out surface_shell_printer-profile.json
+a3d profile --nozzle 0.4 --tool 0 --out surface_shell_printer-profile.json
 cp "$AMAGINE3D_SKILL_DIR/examples/surface_shell_intent.py" .
 cp "$AMAGINE3D_SKILL_DIR/examples/surface_shell_build.py" .
 python3 surface_shell_intent.py

@@ -7,7 +7,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from build123d import Box, BuildPart, BuildSketch, Circle, Plane, loft
+from build123d import Box, BuildPart, BuildSketch, Circle, Plane, Pos, fillet, loft
 import numpy as np
 import trimesh
 
@@ -20,6 +20,20 @@ from color import cad_helpers as color_helpers  # noqa: E402
 
 
 class PrintOrientationTests(unittest.TestCase):
+    def test_curved_cover_uses_planar_back_despite_lower_overhang_on_rounded_edge(self):
+        envelope = Box(80, 50, 100)
+        cover = fillet(envelope.edges(), 16) & (Pos(0, 24, 0) * Box(100, 12, 120))
+        cover += Pos(0, 10, 0) * Box(10, 20, 20)
+        for helpers in (cad_helpers, color_helpers):
+            with self.subTest(backend=helpers.__name__):
+                candidates = helpers._orientation_candidates(cover, {})
+                least_overhang = min(candidates, key=lambda c: c["orientation_metrics"]["overhang_area_mm2"])
+                self.assertEqual(least_overhang["orientation_metrics"]["contact_area_mm2"], 0)
+                selected = min(candidates, key=lambda c: c["score"])
+                self.assertEqual(selected["name"], "rotate-x--90")
+                self.assertGreater(selected["orientation_metrics"]["contact_area_mm2"], 3000)
+                self.assertTrue(selected["orientation_metrics"]["center_inside_contact_bounds"])
+
     def test_loft_candidates_serialize_without_inventing_bed_contact(self):
         with BuildPart() as envelope:
             with BuildSketch(Plane.XY):

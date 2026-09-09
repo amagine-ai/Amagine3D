@@ -53,7 +53,7 @@ or before draft for the intent-bound examples. The profile is an illustrative fa
 selected machine/nozzle or point the intent source at an existing valid profile.
 
 ```bash
-a3d profile --machine a1-mini --nozzle 0.4 --tool 0 --out "${example_name}_printer-profile.json"
+a3d profile --nozzle 0.4 --tool 0 --out "${example_name}_printer-profile.json"
 cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_intent.py" .
 python3 "${example_name}_intent.py"
 a3d intent "${example_name}_intent.json"

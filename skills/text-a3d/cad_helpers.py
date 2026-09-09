@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from hashlib import sha256
+import heapq
 import importlib.util
 import json
 import math
@@ -862,9 +863,9 @@ def _orientation_candidates(
             "rotate_degrees_xyz": [round(value, 5) for value in rotation],
             "score": [
                 0 if fits else 1,
-                round(float(metrics["overhang_area_mm2"]), 5),
                 no_contact_penalty,
                 center_penalty,
+                round(float(metrics["overhang_area_mm2"]), 5),
                 stability_score,
                 round(-float(metrics["contact_area_mm2"]), 5),
                 protected_penalty,
@@ -952,6 +953,87 @@ def _print_plate(
             translate_mm=translate,
         )
     return Compound(children=list(placed.values())), placed, transforms, layout
+
+
+def _assembly_print_layout(parts: dict[str, object], profile: dict, *, intent_data=None):
+    """Pack preferred poses first, then search stable alternatives without scaling."""
+    orientations = {
+        name: _select_print_orientation(shape, profile, intent_data=intent_data)
+        for name, shape in parts.items()
+    }
+    oriented = {
+        name: _apply_print_orientation(shape, orientations[name])
+        for name, shape in parts.items()
+    }
+    try:
+        return orientations, oriented, _print_plate(oriented, profile=profile)
+    except BuildInvariantError as error:
+        if not isinstance(error.__cause__, PlateLayoutError) or error.__cause__.kind != "layout-not-found":
+            raise
+        original_error = error
+
+    names = sorted(parts)
+    options = []
+    for name in names:
+        fitting = sorted(
+            (c for c in orientations[name]["candidates"] if c["fits_profile"]),
+            key=lambda c: c["score"],
+        )
+        if not fitting:
+            raise original_error
+        # A packed plate must not trade an available stable base for zero contact
+        # or an unsupported center of mass. Equal footprints need only one pose.
+        stability_class = fitting[0]["score"][1:3]
+        unique = {}
+        for candidate in fitting:
+            if candidate["score"][1:3] != stability_class:
+                continue
+            x, y, z = candidate["dimensions_mm"]
+            unique.setdefault((min(x, y), max(x, y), z), candidate)
+        options.append(list(unique.values()))
+
+    def priority(indices):
+        scores = [options[i][index]["score"] for i, index in enumerate(indices)]
+        return tuple(sum(values) for values in zip(*scores))
+
+    initial = (0,) * len(names)
+    queue = [(priority(initial), initial)]
+    visited = {initial}
+    cache = {}
+    attempts = 0
+    while queue and attempts < 256:
+        _, indices = heapq.heappop(queue)
+        attempts += 1
+        trial = {
+            name: {**orientations[name], "selected": {
+                key: value for key, value in options[i][indices[i]].items()
+                if key != "preference"
+            }, "strategy": "bounded-joint-stability-support-layout"}
+            for i, name in enumerate(names)
+        }
+        if indices != initial:  # The preferred combination already failed above.
+            placed = {}
+            for i, name in enumerate(names):
+                key = (name, indices[i])
+                if key not in cache:
+                    cache[key] = _apply_print_orientation(parts[name], trial[name])
+                placed[name] = cache[key]
+            try:
+                packed = _print_plate(placed, profile=profile)
+            except BuildInvariantError as error:
+                if not isinstance(error.__cause__, PlateLayoutError) or error.__cause__.kind != "layout-not-found":
+                    raise
+            else:
+                packed[3]["orientationSearch"] = {"attempts": attempts, "limit": 256}
+                return trial, placed, packed
+        for i, index in enumerate(indices):
+            if index + 1 >= len(options[i]):
+                continue
+            neighbor = indices[:i] + (index + 1,) + indices[i + 1:]
+            if neighbor not in visited:
+                visited.add(neighbor)
+                heapq.heappush(queue, (priority(neighbor), neighbor))
+    raise original_error
 
 
 def observe(
@@ -1781,21 +1863,13 @@ def export_assembly(
                 ):
                     continue
 
-    # Reuse the single-part orientation policy before packing. Semantic solids
-    # remain untouched; individual STLs and the 3MF use the same selected pose.
-    print_orientations = {
-        part_name: _select_print_orientation(shape, plate_profile, intent_data=intent_data)
-        for part_name, (shape, _) in normalized.items()
-    }
-    oriented_parts = {
-        part_name: _apply_print_orientation(shape, print_orientations[part_name])
-        for part_name, (shape, _) in normalized.items()
-    }
     # Failed packing must not erase otherwise inspectable semantic geometry.
     try:
-        print_plate, plate_parts, plate_transforms, plate_layout = _print_plate(
-            oriented_parts, profile=plate_profile,
+        print_orientations, oriented_parts, packed = _assembly_print_layout(
+            {name: shape for name, (shape, _) in normalized.items()},
+            plate_profile, intent_data=intent_data,
         )
+        print_plate, plate_parts, plate_transforms, plate_layout = packed
     except BuildInvariantError as error:
         if not isinstance(error.__cause__, PlateLayoutError):
             raise

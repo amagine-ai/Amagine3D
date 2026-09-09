@@ -6,7 +6,7 @@
     "commit": "926a7192574bcb9b3a732e1ec59a46d79cb45466",
     "vendor_config_version": "02.08.00.05"
   },
-  "default_machine": "a1-mini",
+  "default_machine": "a1",
   "machines": {
     "a1-mini": {
       "name": "Bambu Lab A1 mini",

@@ -31,6 +31,7 @@ from build_manifest import (
 )
 from material_plan import validate_material_plan, validate_material_sources
 from mesh_topology import MeshTopologyError, physical_body_count
+from opening_placement import local_opening_evidence
 
 if __package__:
     from .export_3mf import inspect_color_archive, load_color_archive_mesh
@@ -753,6 +754,7 @@ def semantic_placement_observation(
     }
     if intent is None or report is None:
         return result
+    mesh_cache = {}
     owners = _intent_feature_owners(intent)
     multipart = intent.get("manufacturing", {}).get("mode") == "multipart"
     report_parts = report.get("parts", {})
@@ -829,13 +831,17 @@ def semantic_placement_observation(
         for record in records:
             bounds = record["bounds"]
             adjacent = _adjacent_external_faces(bounds, body_bounds, face, tolerance)
+            touches = _touches_face(bounds, body_bounds, face, tolerance)
+            local = None
+            if not touches and record["source"] == "event:cut":
+                local = local_opening_evidence(report, owner_part, bounds, *FACE_AXES[face], mesh_cache)
+                touches = local is not None and local["reaches_exterior"]
             record_results.append({
                 "adjacent_external_faces": adjacent,
                 "bounds_mm": bounds.round(5).tolist(),
                 "source": record["source"],
-                "touches_declared_face": _touches_face(
-                    bounds, body_bounds, face, tolerance
-                ),
+                "touches_declared_face": touches,
+                **({"local_opening": local} if local is not None else {}),
             })
         touches_declared = any(item["touches_declared_face"] for item in record_results)
         adjacent_faces = sorted({

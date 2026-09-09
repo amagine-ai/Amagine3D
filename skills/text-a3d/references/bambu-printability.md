@@ -4,11 +4,14 @@ Use the resolved Bambu profile as a manufacturing constraint, not as a report
 label. Preserve user dimensions and the selected profile throughout a repair
 loop.
 
+This workflow validates CAD geometry and manufacturing exports. Run an actual
+slicer only when requested; one plate is not a requirement unless specified.
+
 ## Profile decisions
 
 - Resolve one machine, nozzle, standard process, and tool before geometry.
-- Prefer an explicit user or project selection. Otherwise use A1 mini with a
-  0.4 mm nozzle as a conservative default and record the assumption.
+- Prefer an explicit user or project selection. Otherwise use the common A1
+  with a 0.4 mm nozzle and record the assumption.
 - For dual-tool machines, use the selected tool's polygon and height rather
   than the union of both tool envelopes.
 - Never switch profiles, lower limits, or scale user dimensions to clear QA.
@@ -88,8 +91,11 @@ with `a3d guide strategy`.
 
 - Reorient the build without changing required dimensions.
 - Evaluate all six bed-facing orientations, including a top-down 180-degree
-  flip. Profile fit is a hard gate; among fitting poses, support burden and
-  stable contact outrank minimizing print height. Candidate evidence records
+  flip. Profile fit is a hard gate; among fitting poses, bed contact and a
+  supported center of mass outrank support burden and print height. Assembly
+  export retries alternate stable poses when preferred poses cannot share a
+  plate; a bounded search failure still does not prove impossibility.
+  Candidate evidence records
   the uniform scale required to fit the selected profile as diagnostic evidence;
   it does not authorize resizing. An inferred dimension remains fixed unless an
   explicit allowed range was declared. Adjust within that range or make a

@@ -570,10 +570,10 @@ def _orientation_candidates(
             "rotate_degrees_xyz": [round(value, 5) for value in rotation],
             "score": [
                 0 if fits else 1,
-                round(float(metrics["support_volume_proxy_mm3"]), 5),
-                round(float(metrics["overhang_area_mm2"]), 5),
                 no_contact_penalty,
                 center_penalty,
+                round(float(metrics["support_volume_proxy_mm3"]), 5),
+                round(float(metrics["overhang_area_mm2"]), 5),
                 stability_score,
                 round(-float(metrics["contact_area_mm2"]), 5),
                 protected_penalty,
