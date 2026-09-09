@@ -878,6 +878,40 @@ class CadCompileTests(unittest.TestCase):
         self.assertTrue(summary["diagnostics"]["truncated"])
         self.assertEqual(json.dumps(result), original)
 
+        # Contextual repair guidance must survive terminal projection without
+        # rounding or changing the failed check's raw evidence or contract.
+        for code, check, precision, override, dimensional in (
+            ("QA.STEP_FAILED", "section:cup/outer:1:width_u_mm", 0.01, None, True),
+            ("QA.STEP_FAILED", "section:cup/outer:0:depth_v_mm", 0.0001, None, True),
+            ("QA.STEP_FAILED", "section:cup:0:width_u_mm", 0.01, "Keep the explicit repair.", False),
+            ("QA.STEP_FAILED", "dimension_x", 0.01, None, False),
+            ("QA.STEP_FAILED", None, 0.01, None, False),
+            ("QA.MESH_FAILED", "minimum_wall_thickness", 0.01, None, False),
+            ("INSTALLATION.CHECK_FAILED", "insertion:frame", 0.01, None, False),
+            ("QA.ASSEMBLY_FAILED", "interface_geometry", 0.01, None, False),
+        ):
+            with self.subTest(code=code, check=check, precision=precision, override=override):
+                details = {"observed": {"actual_mm": 54.11326970943438, "coordinate_frame": "semantic"},
+                           "expected": {"value_mm": 54, "min_mm": 53.9, "max_mm": 54.1,
+                                        "measurement_precision_mm": precision}}
+                before = json.dumps(details)
+                result = {"pass": False, "status": "failed", "deliveryReady": False,
+                          "result": {"path": "/tmp/part_compile-result.json"}, "issues": []}
+                cad_compile._issue(result, code=code, stage="qa:part", check=check,
+                                   message="actual check failed", repair_hint=override, details=details)
+                original = json.dumps(result)
+                issue = cad_compile._agent_summary(result)["issues"][0]
+                self.assertEqual(issue["expected"], details["expected"])
+                self.assertEqual(issue["observed"], details["observed"])
+                self.assertEqual(json.dumps(result), original)
+                self.assertEqual(json.dumps(details), before)
+                if dimensional:
+                    self.assertIn("toward the declared nominal dimension", issue["repairHint"])
+                    self.assertIn("this raw STEP check passes", issue["repairHint"])
+                    self.assertLessEqual(len(issue["repairHint"]), 240)
+                else:
+                    self.assertEqual(issue["repairHint"], override or cad_compile._repair_hint(code))
+
     def test_agent_summary_keeps_warning_measurements_and_labels_group_samples(self) -> None:
         warning = {
             "id": "warning-a", "code": "QA.THIN_WALL", "severity": "warning",

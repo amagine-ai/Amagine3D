@@ -551,3 +551,9 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 安装默认例子另用两次公开draft和真实STEP核对，frame、cover及独立参考module逐一配对，三对双向差集均0 mm³（7.573秒）；参考模块不计作制造件。公开作者测试最终去重6个方法通过，其中新增1个86×18×66外形/54×34×5模块的真实参数变体，检查两个制造实体、定位槽移除材料、四螺丝及安装审计。固定旧54×34定位尺寸的负例仍以零移除量被拒绝。完整suite182.193秒，原5方法通过；新增方法首次仅因错误文字断言失败，改查实际结构化SOURCE.CUT_MISSED_OWNER后单独复跑27.018秒通过，产品代码未因该断言调整。详见[公开回归与完整失败记录](../workspace/quality-v7-audit/construction-example-validation/result.md)及[默认几何等价](../workspace/quality-v7-audit/enclosure-starter-parameter-review/default-geometry-equivalence/results.md)。这些结果尚不能代替相同输入/预算的模型比较。
 
 交叉只读审查未发现产品阻断；补强现有测试helper，从首次intent生成到bound draft和完整compile后核对同一SHA。参数变体单方法再次通过（28.026秒），确认正例构造不回写初始独立目标；仍为6个独立方法，不把复跑累计成新增测试。
+
+### 尺寸失败提示直接指向名义值
+
+在dev14两杯首次完整compile中，typed顶口分别约54.12和54.11 mm，均仍在上边界之外；现有泛用QA提示没有直接说明应朝名义54 mm修正。当前worktree仅在`_issue`增加6行选择已有typed STEP外宽/深失败，替换为朝声明名义值调整构造控制、raw STEP检查通过即停止该尺寸校准的151字符静态动作提示。无新helper/API、重复数字、舍入建议或SKILL规则；严格精度同样适用，显式hint优先，壁厚/安装/接口等原提示保持。所有原expected/observed、原始精度和判定均不变。
+
+扩展1个现有pure摘要无修改方法，覆盖width/depth、普通/严格精度、显式hint及非typed检查等8个子情景，0.010秒通过；子情景不计为新增方法。另将dev14两份实际失败JSON逐项重送issue/summary，尺寸提示替换、薄区提示保持、全部原始expected/observed和冻结输入字节不变，原FAIL未改。没有CAD或新模型调用，不能据此声称模型已减少返工。此项发生在dev14启动后，只在当前worktree；该轮冻结候选c0511cc及两臂运行目录不包含此提示，不能把其效果算入dev14。证据：[实际错误JSON复用](../workspace/quality-v7-audit/dimension-repair-hint-proposal/product-validation/actual-error-replay.json)、[纯摘要测试](../workspace/quality-v7-audit/dimension-repair-hint-proposal/product-validation/summary-test.log)。

@@ -898,6 +898,12 @@ def _issue(
     repair_hint: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
+    if (not repair_hint and code == "QA.STEP_FAILED" and isinstance(check, str)
+            and re.fullmatch(r"section:[^:]+:\d+:(?:width_u_mm|depth_v_mm)", check)):
+        repair_hint = (
+            "Adjust the construction controls toward the declared nominal dimension. "
+            "Stop when this raw STEP check passes; preserve form, walls, floor and function."
+        )
     if not repair_hint and check in THICKNESS_CHECKS:
         repair_hint = (
             "Locate the sample or risk region in final STEP before editing: max-sphere "
