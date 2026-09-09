@@ -21,6 +21,11 @@ manufacturing part counts and booleans. A printable bezel, cover or dummy is a
 manufactured part only when its manufacture is part of the design; preview
 appearance alone is not that decision.
 
+For an exposed component whose recognition matters, show its defining visible
+interface at the shared installation datum. A clearance envelope may obscure an
+opening, rim or contact surface; use it for fit, and shape the optional display
+reference to express that interface. Keep proposed hardware identity explicit.
+
 Use `bind_display_component` to bind a BRep solid/face or a mesh without manually
 writing source meshes and scene JSON. `physical_feature_ref` names the relevant
 intent-backed aperture, seat, support or other receiving feature on the same

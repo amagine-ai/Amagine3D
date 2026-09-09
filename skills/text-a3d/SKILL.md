@@ -25,20 +25,22 @@ targets, and draft with `a3d draft SOURCE.py --intent INTENT.json`. For loft or
 finishing dimensions that drift, first read `references/surface-shell.md`: adapt
 its complete-geometry measurement callback and jointly calibrate the controls.
 
-For a new surface-led construction, use `references/surface-design.md` and the
-intent-bound example in `references/surface-shell.md`; follow its setup.
-For other new models, select one build example: `simple_brep` for one solid,
-`installed_module` for an enclosure with internal components. Copy its build source:
+When silhouette or character drives a new model, first read
+`references/surface-design.md` and choose its primary volumes and proportions.
+Use the intent-bound `references/surface-shell.md` example when a hollow loft
+suits that form. Choose one API example: `simple_brep` for one solid,
+`installed_module` for component installation and enclosure assembly. Its outer
+shape is replaceable; carry the chosen form into the copied build source:
 
 ```bash
 example_name=installed_module
 cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
-a3d draft "${example_name}_build.py"
 ```
 
-Inspect the example preview with `view_image`, then adapt the named controls and
-geometry to the brief in this same source. These two examples run without intent
-or profile.
+Adapt the primary volumes and major feature outlines to the brief in this source,
+then run `a3d draft "${example_name}_build.py"` and inspect it with `view_image`.
+For appearance-led work, resolve silhouette and feature scale in this preview
+before adding dependent interior detail. These examples need no intent or profile.
 
 Develop the body, cavity and openings from shared component envelopes and datums,
 then add support, retention and assembly access before exterior finishing.
