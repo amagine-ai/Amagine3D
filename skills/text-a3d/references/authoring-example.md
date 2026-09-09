@@ -135,7 +135,8 @@ and acceptance, while build source owns implementation parameters such as sectio
 count, cutter overshoot and loft mode. An inset may change to meet an unchanged
 minimum wall requirement; a user-requested dimension or form must remain satisfied.
 For an allowed target parameter
-adjustment, record the range before modeling in `dimensions_mm`, for example:
+adjustment, record the range in the initial intent, before adjusting that target,
+in `dimensions_mm`, for example:
 
 ```python
 dimensions_mm["x"] = {

@@ -557,3 +557,19 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 在dev14两杯首次完整compile中，typed顶口分别约54.12和54.11 mm，均仍在上边界之外；现有泛用QA提示没有直接说明应朝名义54 mm修正。当前worktree仅在`_issue`增加6行选择已有typed STEP外宽/深失败，替换为朝声明名义值调整构造控制、raw STEP检查通过即停止该尺寸校准的151字符静态动作提示。无新helper/API、重复数字、舍入建议或SKILL规则；严格精度同样适用，显式hint优先，壁厚/安装/接口等原提示保持。所有原expected/observed、原始精度和判定均不变。
 
 扩展1个现有pure摘要无修改方法，覆盖width/depth、普通/严格精度、显式hint及非typed检查等8个子情景，0.010秒通过；子情景不计为新增方法。另将dev14两份实际失败JSON逐项重送issue/summary，尺寸提示替换、薄区提示保持、全部原始expected/observed和冻结输入字节不变，原FAIL未改。没有CAD或新模型调用，不能据此声称模型已减少返工。此项发生在dev14启动后，只在当前worktree；该轮冻结候选c0511cc及两臂运行目录不包含此提示，不能把其效果算入dev14。证据：[实际错误JSON复用](../workspace/quality-v7-audit/dimension-repair-hint-proposal/product-validation/actual-error-replay.json)、[纯摘要测试](../workspace/quality-v7-audit/dimension-repair-hint-proposal/product-validation/summary-test.log)。
+
+有限交叉阅读另发现authoring-example的旧“record the range before modeling”容易被理解为草模前必须写合同，现仅改成首次intent中、调整该目标之前声明范围；已有目标及范围修订约束保持，未新增流程。其他四份相关公开指南未发现明确的draft-first冲突，不能据此认定dev14准备空档的原因。该文字澄清同样不属于已冻结的dev14干预。
+
+### dev-14：局部足缘缺陷未复现，整体胜出仍未证实
+
+固定baseline `0c4b015` / candidate `c0511cc`，相同原杯子/外壳输入，N=4、每例1200秒、相同model/medium及并发2；普通外形±0.1与底层0.01精度为共同条件。candidate杯子1000.63秒自然结束，baseline1200.12秒超时但有完整终态成品；两外壳均超时，无草模/compile/STEP。保留全N4，没有反馈、延长预算、补跑或读取holdout。详见[本轮完整结论](../workspace/quality-evaluation-v1/development/dev-14-paired-foot-installation/inspection/development-quality-review.md)。
+
+两杯最后实际同版STEP均为有效单实体，5项外形在原±0.1范围内，各96条足缘全cross_checked、0短段/0unknown，5条中央底板线均3.5 mm。各840个法向诊断没有检出小于2 mm的弦，但首次出口未独立证明完整，所有全局壁厚/未覆盖薄区仍unknown。无符合预定规则的短足点，不额外启动3点分类。candidate没有复现dev13的足缘采样缺陷，但baseline这轮也自行用了5 mm实体脚并通过同项，因此不能将采用或结果归为候选独有改善。首PASS提前39.05秒也只是单次配对的过程差异，不是质量胜出。
+
+两杯原样源码各在独立空目录、原冻结runtime下公开compile一次，60.41 / 62.93秒均通过。各自原件与重建STEP DATA逐字相同，实际读回valid/solid/bbox/volume一致，原会话68/73文件和四输入SHA未变；未作对齐、缩放或布尔差集。两外壳无完整锚点/输入，不由评估者补写重建。见[原样重建](../workspace/quality-evaluation-v1/development/dev-14-paired-foot-installation/inspection/clean-replay/review.md)。
+
+外壳baseline直到1139.78秒才写首版源码，candidate只有profile；两路实际文档/API读取复合输出约6.9万/8.9万字符，但不能单凭字符或工具间隔认定超时原因。可见目录枚举权限错误与缺少工具返回证实的后续工作目录错误自述分别记录；没有可见SDK断流，亦不据此断言工具都正常。四路终态→退出→当前库存一致，0晚写、无残留，完整冻结检查通过。见[可见工具事件](../workspace/quality-evaluation-v1/development/dev-14-paired-foot-installation/inspection/development-transport-review.md)和[外壳逐项证据缺口](../workspace/quality-evaluation-v1/development/dev-14-paired-foot-installation/inspection/enclosure-terminal-assessment.md)。
+
+保留已用因果控制证实的足部构造及装配共同基准改进；没有把主SKILL继续加长。当前可明确宣称的质量改善仍限于原样旧杯源码只改实体脚后，固定96位置的确认短段55→0、最短段约0.16→4 mm且尺寸/中央底板保持。本轮结果不足以宣称整体建模成功率提高；主要剩余缺口是外壳及时形成可验收几何及完整壁厚/功能证据。
+
+固定中性四视图完成，两杯各4图、两外壳unavailable，完整名单保持N4。两个未获得版本映射且互不共享上下文的审查代理分别实际查看9张图，都认为主要可见形态通过、两者外观相当，同时指出共同的短直立脚带偏离参考图直接落底的表现；不把有限可见形态通过升级为完整平顺或制造质量通过。两次原样重建、独立有限QA、固定渲染及匿名视觉复核均已收束，最终完整性与30项评价方法复核通过，8个相关精确路径无匹配进程。
