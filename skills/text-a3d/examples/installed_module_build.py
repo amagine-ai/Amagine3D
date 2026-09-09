@@ -11,9 +11,9 @@ P = {
     "module_width": 50.0, "module_height": 30.0, "module_depth": 5.0,
     "module_side_gap": 1.0, "window_width": 44.0, "window_height": 24.0,
     "retainer_gap": 0.2, "retainer_width": 4.0, "retainer_height": 20.0,
-    "locator_width": 54.0, "locator_height": 34.0, "locator_radius": 3.0,
+    "locator_land": 1.0, "locator_radius": 3.0,
     "locator_wall": 1.8, "locator_engagement": 2.0, "locator_radial_gap": 0.3,
-    "screw_x": 33.0, "screw_z_offset": 23.0,
+    "screw_corner_margin": 7.0,
     "show_module_reference": True,
 }
 P["fastening"] = {
@@ -55,27 +55,30 @@ def main():
     SEAT_Y = FRONT_Y + P["viewing_land"]
     MODULE_BACK_Y = SEAT_Y + P["module_depth"]
     CENTER_Z = P["height"]/2
+    SCREW_X = P["width"]/2 - P["screw_corner_margin"]
+    SCREW_Z_OFFSET = CENTER_Z - P["screw_corner_margin"]
     # Recipes keep their real round screw/collar geometry: local +Z becomes -Y.
     COVER_DATUM = Pos(0, COVER_Y, CENTER_Z) * Rot(X=90)
     MODULE_X = (-P["module_width"]/2, P["module_width"]/2)
     MODULE_Z = (CENTER_Z-P["module_height"]/2, CENTER_Z+P["module_height"]/2)
+    CAVITY_X = (MODULE_X[0]-P["module_side_gap"], MODULE_X[1]+P["module_side_gap"])
+    CAVITY_Z = (MODULE_Z[0]-P["module_side_gap"], MODULE_Z[1]+P["module_side_gap"])
     WINDOW_X = (-P["window_width"]/2, P["window_width"]/2)
     WINDOW_Z = (CENTER_Z-P["window_height"]/2, CENTER_Z+P["window_height"]/2)
     WINDOW_Y = (FRONT_Y - 1.0, SEAT_Y + 0.1)
     window = interval_box(x=WINDOW_X, y=WINDOW_Y, z=WINDOW_Z)
     module = interval_box(x=MODULE_X, y=(SEAT_Y, MODULE_BACK_Y), z=MODULE_Z)
-    cavity = interval_box(
-        x=(MODULE_X[0]-P["module_side_gap"], MODULE_X[1]+P["module_side_gap"]),
-        y=(SEAT_Y, COVER_Y + 1),
-        z=(MODULE_Z[0]-P["module_side_gap"], MODULE_Z[1]+P["module_side_gap"]),
-    )
+    cavity = interval_box(x=CAVITY_X, y=(SEAT_Y, COVER_Y + 1), z=CAVITY_Z)
     outer = interval_box(x=(-P["width"]/2, P["width"]/2), y=(FRONT_Y, COVER_Y), z=(0, P["height"]))
     build.add("frame-body", outer, part_name="frame")
     build.cut("module-space", cavity, part_name="frame")
     build.cut("viewing-window", window, part_name="frame")
 
+    # Extend beyond the cavity into the receiving frame, with the recipe's fit.
+    LOCATOR_WIDTH = CAVITY_X[1] - CAVITY_X[0] + 2*P["locator_land"]
+    LOCATOR_HEIGHT = CAVITY_Z[1] - CAVITY_Z[0] + 2*P["locator_land"]
     locator = collar_socket(
-        interface_id="cover-location", width_mm=P["locator_width"], depth_mm=P["locator_height"],
+        interface_id="cover-location", width_mm=LOCATOR_WIDTH, depth_mm=LOCATOR_HEIGHT,
         radius_mm=P["locator_radius"], engagement_mm=P["locator_engagement"],
         radial_clearance_mm=P["locator_radial_gap"], collar_wall_mm=P["locator_wall"], axial_overshoot_mm=0.3,
     )
@@ -96,7 +99,7 @@ def main():
     fasteners = []
     for index, (sx, sz) in enumerate(((-1, -1), (-1, 1), (1, -1), (1, 1))):
         name = f"corner-{index + 1}"
-        origin = [sx*P["screw_x"], COVER_Y, CENTER_Z+sz*P["screw_z_offset"]]
+        origin = [sx*SCREW_X, COVER_Y, CENTER_Z+sz*SCREW_Z_OFFSET]
         datum = Pos(*origin) * Rot(X=90)
         pair = self_tapping_screw_pair(interface_id="cover-fastening", axis_id=name, **P["fastening"])
         clearance, pilot, boss = f"cover-{name}", f"frame-{name}-pilot", f"frame-{name}-boss"
@@ -149,7 +152,7 @@ def main():
     build.export(
         paired_interfaces=[paired_interface(
             id="cover-location", kind="collar-socket", male_feature="cover-collar", female_feature="frame-locator",
-            male_dimensions_mm={"width": P["locator_width"], "depth": P["locator_height"]},
+            male_dimensions_mm={"width": LOCATOR_WIDTH, "depth": LOCATOR_HEIGHT},
             clearances_mm={"width": 2*P["locator_radial_gap"], "depth": 2*P["locator_radial_gap"]},
         )],
         interfaces=[{"id": "cover-fastening", "kind": "self-tapping-screw", "locatorInterfaceIds": ["cover-location"], "fasteners": fasteners}],

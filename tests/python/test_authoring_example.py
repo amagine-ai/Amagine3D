@@ -60,7 +60,7 @@ print(json.dumps([P['width'], P['module_width']]))
             self.assertFalse((work / "installed_module_parameters.json").exists())
 
     @contextmanager
-    def compile_example(self, example_name):
+    def compile_example(self, example_name, *, source_changes=(), intent_changes=()):
         temporary_root = ROOT / "workspace" / "skill-validation"
         temporary_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
@@ -75,6 +75,13 @@ print(json.dumps([P['width'], P['module_width']]))
             cli = str(ROOT / "bin" / "a3d")
             for name in (f"{example_name}_intent.py", f"{example_name}_build.py"):
                 shutil.copyfile(SKILL / "examples" / name, work / name)
+            for suffix, changes in (("build", source_changes), ("intent", intent_changes)):
+                path = work / f"{example_name}_{suffix}.py"
+                text = path.read_text()
+                for before, after in changes:
+                    self.assertIn(before, text)
+                    text = text.replace(before, after)
+                path.write_text(text)
             source = work / f"{example_name}_build.py"
             source_hash = sha256(source.read_bytes()).hexdigest()
             draft = None
@@ -85,6 +92,8 @@ print(json.dumps([P['width'], P['module_width']]))
                 self.assertFalse((work / f"{example_name}_parameters.json").exists())
             run(cli, "profile", "--machine", "a1-mini", "--nozzle", "0.4", "--tool", "0", "--out", f"{example_name}_printer-profile.json")
             run(sys.executable, f"{example_name}_intent.py")
+            intent = work / f"{example_name}_intent.json"
+            intent_hash = sha256(intent.read_bytes()).hexdigest()
             run(cli, "intent", f"{example_name}_intent.json")
             if example_name == "installed_module":
                 bound_draft = json.loads(run(cli, "draft", source.name, "--intent", f"{example_name}_intent.json").stdout)
@@ -98,6 +107,7 @@ print(json.dumps([P['width'], P['module_width']]))
                 self.assertFalse(list(work.glob("*_scene.json")))
             run(cli, "compile", f"{example_name}_scene.json", "--intent", f"{example_name}_intent.json", "--source", source.name, "--output-dir", ".")
             self.assertEqual(sha256(source.read_bytes()).hexdigest(), source_hash)
+            self.assertEqual(sha256(intent.read_bytes()).hexdigest(), intent_hash)
             yield work
 
     def test_example_compiles_with_measured_interface_and_five_views(self):
@@ -179,6 +189,69 @@ print(json.dumps([P['width'], P['module_width']]))
                                 if check["featureId"] == "module-space")
             self.assertEqual(module_check["withdrawalAxis"], [0, 1, 0])
             self.assertEqual(module_check["supportDirection"], [0, -1, 0])
+
+    def test_module_resize_keeps_locator_in_material_and_screws_at_corners(self):
+        # Specify the variant before any geometry runs. Its requirements remain
+        # independent of the builder's construction controls and measurements.
+        source_changes = (
+            ('"width": 80.0, "height": 60.0, "depth": 16.0',
+             '"width": 86.0, "height": 66.0, "depth": 18.0'),
+            ('"module_width": 50.0, "module_height": 30.0',
+             '"module_width": 54.0, "module_height": 34.0'),
+        )
+        intent_changes = (
+            ('(80.0, 16.0, 60.0)', '(86.0, 18.0, 66.0)'),
+            ('width 80 x height 60 x depth 16 mm', 'width 86 x height 66 x depth 18 mm'),
+            ('width 50 x height 30 x depth 5 mm', 'width 54 x height 34 x depth 5 mm'),
+        )
+        with self.compile_example("installed_module", source_changes=source_changes,
+                                  intent_changes=intent_changes) as work:
+            result = json.loads((work / "installed-module_compile-result.json").read_text())
+            self.assertTrue(result["pass"], result.get("issues"))
+            assembly = import_step(work / "installed-module-assemble.step")
+            self.assertTrue(assembly.is_valid)
+            self.assertEqual(len(assembly.solids()), 2)
+            np.testing.assert_allclose(tuple(assembly.bounding_box().size), [86, 18, 66], atol=1e-5)
+            report = json.loads((work / "installed-module_report.json").read_text())
+            cut = next(event for event in report["events"]
+                       if event["kind"] == "cut" and event["id"] == "frame-locator")
+            self.assertGreater(cut["removed_mm3"], 1)
+            scene = json.loads((work / "installed_module_scene.json").read_text())
+            screws = next(item for item in scene["interfaces"] if item["id"] == "cover-fastening")
+            self.assertEqual([item["axis"]["originMm"] for item in screws["fasteners"]],
+                             [[-36, 6, 7], [-36, 6, 59], [36, 6, 7], [36, 6, 59]])
+            for name in ("installationAudit", "assemblyAudit"):
+                artifact = result["artifacts"][name]
+                path = Path(artifact["path"])
+                self.assertEqual(artifact["sha256"], sha256(path.read_bytes()).hexdigest())
+                evidence = json.loads(path.read_text())
+                self.assertTrue(evidence["pass"], evidence.get("errors"))
+
+            # A stale 54 x 34 locator now lies wholly in the enlarged cavity.
+            # A valid-looking cutter and matching metadata must not hide a missed cut.
+            source = work / "installed_module_build.py"
+            text = source.read_text()
+            for before, after in (
+                ('CAVITY_X[1] - CAVITY_X[0] + 2*P["locator_land"]', '54.0'),
+                ('CAVITY_Z[1] - CAVITY_Z[0] + 2*P["locator_land"]', '34.0'),
+            ):
+                self.assertIn(before, text)
+                text = text.replace(before, after)
+            source.write_text(text)
+            intent = work / "installed_module_intent.json"
+            intent_hash = sha256(intent.read_bytes()).hexdigest()
+            failed = subprocess.run(
+                [str(ROOT / "bin" / "a3d"), "draft", source.name, "--intent", intent.name],
+                cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL),
+                               "PYTHONDONTWRITEBYTECODE": "1"},
+                capture_output=True, text=True, timeout=120,
+            )
+            self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+            diagnostic = json.loads(failed.stdout)["issues"][0]["sourceIssue"]
+            self.assertEqual(diagnostic["featureId"], "frame-locator")
+            self.assertEqual(diagnostic["code"], "SOURCE.CUT_MISSED_OWNER")
+            self.assertAlmostEqual(diagnostic["observed"]["removedMm3"], 0)
+            self.assertEqual(sha256(intent.read_bytes()).hexdigest(), intent_hash)
 
     def test_surface_shell_recompiles_changed_walls_without_rewriting_intent(self):
         with self.compile_example("surface_shell") as work:

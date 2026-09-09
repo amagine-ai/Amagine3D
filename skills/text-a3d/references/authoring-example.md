@@ -118,6 +118,10 @@ The installed-module example uses a local `interval_box` with explicit lower/upp
 bounds for each axis; a lower-bound datum cannot also be used as a centered Box's
 position. Reuse the module and window intervals for cavities and installation
 paths so geometry and its witnesses share the same datums.
+Its locator derives from those cavity intervals and its screws from a shared
+outer-corner margin. The female cutter must intersect real receiving material;
+for a thin-wall enclosure, design a receiving step that retains the required
+minimum wall instead of copying the thick frame's dimensions.
 
 For explicit bindings or regional color exports, the existing `BrepFeature`,
 `write_scene` and exporters remain available. Use `with build.capture():` if

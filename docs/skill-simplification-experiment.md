@@ -539,3 +539,15 @@ dev-07 清理没有发现残留进程，没有发信号；随后库存仍仅有�
 三组干净公开compile实测：固定40 mm目标下，实际40.009 mm通过，40.011 mm由尺寸gate拒绝；最初声明0.0001 mm精度时，40.009 mm同样被拒绝。各一次compile及raw STEP测量合计25.709秒，无重试；失败保留为诊断工件，通过案例仍有原有QA warnings及待视觉检查状态，不当作成品质量证明。见[完整编译对照](../workspace/quality-v7-audit/measurement-precision-review/public-compile-validation/results.md)。
 
 最终去重96个Python方法通过：manifest 29、intent revisions 15、BRep包络1、测量17、capability 12、公开作者示例5、color pipeline 17；新增方法仅2个。公开示例完整回归152.593秒；实际STEP覆盖默认/显式精度、fixed/range、独立`--expect`、`--tol`不能放宽合同、原始测量与两位输出一致绑定。彩色QA另用初始目标20.009 mm、实际宽20 mm验证默认精度。补跑发现前次全feature绑定规则下两份旧color fixture漏绑已观察实体，现补上真实detail/cutter/region绑定，原几何与断言保留；两个失败尝试和最早系统Python缺NumPy日志均保留，不算通过。只对最后独立tower方法重跑，没有把重复执行累计为新测试。证据：[最终精度验证记录](../workspace/quality-v7-audit/measurement-precision-review/result.md)。
+
+### 可运行的足部构造与共同装配基准
+
+曲面示例在共同内腔切除之前，将首截面的正向挤出融合进外 loft；`FOOT_HEIGHT=4` 是独立构造长度，0 可关闭，不与底板厚度混用。主 SKILL 不增加要求，原指南中的抽象足部说明改为实际示例中的两行调用。默认 ruled 示例的新旧实际 STEP 双向差集、体积差和包络差均为0。
+
+对 dev13 candidate 的隔离原样重放，只加入4 mm真实脚柱，原合同、打印配置和其他源参数保持。沿用原先冻结的96个物理射线位置，本次新旧 STEP 的已确认短段从55个降到0个，最短首次连续材料段从约0.16增至4 mm；三处已知反例的材料段由约0.16/0.96/0.18变为4/12.82/4 mm，五条中央底板仍为3.5 mm，五项外形仍在原±0.1范围。原始57个短段中2个分段状态一直是unresolved，55是cross-checked口径；逐项分段状态没有变化，旧未知未被追认。该结果证明固定探针覆盖处的足缘改善，不证明全壁厚、模型自行采用或总体任务成功率；这些是公开draft的真实STEP，未充当完整compile交付。证据：[构造对照原始测量](../workspace/quality-v7-audit/foot-construction-update/measurements.json)。
+
+安装示例将独立定位宽/高改成空腔区间加单个材料边距，将独立螺丝X/Z位置改为距外壳角部的共同边距。默认定位54×34、轴偏移33/23保持，独立需求不随构造参数自动改写。这个厚框示例不能直接保证薄壁外壳安全：切刀须落在真实接收材料里，同时满足规定最小剩余壁厚。dev13原外壳的两个定位切刀均落在空腔里，缩小后离实体更远；新示例针对这一参数失配，不宣称已完成双模块外壳。证据：[失败与参数审查](../workspace/quality-v7-audit/enclosure-starter-parameter-review/review.md)。
+
+安装默认例子另用两次公开draft和真实STEP核对，frame、cover及独立参考module逐一配对，三对双向差集均0 mm³（7.573秒）；参考模块不计作制造件。公开作者测试最终去重6个方法通过，其中新增1个86×18×66外形/54×34×5模块的真实参数变体，检查两个制造实体、定位槽移除材料、四螺丝及安装审计。固定旧54×34定位尺寸的负例仍以零移除量被拒绝。完整suite182.193秒，原5方法通过；新增方法首次仅因错误文字断言失败，改查实际结构化SOURCE.CUT_MISSED_OWNER后单独复跑27.018秒通过，产品代码未因该断言调整。详见[公开回归与完整失败记录](../workspace/quality-v7-audit/construction-example-validation/result.md)及[默认几何等价](../workspace/quality-v7-audit/enclosure-starter-parameter-review/default-geometry-equivalence/results.md)。这些结果尚不能代替相同输入/预算的模型比较。
+
+交叉只读审查未发现产品阻断；补强现有测试helper，从首次intent生成到bound draft和完整compile后核对同一SHA。参数变体单方法再次通过（28.026秒），确认正例构造不回写初始独立目标；仍为6个独立方法，不把复跑累计成新增测试。

@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-from build123d import Plane, Pos, RectangleRounded, loft
+from build123d import Plane, Pos, RectangleRounded, extrude, loft
 import numpy as np
 from brep_measurements import measure_section
 from build_session import BuildSession
@@ -19,6 +19,7 @@ STATIONS = (
     (90.0, 82.0, 66.0, 10.0, 2.0, -1.0),
 )
 WALL_INSET, FLOOR, CUTTER_OVERSHOOT = 3.0, 3.0, 1.0
+FOOT_HEIGHT = 4.0  # Positive outer-foot extrusion; 0 disables it, independently of FLOOR.
 # Calibration targets mirror the brief; the intent owns final acceptance.
 TOP_PLANE_Z, TOP_OUTER_WIDTH = 90.0, 82.0
 TARGET_ENVELOPE = (100.0, 80.0, 90.0)
@@ -26,6 +27,7 @@ RULED = True  # Stable, slightly faceted shoulders; smooth lofts need new checks
 HEIGHT = STATIONS[-1][0]
 assert STATIONS[0][0] == 0 and 0 < FLOOR < HEIGHT
 assert WALL_INSET > 0 and CUTTER_OVERSHOOT > 0
+assert 0 <= FOOT_HEIGHT < HEIGHT
 assert all(a[0] < b[0] for a, b in zip(STATIONS, STATIONS[1:]))
 
 
@@ -58,6 +60,8 @@ def build_geometry(controls=None):
         stations[2][1] = stations[3][1] = middle_width
         stations[2][2], stations[-1][1] = middle_depth, top_width
     outer = loft([section(station) for station in stations], ruled=RULED)
+    if FOOT_HEIGHT:
+        outer = outer.fuse(extrude(section(stations[0]), amount=FOOT_HEIGHT))
     # Keep the same cavity and floor for every trial and the final export.
     inner_stations = [station_at(FLOOR, stations)]
     inner_stations += [station for station in stations if station[0] > FLOOR]

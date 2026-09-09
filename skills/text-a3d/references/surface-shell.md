@@ -6,7 +6,8 @@ construction choices. Keep interfaces on their owning BRep parts.
 
 Each `STATIONS` row controls height, width, depth, corner radius and center.
 Outer and inner lofts form the cavity, rim and floor. `WALL_INSET` and `FLOOR`
-control section inset and base thickness. An inset does not guarantee normal
+control section inset and base thickness. `FOOT_HEIGHT` is the independent +Z
+extrusion length from the first profile at z=0; use 0 to disable it. An inset does not guarantee normal
 wall thickness on slopes; check actual walls and shoulder overhang after edits.
 
 The example initially declares ±0.1 mm ranges around its nominal 100×80×90 mm
@@ -94,12 +95,17 @@ visual quality; those checks remain required.
 `RULED=True` allows visible shoulder transitions. Smooth lofts are also useful
 when the profiles remain valid; changing this setting requires fresh geometry
 and wall checks. G2 continuity is not required. Simplify or split the BRep
-construction when profiles become unstable. Near a flat foot, a smooth loft can
-retreat before widening and leave a thin projecting edge. Union a short outer-foot
-extrusion with the loft before subtracting the common cavity, preserving the
-required floor and foot profile. This gives direct control of the lower wall;
-inspect the actual section near the join. Adding closely spaced stations alone
-does not establish a sound foot.
+construction when profiles become unstable. The example fills lower loft retreat
+with a real foot before cutting the common cavity:
+
+```python
+if FOOT_HEIGHT:
+    outer = outer.fuse(extrude(section(stations[0]), amount=FOOT_HEIGHT))
+```
+
+Equal or closely spaced stations alone do not prevent smooth-loft retreat.
+Inspect the finished foot and join: fusion does not trim an outward bulge or
+establish wall thickness after the cavity is cut.
 
 Copy the two files into the current session workspace, then use the public path:
 
