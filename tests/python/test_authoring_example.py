@@ -232,6 +232,22 @@ print(json.dumps([P['width'], P['module_width']]))
                         "sceneHash": report["inputs"]["scene"]["sha256"], "reportHash": report_hash}
 
             first = read_and_measure(3.0)
+            # The ordinary-process callback must rebuild actual geometry, including
+            # coupling from the offset z62 profile which fixes the lower Y bound.
+            callback = subprocess.run([sys.executable, "-B", "-c", '''
+import json
+from pathlib import Path
+before = {str(p): p.read_bytes() for p in Path('.').rglob('*') if p.is_file()}
+from surface_shell_build import measure_finished
+actual = measure_finished([100, 79.6, 81.8]).tolist()
+assert before == {str(p): p.read_bytes() for p in Path('.').rglob('*') if p.is_file()}
+print(json.dumps(actual))
+'''], cwd=work,
+                env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONPATH": str(SKILL),
+                     "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUTF8": "1"},
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(callback.returncode, 0, callback.stdout + callback.stderr)
+            np.testing.assert_allclose(json.loads(callback.stdout), [100, 79.8, 81.8], atol=1e-5)
             source = source_path.read_text()
             # Change only the named numeric parameter, preserving all other
             # source text and the already-created immutable intent document.
@@ -271,19 +287,20 @@ print(json.dumps([P['width'], P['module_width']]))
             # A finishing edit changes the actual top section while every loft
             # control and target stays unchanged. The example must catch that
             # coupled change before exporting another draft as ready.
-            finishing = '''from cad_helpers import checked_fillet
-build.finish("surface-shell", lambda body: checked_fillet(
-    body, [edge for edge in body.edges() if edge.bounding_box().min.Z > HEIGHT - 0.01],
-    0.5, "test-rim-rounding", part_name="surface-shell"))
+            finishing = '''    from cad_helpers import checked_fillet
+    build.finish("surface-shell", lambda body: checked_fillet(
+        body, [edge for edge in body.edges() if edge.bounding_box().min.Z > HEIGHT - 0.01],
+        0.5, "test-rim-rounding", part_name="surface-shell"))
 '''
             source = source_path.read_text()
-            self.assertEqual(source.count("# Keep dimensional checks"), 1)
+            marker = "    # Any finishing belongs here"
+            self.assertEqual(source.count(marker), 1)
             # Simultaneous shoulder drift must appear in that same feedback,
             # instead of being concealed behind the first failed top check.
             station = "(30.0, 100.0, 80.0, 14.0, 0.0, 0.0)"
             self.assertEqual(source.count(station), 1)
             source = source.replace(station, "(30.0, 100.2, 80.2, 14.0, 0.0, 0.0)")
-            source_path.write_text(source.replace("# Keep dimensional checks", finishing + "\n# Keep dimensional checks"))
+            source_path.write_text(source.replace(marker, finishing + "\n" + marker))
             result = subprocess.run(
                 [str(ROOT / "bin" / "a3d"), "draft", source_path.name, "--intent", intent_path.name],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},

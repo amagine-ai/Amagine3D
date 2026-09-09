@@ -22,15 +22,18 @@ section; the assertion reports target and measured width before export in both
 draft and compile. Use the requested datum and size for the actual model, and
 retain the complete shape's preview and independent final STEP checks.
 
-When several finished dimensions keep drifting together, calibrate the controls
-together. In a small local script, put the complete construction, cavity and
-finishing in a function; measure its final BRep on every call. Keep the targets
-fixed. The following is one update for three independent controls and three
-measured dimensions, using the existing NumPy runtime:
+When finished dimensions keep drifting together, calibrate the controls together.
+The copied example's `build_geometry` constructs a fresh complete BRep, and
+`measure_finished` measures it without exporting. Keep any finishing inside
+`build_geometry`, so trials and final compile use the same construction. After
+creating the intent, a local calibration script can start with:
 
 ```python
 import numpy as np
+from surface_shell_build import measure_finished, STATIONS, TARGET_ENVELOPE, TOP_OUTER_WIDTH
 
+controls = np.array([STATIONS[2][1], STATIONS[2][2], STATIONS[-1][1]])
+targets = np.array([*TARGET_ENVELOPE[:2], TOP_OUTER_WIDTH])
 actual = measure_finished(controls)  # rebuild; return measured dimensions as an array
 error = actual - targets
 h = 0.02  # mm; choose a small finite perturbation for these length controls
@@ -42,14 +45,20 @@ change = np.linalg.solve(jacobian, -error)
 change *= min(1.0, 2.0 / max(np.max(np.abs(change)), 1e-12))
 ```
 
+Run calibration in its own ordinary Python process, for example
+`PYTHONPATH="$AMAGINE3D_SKILL_DIR" python3 calibrate.py`. A failed checked operation
+inside a managed draft/compile leaves diagnostics for that run; do not catch it
+and publish a later trial as a successful run.
+
 Keep finite-difference probes and proposed changes within physically valid control
 bounds. Try this change, then half or a quarter if needed; accept only a reduction
 in the Euclidean norm of all target errors. Retest every target
 after each accepted update. Keep every trial's controls, measurements and failures,
 and cap the experiment at 30 geometry evaluations. Stop on invalid geometry,
 singular sensitivity or failure to improve; simplify the construction instead of
-enlarging tolerances. Save the resulting controls into the ordinary source, then
-run the full public compile. Numerical convergence says nothing about wall,
+enlarging tolerances. Save the three controls into the source's two middle width
+entries, middle depth and top width, then run the full public compile. Adapt this
+control mapping to the actual model. Numerical convergence says nothing about wall,
 foot, fit or visual quality; those checks still apply to the changed geometry.
 
 `RULED=True` allows visible shoulder transitions. Smooth lofts are also useful

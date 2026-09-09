@@ -1,5 +1,9 @@
 """Preview with a3d draft --intent, then compile; a BRep loft owns the shell."""
+import os
+from pathlib import Path
+
 from build123d import Plane, Pos, RectangleRounded, loft
+import numpy as np
 from brep_measurements import measure_section
 from build_session import BuildSession
 
@@ -33,50 +37,79 @@ def section(station, inset=0.0):
     )
 
 
-def station_at(z):
+def station_at(z, stations):
     """Interpolate the ruled section controls at the cavity's floor plane."""
-    for lower, upper in zip(STATIONS, STATIONS[1:]):
+    for lower, upper in zip(stations, stations[1:]):
         if lower[0] <= z <= upper[0]:
             fraction = (z - lower[0]) / (upper[0] - lower[0])
             return tuple(a + fraction * (b - a) for a, b in zip(lower, upper))
     raise ValueError(f"No outer section at z={z}")
 
 
-outer = loft([section(station) for station in STATIONS], ruled=RULED)
-# The cavity begins above the base and continues beyond the opening, leaving
-# a closed FLOOR-thick base and an annular rim rather than a cap over the top.
-inner_stations = [station_at(FLOOR)]
-inner_stations += [station for station in STATIONS if station[0] > FLOOR]
-inner_stations += [(HEIGHT + CUTTER_OVERSHOOT, *STATIONS[-1][1:])]
-cavity = loft([section(station, WALL_INSET) for station in inner_stations], ruled=RULED)
-build = BuildSession(__file__)
-build.add("shell-surface", outer)
-shell = build.cut("shell-cavity", cavity)
+def build_geometry(controls=None):
+    """Build the complete shape with fresh evidence, without exporting it.
 
-# Section inset is not normal wall thickness on a sloping 3D surface. Public
-# compile checks wall thickness and overhangs after any station or inset edit.
-assert len(shell.solids()) == 1 and shell.is_valid
-assert shell.is_inside((0, 0, FLOOR / 2)), "The base must remain closed"
-assert not shell.is_inside((0, 0, FLOOR + 0.1)), "The cavity must reach its floor"
-assert not shell.is_inside((*STATIONS[-1][4:], HEIGHT - 0.1)), "The top must remain open"
+    Controls are middle width (z=30 and z=62), middle depth (z=30), and top
+    profile width. Save calibrated values into these STATIONS entries.
+    """
+    stations = [list(station) for station in STATIONS]
+    if controls is not None:
+        middle_width, middle_depth, top_width = map(float, controls)
+        stations[2][1] = stations[3][1] = middle_width
+        stations[2][2], stations[-1][1] = middle_depth, top_width
+    outer = loft([section(station) for station in stations], ruled=RULED)
+    # Keep the same cavity and floor for every trial and the final export.
+    inner_stations = [station_at(FLOOR, stations)]
+    inner_stations += [station for station in stations if station[0] > FLOOR]
+    inner_stations += [(HEIGHT + CUTTER_OVERSHOOT, *stations[-1][1:])]
+    cavity = loft([section(station, WALL_INSET) for station in inner_stations], ruled=RULED)
+    intent_path = os.environ.get("AMAGINE3D_INTENT_PATH") or Path(__file__).with_name("surface_shell_intent.json")
+    build = BuildSession(__file__, intent_path=intent_path)
+    build.add("shell-surface", outer)
+    build.cut("shell-cavity", cavity)
+    # Any finishing belongs here, before both measurements and public export.
+    shell = build.part("surface-shell")
+    assert len(shell.solids()) == 1 and shell.is_valid
+    assert shell.is_inside((0, 0, FLOOR / 2)), "The base must remain closed"
+    assert not shell.is_inside((0, 0, FLOOR + 0.1)), "The cavity must reach its floor"
+    assert not shell.is_inside((*stations[-1][4:], HEIGHT - 0.1)), "The top must remain open"
+    return build
 
-# Keep dimensional checks after all material and finishing edits: changing a
-# lower station can also change a smooth loft's rounded upper end.
-final_shape = build.part("surface-shell")
-dimension_errors = [
-    f"Envelope {axis}: expected {target}, measured {actual} mm"
-    for axis, target, actual in zip("XYZ", TARGET_ENVELOPE, final_shape.bounding_box().size)
-    if abs(actual - target) > 1e-4
-]
-top = measure_section(final_shape, Plane.XY.offset(TOP_PLANE_Z))
-if top["outer_envelope"] is None:
-    dimension_errors.append("The required top section is missing")
-else:
-    actual_width = top["outer_envelope"]["width_u_mm"]
-    if abs(actual_width - TOP_OUTER_WIDTH) > 1e-4:
-        dimension_errors.append(
-            f"Top outer width at z={TOP_PLANE_Z}: expected {TOP_OUTER_WIDTH}, measured {actual_width} mm"
-        )
-assert not dimension_errors, "; ".join(dimension_errors)
 
-build.export()
+def measure_finished(controls):
+    """Call from a separate ordinary Python calibration script after intent exists.
+
+    Failed probes inside managed draft/compile would leave run diagnostics.
+    This callback measures actual BRep; it does not export or accept a candidate.
+    """
+    shape = build_geometry(controls).part("surface-shell")
+    top = measure_section(shape, Plane.XY.offset(TOP_PLANE_Z))
+    assert top["outer_envelope"] is not None, "The required top section is missing"
+    bounds = shape.bounding_box().size
+    return np.array([bounds.X, bounds.Y, top["outer_envelope"]["width_u_mm"]])
+
+
+def main():
+    build = build_geometry()
+    # Keep dimensional checks after all material and finishing edits.
+    final_shape = build.part("surface-shell")
+    dimension_errors = [
+        f"Envelope {axis}: expected {target}, measured {actual} mm"
+        for axis, target, actual in zip("XYZ", TARGET_ENVELOPE, final_shape.bounding_box().size)
+        if abs(actual - target) > 1e-4
+    ]
+    top = measure_section(final_shape, Plane.XY.offset(TOP_PLANE_Z))
+    if top["outer_envelope"] is None:
+        dimension_errors.append("The required top section is missing")
+    else:
+        actual_width = top["outer_envelope"]["width_u_mm"]
+        if abs(actual_width - TOP_OUTER_WIDTH) > 1e-4:
+            dimension_errors.append(
+                f"Top outer width at z={TOP_PLANE_Z}: expected {TOP_OUTER_WIDTH}, measured {actual_width} mm"
+            )
+    assert not dimension_errors, "; ".join(dimension_errors)
+    build.export()
+
+
+if __name__ == "__main__":
+    main()
