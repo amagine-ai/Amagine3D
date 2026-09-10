@@ -9,10 +9,14 @@ how it meets a table or a hand, how its crown and underside develop, and how its
 major features sit within the silhouette. Carry proposed proportions into the
 existing intent assumptions and expose them as source parameters.
 
-Develop the broad surfaces so their proportions carry the design. A thin object
-may get its character from a broad face and a carefully shaped perimeter; a grip
-may need the volume to lean, swell and narrow along the hand. Give secondary forms
-their own purpose and scale within that main volume.
+Develop the front and side silhouettes together: a soft front outline can still
+read as a bulky extrusion from the side. Place fullness, taper and underside
+clearance where they support the intended character; edge rounding alone leaves
+the broad planes and volume distribution unchanged. A thin object may rely on its
+perimeter, while a grip may need to lean, swell and narrow along the hand.
+Give secondary forms a clear scale and connection to the main volume: a deliberate
+joint, a recessed overlap or a flowing root. Check the spaces between them as part
+of the silhouette; soft individual pieces can still form a stiff stack.
 
 ## Choose controls that express the form
 
