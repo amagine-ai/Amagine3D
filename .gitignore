@@ -2,6 +2,8 @@ node_modules/
 dist/
 .venv/
 .amagine-state/
+.claude/
+plan/
 workspace/*
 !workspace/.gitkeep
 .env
