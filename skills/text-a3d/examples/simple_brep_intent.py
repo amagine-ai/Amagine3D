@@ -7,9 +7,10 @@ sys.path.insert(0, os.environ["AMAGINE3D_SKILL_DIR"])
 from authoring import write_intent
 
 ROOT = Path(__file__).resolve().parent
+NAME = Path(__file__).stem.removesuffix("_intent")
 write_intent(
-    ROOT / "simple_brep_intent.json",
-    profile_path=ROOT / "simple_brep_printer-profile.json",
+    ROOT / f"{NAME}_intent.json",
+    profile_path=ROOT / f"{NAME}_printer-profile.json",
     part="simple-brep", task_mode="specification", representation="full-3d",
     dimensions_mm={axis: {"value": value, "source": "inferred", "confidence": "medium"}
                    for axis, value in zip("xyz", (40.0, 28.0, 10.0))},

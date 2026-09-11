@@ -1,8 +1,10 @@
 # Evidence contract
 
-The intent contract is the independent target used to judge the model. Write
-it before geometry and validate it with `a3d intent INTENT.json`. Never rewrite
-targets merely to match a generated artifact.
+The intent contract is the independent target used to judge the final model.
+An unbound draft may establish silhouette, proportion and primary volumes first,
+but write and validate intent with `a3d intent INTENT.json` before contract-bound
+final modeling or a full compile. Never claim manufacturing acceptance from the
+draft, and never rewrite targets merely to match a generated artifact.
 
 ## Required structure
 

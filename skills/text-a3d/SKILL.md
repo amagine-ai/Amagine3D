@@ -5,113 +5,172 @@ description: Create or modify printable 3D models and their editable sources.
 
 # text-a3d
 
-Work only in the current session workspace, using public `a3d` commands and the
-managed runtime. Keep editable source beside its artifacts. Manufactured parts
-use build123d BRep solids and genuine STEP masters; derive meshes from them.
-Keep user requirements separate from construction controls. At first intent authoring,
-give ordinary exterior dimensions their nominal value and an explicit ±0.1 mm range;
-user tolerances and functional fit requirements take precedence. This is a modeling
-allowance, not printer accuracy. Preserve existing fixed targets and agreed ranges
-during repair. Ordinary dimension checks use 0.01 mm measurement precision;
-explicit precision requests can tighten `measurement_precision_mm` in the contract.
-Save ordinary editable lengths in 0.01 mm steps and recheck geometry. `a3d measure`
-saves and returns lengths to two decimals; raw STEP acceptance and existing geometry
-record precision are unchanged by that display rounding.
+Use public `a3d` commands in the session workspace. Keep editable build123d
+BRep source and STEP masters beside derived meshes; intent owns requirements
+and source owns controls.
 
-## Start with one source and a visible construction
+In final intent, give ordinary exterior dimensions their nominal value and ±0.1
+mm unless user tolerances or fits override it. Preserve fixed targets;
+use 0.01 mm check precision unless explicitly tighter.
 
-For an existing model, read its source and intent, preserve its identities and
-targets, and draft with `a3d draft SOURCE.py --intent INTENT.json`. For loft or
-finishing dimensions that drift, first read `references/surface-shell.md`: adapt
-its complete-geometry measurement callback and jointly calibrate the controls.
+<!-- a3d-workflow:v2 classify > functional-draft > feedback > contract > compile > evidence-repair -->
 
-When silhouette or character drives a new model, first read
-`references/surface-design.md` and choose its primary volumes and proportions.
-Use the intent-bound `references/surface-shell.md` example when a hollow loft
-suits that form. Choose one API example: `simple_brep` for one solid,
-`installed_module` for component installation and enclosure assembly. Its outer
-shape is replaceable; carry the chosen form into the copied build source:
+## 1. Classify and draft visible construction
+
+Read exactly `$AMAGINE3D_SKILL_DIR/SKILL.md` once; never substitute a cwd or
+global namesake. Before the first source edit, use only directly relevant
+`a3d guide TOPIC` or `a3d capabilities --symbol NAME` evidence. Do not preload
+deep references, final intent/profile, final plates or the full compiler before
+a visible draft.
+
+For an existing model, preserve source/intent feature IDs and targets, then run:
 
 ```bash
-example_name=installed_module
-cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
+a3d draft existing_build.py --intent existing_intent.json
 ```
 
-Adapt the primary volumes and major feature outlines to the brief in this source,
-then run `a3d draft "${example_name}_build.py"` and inspect it with `view_image`.
-For appearance-led work, resolve silhouette and feature scale in this preview
-before adding dependent interior detail. These examples need no intent or profile.
-
-Develop the body, cavity and openings from shared component envelopes and datums,
-then add support, retention and assembly access before exterior finishing.
-Missing component dimensions need reversible, explicit assumptions; preserve the
-requested function. Use the supplied images for form; see the Visual review
-section of `references/design-review.md` when appearance or uncertain fit needs research.
-
-Keep exploration and final geometry in this same source. `BuildSession` can start
-with `part_names`; give each `add`/`cut`/`observe` its owning `part_name`. Draft's
-`constructionFeatures` lists registered IDs/owners/roles to reuse in intent, not
-requirements or every operation. Drafts remain isolated previews, never delivery.
-Query only missing signatures with `a3d capabilities --symbol NAME`.
-
-## Finish the functional construction, then compile
-
-Once the geometry is visible, use `references/authoring-example.md` for the chosen
-example's separate profile/intent setup and final ownership. Intent records
-requirements; source owns construction controls. Reuse a valid selected printer
-profile. Confirm print volume and part placement with `a3d layout` before fixing
-details; `references/bambu-printability.md` covers profiles, packing and process.
-
-For a functional assembly, resolve fit, insertion, support, retention and access
-using `references/design-review.md`. Bind applicable installed-component checks
-with `references/installation-checks.md`. Purchased references stay outside
-manufactured parts; their display is optional and does not prove installation.
-
-Submit finishing through `BuildSession.finish`, with `checked_fillet` or
-`checked_chamfer`, then `export`. Editing the inspection copy from `build.part()`
-does not change exports. Never silently keep unfinished geometry after a failed finish.
-Validate the separate intent with `a3d intent`, then use the public compile boundary:
-`BuildSession.export()` generates the scene and report from the authored solids;
-the scene path passed to compile need not exist yet.
+For a new ordinary solid, copy the smallest seed:
 
 ```bash
-a3d compile "<name>_scene.json" --intent "<name>_intent.json" \
-  --source "<name>_build.py" --output-dir .
+cp "$AMAGINE3D_SKILL_DIR/examples/simple_brep_build.py" ./model_build.py
 ```
 
-## Repair against the current result
+First classify the task. It is **assembly-critical** when manufactured parts,
+installed components, service access, closure, locator, retention, fasteners,
+motion, mating fit or through openings can change envelope or topology. Mere
+seams, color regions and grooves are not.
 
-Keep inputs stable while compile runs; it owns freshness and hash binding.
-Use compact findings and `a3d diagnose RESULT.json --id ID --field FIELD` for
-omitted detail. Group causes, repair the source, and compile again. Boolean
-witnesses locate gaps, owners and nearest points: fix the datum or connection
-instead of assuming a larger cutter repairs an operation in empty space.
-Preserve defining form and function when replacing a failed construction.
+An ordinary appearance-led draft needs only its main envelope, identity-bearing
+volumes, silhouette, proportions and major layout. For assembly-critical work,
+start from the installed-module seed when useful:
 
-Inspect the current `preview` or failure's `diagnosticPreview` with `view_image`;
-an older successful render may be stale. Compare the final STEP against all
-intent targets. For a size at a height use `a3d measure MODEL.step --section-z HEIGHT`.
-Typed section checks use the agreed ranges on final STEP. Stop dimension calibration
-when all targets are within their ranges; numerical precision is not a design target.
-For a shape edit, `a3d compare BEFORE.glb AFTER.glb --view front` uses a shared
-camera and scale when coordinates and units match. Section insets and finite
-thickness samples do not prove global minimum walls: inspect witness location,
-material direction and sampling scope. Compile success alone is not model quality.
+```bash
+cp "$AMAGINE3D_SKILL_DIR/examples/installed_module_draft.py" ./model_build.py
+```
 
-Deliver the newest coherent source/report/output set with concrete observations
-and remaining limitations. If image evidence cannot be interpreted, visual review
-remains incomplete. Preserve intent during repairs; requested target changes need
-a separate revision with verified parent SHA and reason under
-`references/evidence-contract.md`. Deleting an unmet requirement changes scope.
+Before its first draft, add a reversible **functional skeleton**: provisional
+part owners, component envelope/cavity, openings, insertion/service/driver
+paths, and reserved support, locator, retention or fastener volumes. A direct-
+fastened enclosure needs one locator, symmetric shared fastener datums,
+removable-part clearance, receiver blind pilots/bosses and reachable access.
 
-## Pull details for the current question
+Budget interfaces before fixing the exterior. Boss diameter must cover pilot
+diameter, twice the minimum radial wall and a named design margin; reserve root
+material and a blind end. Keep axes clear of keepouts, ports, corners and thin
+walls. Floating-point excess is not design margin; load exact hardware values
+only when needed.
 
-- Construction choice or failure: `a3d guide strategy`, `references/construction-strategies.md`.
+Register provisional IDs, owners and `solid`/`cutter`/`separate` roles in
+`constructionFeatures`; these are a construction index, not intent requirements.
+Then run:
+
+```bash
+a3d draft model_build.py
+```
+
+Open it with `view_image`; a draft claims no final dimensions, printability,
+installation, manufacturing acceptance or readiness.
+
+## 2. Use visible and functional feedback
+
+Compare the draft with the brief and opened images; name silhouette, proportion,
+placement and access differences, then change owning parameters. Confirm openings
+connect, interfaces fit material and ownership avoids a topology rewrite. Repeat
+only after source changes; never rerun an unchanged `source.sha256`.
+
+Load one specialist reference only for a concrete unresolved issue. Do not
+reread this skill or the same guidance for an unchanged problem. If image
+evidence cannot be interpreted, report review incomplete; metadata is not sight.
+
+Keep exploration and final geometry in one source. `BuildSession` may start with
+`part_names`; every `add`, `cut` and `observe` has an owning `part_name`. Proceed
+only when key `constructionFeatures` IDs/owners/roles are stable and feedback no
+longer requires replacing the overall topology.
+
+## 3. Finalize the contract and construction
+
+Now resolve printer/nozzle profile, manufacturing mode, topology, interfaces,
+service paths and immutable intent. Use `references/authoring-example.md`; load
+`references/bambu-printability.md` and run `a3d layout` only when volume,
+orientation or layout matters. Never switch profile or scale requirements to
+clear QA; a larger machine is only an alternative to footprint failure.
+
+For confirmed needs, load `references/multipart-connections.md` for fastening,
+`references/design-review.md` for assembly, or
+`references/installation-checks.md` for purchased components; only then read
+`examples/installed_module_build.py`.
+
+Build body, cavity and openings from shared datums; complete support, retention
+and access before finishing. Keep missing dimensions reversible. Use
+`references/surface-shell.md` only for loft/finishing drift.
+
+Submit finishing through `BuildSession.finish` with `checked_fillet` or
+`checked_chamfer`, then `export`; never keep unchanged geometry after a failed
+finish. Validate the separate intent with `a3d intent` before compiling.
+
+## 4. Run the initial full compile
+
+Run one full compile after contract and construction are coherent:
+
+```bash
+a3d compile "model_scene.json" --intent "model_intent.json" --source "model_build.py" --output-dir .
+```
+
+Run CAD commands directly; never pipe draft, compile or diagnose to `head`,
+`tail` or another filter because persisted JSON and the direct exit status are
+authoritative. Keep compile inputs stable. Inspect the current preview and
+compare final STEP with intent; pass is not readiness.
+
+## 5. Diagnose and make evidence-gated repairs
+
+Use compact code, stage, stable issue ID, affected owners, bounds and repair
+hint first. Query only an unread field for the same `(runId, issue ID, field)`:
+
+```bash
+a3d diagnose result.json --id FINDING_ID --field FIELD
+```
+
+Treat occurrences with the same stable ID or cause across part and plate stages
+as one root cause. Repair its owning datum, parameter, feature or connection.
+Preserve intent; a target change needs a verified parent SHA and reason under
+`references/evidence-contract.md`.
+
+Every expensive repeat must consume new evidence or produce new state:
+
+- draft requires changed source from the prior `source.sha256`;
+- compile requires changed source or legitimate changed intent/profile/input
+  bindings; do not replay inputs that already produced a persisted result/runId;
+- a transport interruption without a persisted result is not a completed compile;
+- guidance requires a newly identified concrete problem;
+- progress means `repairDelta.resolved`/`newlyUnblocked`, a later passed stage, or
+  a `remaining` issue whose observed measurement, bounds or witness moved toward
+  expected without a related `regressed` issue.
+
+If the same issue has no evidence change, do not compile or reread the same
+material. Return to its owning feature/interface/source line and shared datum, or
+replace the construction strategy. A larger cutter does not repair an operation
+that misses material; repeated compiles do not replace geometric reasoning.
+
+When `pass=true`, status is `awaiting-visual-review`, and `deliveryReady=false`,
+stop compiling and inspect the preview. Before replying, read that result and
+report `visualReviewRequired`; never claim done, ready or review complete while
+`deliveryReady=false`. Match support/bridge claims to selected print orientation
+and current mesh-audit warnings; otherwise disclose risk.
+If inspection finds a defect, change source first.
+
+Use `a3d measure MODEL.step --section-z HEIGHT` for sections and
+`a3d compare BEFORE.glb AFTER.glb --view front` for shape edits. Finite samples
+do not prove global walls; inspect witness scope and stop inside accepted ranges.
+
+## Pull details only for the current problem
+
+- Construction: `a3d guide strategy`, then `references/construction-strategies.md`.
 - Motion: `a3d guide pressable-control`.
-- Multipart fit or closure: `a3d guide multipart`, `references/multipart-connections.md`.
+- Assembly: `a3d guide multipart`, then `references/multipart-connections.md`.
 - Non-manufactured display: `references/installed-displays.md`.
-- Printed color: `a3d guide color`; uncommon region topology: `color/BACKEND.md`.
-- Intent fields: `references/evidence-contract.md`; compile lifecycle: `references/cad-compile.md`.
+- Printed color: `a3d guide color`; uncommon topology: `color/BACKEND.md`.
+- Intent: `references/evidence-contract.md`; compile: `references/cad-compile.md`.
 
-Read internals only when the relevant guide, capability result and actual error
-do not answer the question.
+Read internals only when public guidance and the error are insufficient. Deliver
+the newest coherent source/report/output set with visual/measured observations
+and remaining limitations.

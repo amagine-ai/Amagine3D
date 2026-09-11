@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import re
+import shutil
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -69,6 +73,161 @@ class SharedSkillFileTests(unittest.TestCase):
                 self.assertIn(relative, skill)
 
         self.assertFalse((SINGLE / "references" / "multipart-basics.md").exists())
+
+    def test_skill_has_one_classified_evidence_gated_workflow(self):
+        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
+        marker = (
+            "a3d-workflow:v2 classify > functional-draft > feedback > contract > "
+            "compile > evidence-repair"
+        )
+        self.assertEqual(skill.count(marker), 1)
+        self.assertEqual(skill.count("$AMAGINE3D_SKILL_DIR/SKILL.md"), 1)
+        normalized = re.sub(r"\s+", " ", skill)
+        self.assertIn("never substitute a cwd or global namesake", normalized)
+
+        headings = (
+            "## 1. Classify and draft visible construction",
+            "## 2. Use visible and functional feedback",
+            "## 3. Finalize the contract and construction",
+            "## 4. Run the initial full compile",
+            "## 5. Diagnose and make evidence-gated repairs",
+        )
+        positions = [skill.index(heading) for heading in headings]
+        self.assertEqual(positions, sorted(positions))
+        self.assertGreater(skill.index("\na3d compile "), positions[2])
+
+    def test_early_routes_use_only_minimal_examples(self):
+        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
+        draft_and_feedback = skill[
+            skill.index("## 1. Classify"):skill.index("## 3. Finalize")
+        ]
+        contract = skill[
+            skill.index("## 3. Finalize"):skill.index("## 4. Run")
+        ]
+
+        self.assertIn("simple_brep_build.py", draft_and_feedback)
+        self.assertIn("installed_module_draft.py", draft_and_feedback)
+        self.assertNotIn("installed_module_build.py", draft_and_feedback)
+        self.assertIn("installed_module_build.py", contract)
+        normalized = re.sub(r"\s+", " ", skill)
+        self.assertIn("assembly-critical", normalized)
+        self.assertIn("manufactured parts", normalized)
+        self.assertIn("Mere seams, color regions and grooves are not", normalized)
+
+    def test_assembly_critical_skeleton_precedes_contract(self):
+        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
+        early = skill[
+            skill.index("## 1. Classify"):skill.index("## 3. Finalize")
+        ]
+        for fragment in (
+            "**functional skeleton**",
+            "part owners",
+            "component envelope/cavity",
+            "insertion/service/driver",
+            "symmetric shared fastener datums",
+            "named design margin",
+            "constructionFeatures",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, early)
+        self.assertNotIn("references/multipart-connections.md", early)
+        self.assertNotIn("installed_module_build.py", early)
+
+    def test_repeated_work_requires_evidence_not_a_retry_count(self):
+        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
+        normalized = re.sub(r"\s+", " ", skill)
+        for fragment in (
+            "`source.sha256`",
+            "(runId, issue ID, field)",
+            "persisted result/runId",
+            "repairDelta.resolved",
+            "newlyUnblocked",
+            "`remaining`",
+            "`regressed`",
+            "`awaiting-visual-review`",
+            "`deliveryReady=false`",
+            "`visualReviewRequired`",
+            "direct exit status",
+            "selected print orientation",
+            "mesh-audit warnings",
+            "never claim done, ready or review complete",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, normalized)
+        self.assertNotRegex(
+            normalized.lower(),
+            r"(?:at most|maximum|no more than) \d+ (?:drafts?|compiles?|repairs?|iterations?)",
+        )
+
+    def test_contract_references_allow_only_unbound_drafts_before_contract(self):
+        evidence = (SINGLE / "references" / "evidence-contract.md").read_text(
+            encoding="utf-8"
+        )
+        printability = (SINGLE / "references" / "bambu-printability.md").read_text(
+            encoding="utf-8"
+        )
+        construction = (
+            SINGLE / "references" / "construction-strategies.md"
+        ).read_text(encoding="utf-8")
+
+        normalized_evidence = re.sub(r"\s+", " ", evidence)
+        normalized_printability = re.sub(r"\s+", " ", printability)
+        normalized_construction = re.sub(r"\s+", " ", construction)
+        self.assertIn("An unbound draft may", normalized_evidence)
+        self.assertIn("before contract-bound", normalized_evidence)
+        self.assertIn("before the full compile", normalized_printability)
+        self.assertIn("recorded selected print transform", normalized_printability)
+        self.assertIn("Machine evidence wins", normalized_printability)
+        self.assertIn("correct the report", normalized_printability)
+        self.assertIn(
+            "before contract-bound final geometry",
+            normalized_construction.lower(),
+        )
+        self.assertIn("Never claim manufacturing acceptance", normalized_evidence)
+
+    def test_authoring_commands_are_self_contained_and_multi_plate_is_current(self):
+        authoring = (SINGLE / "references" / "authoring-example.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("example_name=", authoring)
+        self.assertNotIn("${example_name}", authoring)
+        self.assertNotIn("still exports a single plate", authoring)
+        self.assertIn("allows multiple plates by default", authoring)
+        self.assertIn("name-plate-NN.3mf", authoring)
+
+        with TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            shutil.copyfile(
+                SINGLE / "examples" / "simple_brep_intent.py",
+                workspace / "model_intent.py",
+            )
+            shutil.copyfile(
+                SINGLE / "examples" / "bambu-a1-mini-0.4-standard.example.json",
+                workspace / "model_printer-profile.json",
+            )
+            completed = subprocess.run(
+                [sys.executable, str(workspace / "model_intent.py")],
+                capture_output=True,
+                check=False,
+                env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SINGLE)},
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue((workspace / "model_intent.json").is_file())
+
+    def test_skill_local_links_exist(self):
+        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
+        references = set(
+            re.findall(
+                r"(?:references|examples|color)/[A-Za-z0-9_.\-/]+",
+                skill,
+            )
+        )
+        self.assertTrue(references)
+        for relative in references:
+            with self.subTest(path=relative):
+                self.assertTrue((SINGLE / relative).is_file())
 
 
 if __name__ == "__main__":

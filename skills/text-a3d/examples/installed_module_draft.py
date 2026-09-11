@@ -1,8 +1,9 @@
-"""Copy into the current workspace, then run: a3d draft installed_module_draft.py.
+"""Copy into the workspace, add task-specific reservations, then run a3d draft.
 
-Provisional installed module: inspect the shared envelope, cavity, viewing
-opening and bottom entry before specifying retention, closure or fasteners.
-Orange is a purchased-component envelope, not an additional printed part.
+This seed exposes the envelope, cavity, viewing opening and bottom service path.
+For assembly-critical work, add provisional support, locator, retention or
+fastener volumes before the first draft. They remain reversible construction,
+not an immutable contract. Orange is a purchased-component reference.
 """
 from build123d import Align, Box, Pos
 from cad_draft import export_draft
@@ -21,7 +22,15 @@ cavity = Pos(0, 0, COVER_H - 1) * Box(MODULE_W + 2 * SIDE_GAP, MODULE_D + 2 * SI
 window = Pos(0, 0, SEAT_Z - 0.1) * Box(WINDOW_W, WINDOW_D, VIEWING_LAND + 1.1, align=ALIGN)
 frame = outer - cavity - window
 module = Pos(0, 0, SEAT_Z - MODULE_H) * Box(MODULE_W, MODULE_D, MODULE_H, align=ALIGN)
-# Explode the provisional cover downwards to expose the bottom installation path.
-# Closure and retention are still unresolved; this is not an assembly acceptance.
+# Explode the provisional cover downwards without changing its stable part ID.
 cover = Pos(0, 0, -8) * Box(WIDTH, DEPTH, COVER_H, align=ALIGN)
-export_draft({"frame": frame, "cover-exploded": cover}, references={"module-envelope": module})
+export_draft(
+    {"frame": frame, "cover": cover},
+    references={"module-envelope": module},
+    construction_features={
+        "frame-body": {"owner": "frame", "role": "solid"},
+        "module-space": {"owner": "frame", "role": "cutter"},
+        "viewing-opening": {"owner": "frame", "role": "cutter"},
+        "service-cover": {"owner": "cover", "role": "separate"},
+    },
+)

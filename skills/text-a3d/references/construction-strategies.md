@@ -5,12 +5,15 @@ owns the downstream feature graph and constructive geometry rules.
 
 ## Frame and feature graph
 
-Declare the fixed object semantic frame in the intent contract: `+X` is user
-right, `+Y` is object back, `+Z` is object top, front is `Y-min`, and bottom is
-`Z-min`. Declare flat semantic feature fields before modeling: `kind`, `face`,
-`direction`, and `edge_crossing` for every port, hole, slot, cutout, window,
-cavity, or recess. Declare `manufacturing.mode` before modeling. Use
-`a3d guide multipart` when separate manufacture or assembly is relevant.
+An unbound draft may establish silhouette, proportion and primary volumes before
+these declarations. Before contract-bound final geometry, declare the fixed
+object semantic frame in intent: `+X` is user right, `+Y` is object back, `+Z` is
+object top, front is `Y-min`, and bottom is `Z-min`. Declare flat semantic feature
+fields for every final port, hole, slot, cutout, window, cavity or recess:
+`kind`, `face`, `direction`, and `edge_crossing`. Declare `manufacturing.mode`
+before fixing final part topology. Use `a3d guide multipart` only when separate
+manufacture, assembly, disassembly, maintenance or a real mating interface is
+relevant.
 `edge_crossing` refers to crossing an edge between exterior
 faces, not piercing wall thickness; a through opening contained within one face
 uses `forbidden`.

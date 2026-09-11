@@ -9,7 +9,13 @@ slicer only when requested; one plate is not a requirement unless specified.
 
 ## Profile decisions
 
-- Resolve one machine, nozzle, standard process, and tool before geometry.
+An unbound draft may establish only silhouette, proportion and primary volumes
+without a printer profile. Resolve the profile before committing print-driven
+wall thickness, orientation, plate layout or any printability claim, and before
+the full compile.
+
+- Resolve one machine, nozzle, standard process, and tool before contract-bound
+  final geometry.
 - Prefer an explicit user or project selection. Otherwise use the common A1
   with a 0.4 mm nozzle and record the assumption.
 - For dual-tool machines, use the selected tool's polygon and height rather
@@ -115,6 +121,9 @@ with `a3d guide strategy`.
   holes.
 - Split the model when the intent contract permits assembly; prefer this over
   hiding unavoidable overhangs in a one-piece body.
+- After export, compare every part's recorded selected print transform with the
+  intended pose and its overhang/bridge audit. Machine evidence wins when the
+  report disagrees; correct the report rather than claiming the intended pose ran.
 - When geometry cannot be made support-free, set `support_policy` to
   `supports-required` and disclose the reported regions.
 

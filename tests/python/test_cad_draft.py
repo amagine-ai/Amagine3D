@@ -60,7 +60,12 @@ class CadDraftTests(unittest.TestCase):
         self.assertEqual(result["status"], "draft")
         self.assertEqual(result["issues"], [])
         self.assertFalse(result["deliveryReady"])
-        self.assertEqual(result["constructionFeatures"], {})
+        self.assertEqual(result["constructionFeatures"], {
+            "frame-body": {"owner": "frame", "role": "solid"},
+            "module-space": {"owner": "frame", "role": "cutter"},
+            "viewing-opening": {"owner": "frame", "role": "cutter"},
+            "service-cover": {"owner": "cover", "role": "separate"},
+        })
         self.assertIn("not intent requirements", result["constructionFeatureScope"])
         self.assertNotIn("pass", result)
         self.assertNotIn("deliverables", result)
@@ -74,6 +79,10 @@ class CadDraftTests(unittest.TestCase):
         geometry = import_step(result["artifacts"]["step"]["path"])
         self.assertEqual(len(geometry.solids()), 3)
         records = {item["name"]: item for item in result["objects"]}
+        self.assertEqual(set(records), {"frame", "cover", "module-envelope"})
+        self.assertNotIn("cover-exploded", records)
+        self.assertEqual(records["frame"]["role"], "proposed-part")
+        self.assertEqual(records["cover"]["role"], "proposed-part")
         self.assertEqual(records["module-envelope"]["role"], "component-reference")
         self.assertEqual(records["module-envelope"]["geometry"]["boundsMm"]["size"], [40, 28, 8])
         # The module cavity and smaller through viewing aperture are real BRep cuts.

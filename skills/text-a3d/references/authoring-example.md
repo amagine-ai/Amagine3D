@@ -19,45 +19,65 @@ through the existing `write_scene` and STEP exporters. `surface-shell.md` explai
 the loft example's controls and wall-thickness checks.
 
 Run in the current session workspace (the runtime supplies `AMAGINE3D_SKILL_DIR`).
-For a new single part, start with `simple_brep`; use `installed_module` for
-component installation. Both declare `part_names` and run before intent or profile:
+For a new ordinary single part, copy and draft `simple_brep_build.py` without an
+intent or profile:
 
 ```bash
-example_name=simple_brep
-cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_build.py" .
-a3d draft "${example_name}_build.py"
+cp "$AMAGINE3D_SKILL_DIR/examples/simple_brep_build.py" ./model_build.py
 ```
 
-Inspect the returned preview with `view_image`, then develop the geometry in this
-source. The installed-module source owns its construction controls;
-its intent generator imports them without running geometry and keeps the brief's
-overall and component dimensions independent. No parameter JSON is needed.
-The draft's `constructionFeatures` lists registered IDs, owners and roles to reuse
-when writing intent; it is not the requirements or a complete list of operations.
-For `assembly` or `surface_shell`, set `example_name` and copy that build source.
-Before its first draft, run the profile/intent setup below through `a3d intent`,
-then use `a3d draft SOURCE.py --intent INTENT.json`; compile after reviewing the
-geometry. Other sources that read intent parameters also need intent first. Draft export is
-isolated under `.amagine3d-drafts`; it carries no final acceptance. Keep the same
-geometry source for final compile. A source without intent can declare
-`BuildSession(__file__, part_names=("housing", "cover"))` and use
-`build.add("cover-body", solid, part_name="cover")` (also on `cut`/`observe`).
-With intent, declared IDs bind its features to their owners. Extra `add`/`cut` IDs
-with explicit `part_name` record checked construction operations only; `observe`
-requires a declared ID. Final export still requires every intent feature. Pass optional
-preview component envelopes as `build.export(draft_references={"module": solid})`;
-they do not become manufactured parts or final installation evidence.
+```bash
+a3d draft model_build.py
+```
 
-Create and validate the matching intent after exploration for the unbound examples,
-or before draft for the intent-bound examples. The profile is an illustrative fallback; use the
-selected machine/nozzle or point the intent source at an existing valid profile.
+Use `installed_module_draft.py` before the contract only when a purchased
+component's envelope, placement or insertion layout must appear in the first
+preview. Read the full `installed_module_build.py` later, after the design is
+confirmed to require installation, support, closure, maintenance or fastening
+evidence.
+
+Inspect the returned preview with `view_image`, then develop the geometry in this
+source. The installed-module source owns its construction controls; its intent
+generator imports them without running geometry and keeps the brief's overall and
+component dimensions independent. No parameter JSON is needed. The draft's
+`constructionFeatures` lists registered IDs, owners and roles to reuse when
+writing intent; it is not the requirements or a complete list of operations.
+
+The `assembly` and `surface_shell` examples read intent parameters, so create and
+validate their intent before their first draft. Other intent-bound sources have
+the same requirement. Draft export is isolated under `.amagine3d-drafts`; it
+carries no final acceptance. Keep the same geometry source for final compile. A
+source without intent can declare `BuildSession(__file__, part_names=("housing",
+"cover"))` and use `build.add("cover-body", solid, part_name="cover")` (also on
+`cut`/`observe`). With intent, declared IDs bind features to their owners. Extra
+`add`/`cut` IDs with explicit `part_name` record checked construction operations
+only; `observe` requires a declared ID. Final export still requires every intent
+feature. Pass optional preview component envelopes as
+`build.export(draft_references={"module": solid})`; they do not become
+manufactured parts or final installation evidence.
+
+After exploration, create and validate the matching final intent and selected
+printer profile. The profile below is an illustrative fallback; use the selected
+machine/nozzle or an existing valid profile:
 
 ```bash
-a3d profile --nozzle 0.4 --tool 0 --out "${example_name}_printer-profile.json"
-cp "$AMAGINE3D_SKILL_DIR/examples/${example_name}_intent.py" .
-python3 "${example_name}_intent.py"
-a3d intent "${example_name}_intent.json"
-a3d compile "${example_name}_scene.json" --intent "${example_name}_intent.json" --source "${example_name}_build.py" --output-dir .
+a3d profile --nozzle 0.4 --tool 0 --out model_printer-profile.json
+```
+
+```bash
+cp "$AMAGINE3D_SKILL_DIR/examples/simple_brep_intent.py" ./model_intent.py
+```
+
+```bash
+python3 model_intent.py
+```
+
+```bash
+a3d intent model_intent.json
+```
+
+```bash
+a3d compile model_scene.json --intent model_intent.json --source model_build.py --output-dir .
 ```
 
 The intent source writes the target separately. The compiler executes the build
@@ -186,7 +206,8 @@ a3d capabilities --symbol BuildSession --symbol BuildSession.add --symbol BuildS
 
 `plan_plates(bboxes, profile, *, spacing_mm=5, edge_margin_mm=0, max_plates=1)`
 checks layout plans on the selected printer. Increasing `max_plates` permits a
-multi-plate plan; it does not produce a multi-plate 3MF. The current strict
-`export_assembly()` manufacturing path still exports a single plate. Report
-the plan and outstanding export work accurately rather than changing the
-printer to suppress a packing failure.
+multi-plate plan. `export_assembly()` allows multiple plates by default and
+exports each as its own `name-plate-NN.stl` and `name-plate-NN.3mf`; single-plate
+exports retain `name.stl` and `name.3mf`. Set `max_plates=1` only when one plate
+is an explicit requirement. Report the plan and outstanding export work
+accurately rather than changing the printer to suppress a packing failure.
