@@ -146,6 +146,11 @@ Every expensive repeat must consume new evidence or produce new state:
   a `remaining` issue whose observed measurement, bounds or witness moved toward
   expected without a related `regressed` issue.
 
+Runtime admission may reject only a complete successful replay whose source,
+intent, scene and profile bytes still match bound evidence. Any changed binding
+restores eligibility; missing, malformed, incomplete or failed evidence permits
+retry. This gate never chooses stages, geometry, topology or repair strategy.
+
 If the same issue has no evidence change, do not compile or reread the same
 material. Return to its owning feature/interface/source line and shared datum, or
 replace the construction strategy. A larger cutter does not repair an operation
@@ -154,9 +159,10 @@ that misses material; repeated compiles do not replace geometric reasoning.
 When `pass=true`, status is `awaiting-visual-review`, and `deliveryReady=false`,
 stop compiling and inspect the preview. Before replying, read that result and
 report `visualReviewRequired`; never claim done, ready or review complete while
-`deliveryReady=false`. Match support/bridge claims to selected print orientation
-and current mesh-audit warnings; otherwise disclose risk.
-If inspection finds a defect, change source first.
+`deliveryReady=false`. Match support/bridge claims to `printOrientationEvidence`
+and current mesh-audit warnings; its automatic ranked export pose is evidence,
+not proof of design correctness or support-free printing. `rotated_xy_90deg=false`
+does not cancel `rotateDegreesXYZ`. If inspection finds a defect, change source first.
 
 Use `a3d measure MODEL.step --section-z HEIGHT` for sections and
 `a3d compare BEFORE.glb AFTER.glb --view front` for shape edits. Finite samples

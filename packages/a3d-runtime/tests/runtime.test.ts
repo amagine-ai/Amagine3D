@@ -35,9 +35,15 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.match(cadPrompt, /任务分类、阶段顺序、reference 路由/u);
   assert.match(cadPrompt, /progress invariant/u);
   assert.match(cadPrompt, /重复 draft、compile、diagnose/u);
+  assert.match(cadPrompt, /a3d-admission-rejection\/v1/u);
+  assert.match(cadPrompt, /读取 matchedResult/u);
+  assert.match(cadPrompt, /缺失、不完整或失败证据仍可重试/u);
+  assert.match(cadPrompt, /门控不决定阶段、几何、拓扑或修复策略/u);
   assert.match(cadPrompt, /view_image/u);
   assert.match(cadPrompt, /布局和功能关系/u);
-  assert.match(cadPrompt, /实际 selected orientation 与 mesh audit/u);
+  assert.match(cadPrompt, /`printOrientationEvidence` 与 mesh audit/u);
+  assert.match(cadPrompt, /rotateDegreesXYZ 才是 STL\/3MF 的实际语义旋转/u);
+  assert.match(cadPrompt, /`rotated_xy_90deg=false` 只表示排版时没有额外床面 XY/u);
   assert.match(cadPrompt, /最新 `\*_compile-result\.json`/u);
   assert.match(cadPrompt, /`status`、`visualReviewRequired` 和 `deliveryReady`/u);
   assert.match(cadPrompt, /不得声称已完成、可交付或已完成视觉审查/u);
@@ -378,12 +384,14 @@ test('runs isolated threads and exposes only normalized runtime events', async (
       ignore_default_excludes: false,
       inherit: 'core',
       set: {
+        AMAGINE3D_EVIDENCE_GATE: 'v1',
         AMAGINE3D_ROOT: root,
         AMAGINE3D_SKILL_DIR: join(root, 'skills', 'text-a3d'),
         PYTHONDONTWRITEBYTECODE: '1',
         PYTHONNOUSERSITE: '1',
       },
     });
+    assert.equal(clientOptions?.env?.AMAGINE3D_EVIDENCE_GATE, 'v1');
     assert.match(clientOptions?.env?.CODEX_HOME ?? '', new RegExp(SESSION_ID, 'u'));
     assert.equal(clientOptions?.env?.PATH?.split(delimiter)[0], join(root, 'bin'));
     assert.equal(threadOptions?.approvalPolicy, 'never');
@@ -409,6 +417,19 @@ test('runs isolated threads and exposes only normalized runtime events', async (
       },
     });
     assert.equal(threadOptions?.webSearchMode, 'live');
+
+    await runtime.runTurn({
+      imagePaths: [],
+      message: '解释模型',
+      sessionId: SESSION_ID,
+      taskType: 'chat',
+      threadId: result.threadId,
+    });
+    assert.equal(clientOptions?.env?.AMAGINE3D_EVIDENCE_GATE, undefined);
+    assert.equal(
+      clientOptions?.config?.shell_environment_policy?.set?.AMAGINE3D_EVIDENCE_GATE,
+      undefined,
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }

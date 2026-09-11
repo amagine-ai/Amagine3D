@@ -148,7 +148,7 @@ class SharedSkillFileTests(unittest.TestCase):
             "`deliveryReady=false`",
             "`visualReviewRequired`",
             "direct exit status",
-            "selected print orientation",
+            "`printOrientationEvidence`",
             "mesh-audit warnings",
             "never claim done, ready or review complete",
         ):
@@ -158,6 +158,44 @@ class SharedSkillFileTests(unittest.TestCase):
             normalized.lower(),
             r"(?:at most|maximum|no more than) \d+ (?:drafts?|compiles?|repairs?|iterations?)",
         )
+
+    def test_runtime_gate_is_weak_and_orientation_remains_machine_evidence(self):
+        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
+        normalized = re.sub(r"\s+", " ", skill)
+        gate = normalized[
+            normalized.index("Runtime admission"):
+            normalized.index("If the same issue")
+        ]
+        for fragment in (
+            "complete successful replay",
+            "source, intent, scene and profile bytes still match",
+            "Any changed binding restores eligibility",
+            "missing, malformed, incomplete or failed evidence permits retry",
+            "never chooses stages, geometry, topology or repair strategy",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, gate)
+        self.assertNotRegex(
+            gate.lower(),
+            r"(?:at most|maximum|no more than) \d+ (?:drafts?|compiles?|repairs?|iterations?)",
+        )
+        self.assertIn("`printOrientationEvidence`", normalized)
+        self.assertIn("automatic ranked export pose is evidence", normalized)
+        self.assertIn("not proof of design correctness or support-free printing", normalized)
+        self.assertIn(
+            "`rotated_xy_90deg=false` does not cancel `rotateDegreesXYZ`",
+            normalized,
+        )
+
+        printability = (SINGLE / "references" / "bambu-printability.md").read_text(
+            encoding="utf-8"
+        )
+        normalized_printability = re.sub(r"\s+", " ", printability)
+        self.assertIn(
+            "Otherwise use the common A1 with a 0.4 mm nozzle",
+            normalized_printability,
+        )
+        self.assertIn("Never switch profiles", normalized_printability)
 
     def test_contract_references_allow_only_unbound_drafts_before_contract(self):
         evidence = (SINGLE / "references" / "evidence-contract.md").read_text(

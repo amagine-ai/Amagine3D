@@ -128,8 +128,9 @@ export function codexPrompt(
       ? [
           '这是一个 CAD 任务。直接在当前会话目录完成它；先运行一次 `a3d help`，再读取环境变量 `$AMAGINE3D_SKILL_DIR` 指向的确切 `SKILL.md` 一次。不要搜索或读取 cwd、用户目录或全局 skills 中的同名文件；任务分类、阶段顺序、reference 路由和重复动作条件以该项目 skill 为准。',
           '在重复 draft、compile、diagnose 字段读取或 guidance 加载前，应用 `SKILL.md` 的 progress invariant；不要用相同状态重放替代建模判断。',
+          '项目 CLI 的 evidence gate 只拒绝已有完整成功证据且 source/intent/scene/profile 字节完全相同的 draft 或 compile。遇到 `a3d-admission-rejection/v1` 时读取 matchedResult，或实质修改输入后再运行；缺失、不完整或失败证据仍可重试，门控不决定阶段、几何、拓扑或修复策略。',
           '用原生 view_image 读取最新五视图预览。根据实际看到的轮廓、比例、特征尺度、布局和功能关系给出反馈并修改对应参数；无法识别时说明视觉审查未完成，不要用颜色统计冒充看图。',
-          '打印方向、支撑、桥接和免支撑结论必须引用当前 profile 绑定的实际 selected orientation 与 mesh audit；报告文字或预期姿态不能覆盖机器 warning。',
+          '打印方向、支撑、桥接和免支撑结论必须引用当前 compile 的 `printOrientationEvidence` 与 mesh audit；其中的 rotateDegreesXYZ 才是 STL/3MF 的实际语义旋转。`rotated_xy_90deg=false` 只表示排版时没有额外床面 XY 四分之一转，不能覆盖 selected pose 或机器 warning。',
           '最终回复前读取本轮最新 `*_compile-result.json`。逐字遵守其中的 `status`、`visualReviewRequired` 和 `deliveryReady`；当 readiness 为 false 时，不得声称已完成、可交付或已完成视觉审查。',
           '在每个主要阶段或耗时工具调用前，用一句简短中文说明当前目标；只描述用户可理解的工作，不复述 shell 命令或内部推理。',
           '不要为了查询 API 主动阅读 `cad_helpers.py` 等内部实现；先使用公开 `a3d` 帮助、guide 或 capability。只有公开接口和具体报错仍不足以定位问题时，才检查最小范围的内部源码。',
@@ -249,6 +250,10 @@ export class CodexRuntime implements CodexRuntimeLike {
     delete environment.LLM_API_KEY;
     delete environment.CODEX_API_KEY;
     delete environment.OPENAI_API_KEY;
+    delete environment.AMAGINE3D_EVIDENCE_GATE;
+    if (request.taskType === 'cad') {
+      environment.AMAGINE3D_EVIDENCE_GATE = 'v1';
+    }
     environment.CODEX_HOME = codexHome;
     environment.AMAGINE3D_ROOT = this.projectRoot;
     environment.AMAGINE3D_SKILL_DIR = join(
@@ -304,6 +309,9 @@ export class CodexRuntime implements CodexRuntimeLike {
             'skills',
             'text-a3d',
           ),
+          ...(request.taskType === 'cad'
+            ? { AMAGINE3D_EVIDENCE_GATE: 'v1' }
+            : {}),
           PYTHONDONTWRITEBYTECODE: '1',
           PYTHONNOUSERSITE: '1',
         },
