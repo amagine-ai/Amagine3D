@@ -10,6 +10,7 @@ import {
   type ThreadOptions,
 } from '@openai/codex-sdk';
 
+import { CompileProgressExtractor } from './compile-progress.ts';
 import { normalizeThreadEvent, type RuntimeEvent } from './events.ts';
 
 export type RuntimeTaskType = 'cad' | 'chat';
@@ -125,20 +126,22 @@ export function codexPrompt(
   const taskInstruction =
     taskType === 'cad'
       ? [
-          '这是一个 CAD 任务。直接在当前会话目录完成它；先运行 `a3d help`，使用项目提供的 CAD 工具，并在回复前检查生成的预览。',
-          '用原生 view_image 读取最新五视图预览。工具返回图像内容但无法识别时，应说明视觉审查未完成；不要用颜色统计冒充看图，也不要改用其他技能启动查看器。',
-          '外观主导的设计先建立主要体量、轮廓和比例，尽早生成预览；对照用户要求及已查看的参考指出具体差距，再修改对应几何参数，不要只列举已有部件。',
+          '这是一个 CAD 任务。直接在当前会话目录完成它；先运行一次 `a3d help`，再读取环境变量 `$AMAGINE3D_SKILL_DIR` 指向的确切 `SKILL.md` 一次。不要搜索或读取 cwd、用户目录或全局 skills 中的同名文件；任务分类、阶段顺序、reference 路由和重复动作条件以该项目 skill 为准。',
+          '在重复 draft、compile、diagnose 字段读取或 guidance 加载前，应用 `SKILL.md` 的 progress invariant；不要用相同状态重放替代建模判断。',
+          '用原生 view_image 读取最新五视图预览。根据实际看到的轮廓、比例、特征尺度、布局和功能关系给出反馈并修改对应参数；无法识别时说明视觉审查未完成，不要用颜色统计冒充看图。',
+          '打印方向、支撑、桥接和免支撑结论必须引用当前 profile 绑定的实际 selected orientation 与 mesh audit；报告文字或预期姿态不能覆盖机器 warning。',
+          '最终回复前读取本轮最新 `*_compile-result.json`。逐字遵守其中的 `status`、`visualReviewRequired` 和 `deliveryReady`；当 readiness 为 false 时，不得声称已完成、可交付或已完成视觉审查。',
           '在每个主要阶段或耗时工具调用前，用一句简短中文说明当前目标；只描述用户可理解的工作，不复述 shell 命令或内部推理。',
-          '不要为了查询 API 主动阅读 `cad_helpers.py` 等内部实现；先使用 `a3d help`、一个与当前问题直接相关的 `a3d guide TOPIC`，以及 `a3d capabilities --symbol NAME`。只有公开接口和具体报错仍不足以定位问题时，才检查最小范围的内部源码。',
-          '工具调用保持简短，一次只完成一个清晰操作，避免为了查看资料拼接多条 shell 命令。如果工具包装出现 JavaScript 语法或引号错误，简化调用并立即重试；单次包装错误不代表 CAD 工具不可用。',
-          '耗时命令要保留完整工具返回（包括执行句柄和退出状态），不要只输出 output 字段；续读只能使用工具实际返回的句柄，不要猜测、截断或转换它。如果续读被运行时拒绝，检查本轮已落盘的结果及完成状态，避免盲目重复启动构建或把旧结果当成本轮成功。',
+          '不要为了查询 API 主动阅读 `cad_helpers.py` 等内部实现；先使用公开 `a3d` 帮助、guide 或 capability。只有公开接口和具体报错仍不足以定位问题时，才检查最小范围的内部源码。',
+          '每个工具调用都必须独立，不依赖上一次 shell 调用留下的变量或目录状态；一次只完成一个清晰操作。若工具包装出现 JavaScript 语法或引号错误，简化调用并立即重试。',
+          '耗时命令要保留完整工具返回（包括执行句柄和退出状态），不要只输出 output 字段，也不要把 `a3d draft`、`a3d compile` 或 `a3d diagnose` 管道到 `head`、`tail` 等过滤器；直接进程退出状态和本轮落盘结果才是权威。续读只能使用工具实际返回的句柄；若被拒绝，检查本轮持久化结果，避免重复启动构建或把旧结果当成本轮成功。',
         ].join('\n')
       : '直接处理用户请求；只有确实需要时才修改当前会话目录中的文件。';
   const searchInstruction = webSearchEnabled
     ? [
         '本轮允许使用运行时提供的原生联网搜索；按任务需要使用可用工具补充可靠规格或参考资料。开启权限不代表搜索、原图获取和图像感知已经验证，不要为每轮任务预先做能力探测。',
         ...(taskType === 'cad' ? [
-          '外观主导且用户没有提供明确视觉参考时，默认先寻找少量相关参考并实际打开图片查看，再确定造型方向；在会话目录简要记录所用来源、可观察的轮廓和比例关系，并在早期预览中对照。纯尺寸驱动的零件无需为了流程而搜图；用户已有参考时优先使用它。',
+          '只有外观参考会实质改变造型判断时，才搜索少量资料并实际打开图片；搜索不得覆盖 `SKILL.md` 的阶段路由或延迟 assembly-critical functional draft。纯尺寸任务和已有参考无需为了流程搜索。',
           '网页标题或图片文字描述不等于看过图片，照片不能替代可靠的工程规格或尺寸。若当前工具不能搜索、获取或识别图片，准确说明是哪一步不可用，并基于已有资料继续，不要声称参考已查看。',
         ] : []),
       ].join('\n')
@@ -361,6 +364,7 @@ export class CodexRuntime implements CodexRuntimeLike {
     let finalResponse = '';
     let lastRuntimeError = '';
     let threadId = request.threadId;
+    const compileProgress = new CompileProgressExtractor();
     for await (const event of events) {
       if (event.type === 'thread.started') {
         threadId = event.thread_id;
@@ -372,7 +376,24 @@ export class CodexRuntime implements CodexRuntimeLike {
       ) {
         finalResponse = event.item.text;
       }
-      await request.onEvent?.(normalizeThreadEvent(event));
+      const normalized = normalizeThreadEvent(event);
+      const progressEvents = compileProgress.extract(event).map(
+        (progress): RuntimeEvent => ({
+          ...progress,
+          type: 'cad.compile.progress',
+        }),
+      );
+      if (event.type === 'item.started') {
+        await request.onEvent?.(normalized);
+        for (const progress of progressEvents) {
+          await request.onEvent?.(progress);
+        }
+      } else {
+        for (const progress of progressEvents) {
+          await request.onEvent?.(progress);
+        }
+        await request.onEvent?.(normalized);
+      }
       if (event.type === 'turn.failed') throw new Error(event.error.message);
       if (event.type === 'error') lastRuntimeError = event.message;
     }

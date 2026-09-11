@@ -3,6 +3,7 @@ export {
   type RuntimeEvent,
   type RuntimeItem,
 } from './events.ts';
+export type { CadCompileProgressStatus } from './compile-progress.ts';
 export {
   agentRunTimeoutsFromEnv,
   DEFAULT_AGENT_RUN_HARD_TIMEOUT_MS,

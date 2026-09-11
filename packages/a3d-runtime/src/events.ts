@@ -1,5 +1,7 @@
 import type { ThreadEvent, ThreadItem } from '@openai/codex-sdk';
 
+import type { CadCompileProgressStatus } from './compile-progress.ts';
+
 export type RuntimeItem =
   | { id: string; text: string; type: 'agent_message' }
   | {
@@ -31,6 +33,13 @@ export type RuntimeItem =
   | { id: string; message: string; type: 'error' };
 
 export type RuntimeEvent =
+  | {
+      commandId: string;
+      elapsedMs?: number;
+      stage: string;
+      status: CadCompileProgressStatus;
+      type: 'cad.compile.progress';
+    }
   | { threadId: string; type: 'thread.started' }
   | { type: 'turn.started' }
   | { type: 'turn.completed' }

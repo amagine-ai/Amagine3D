@@ -11,6 +11,7 @@ import type {
   ThreadOptions,
 } from '@openai/codex-sdk';
 
+import { CompileProgressExtractor } from '../src/compile-progress.ts';
 import {
   codexModelId,
   codexPrompt,
@@ -27,17 +28,198 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.equal(codexReasoningEffort('off'), 'minimal');
   assert.equal(codexReasoningEffort('xhigh'), 'xhigh');
   assert.throws(() => codexReasoningEffort('turbo'), /LLM_THINKING_LEVEL/u);
-  assert.match(codexPrompt('cad', '建模', false), /a3d help/u);
-  assert.match(codexPrompt('cad', '建模', false), /不要为了查询 API/u);
-  assert.match(codexPrompt('cad', '建模', false), /不复述 shell 命令/u);
-  assert.match(codexPrompt('cad', '建模', false), /简化调用并立即重试/u);
-  assert.match(codexPrompt('cad', '建模', false), /联网已关闭/u);
-  assert.doesNotMatch(codexPrompt('cad', '建模', false), /默认先寻找少量相关参考/u);
-  assert.match(codexPrompt('cad', '建模', true), /实际打开图片查看/u);
-  assert.match(codexPrompt('cad', '建模', true), /照片不能替代可靠的工程规格/u);
-  assert.match(codexPrompt('cad', '建模', true), /完整工具返回/u);
-  assert.doesNotMatch(codexPrompt('chat', '解释', true), /造型方向/u);
+  const cadPrompt = codexPrompt('cad', '建模', false);
+  assert.match(cadPrompt, /a3d help/u);
+  assert.match(cadPrompt, /`\$AMAGINE3D_SKILL_DIR` 指向的确切 `SKILL\.md` 一次/u);
+  assert.match(cadPrompt, /不要搜索或读取 cwd、用户目录或全局 skills/u);
+  assert.match(cadPrompt, /任务分类、阶段顺序、reference 路由/u);
+  assert.match(cadPrompt, /progress invariant/u);
+  assert.match(cadPrompt, /重复 draft、compile、diagnose/u);
+  assert.match(cadPrompt, /view_image/u);
+  assert.match(cadPrompt, /布局和功能关系/u);
+  assert.match(cadPrompt, /实际 selected orientation 与 mesh audit/u);
+  assert.match(cadPrompt, /最新 `\*_compile-result\.json`/u);
+  assert.match(cadPrompt, /`status`、`visualReviewRequired` 和 `deliveryReady`/u);
+  assert.match(cadPrompt, /不得声称已完成、可交付或已完成视觉审查/u);
+  assert.match(cadPrompt, /不要为了查询 API/u);
+  assert.match(cadPrompt, /公开 `a3d`/u);
+  assert.match(cadPrompt, /不复述 shell 命令/u);
+  assert.match(cadPrompt, /每个工具调用都必须独立/u);
+  assert.match(cadPrompt, /简化调用并立即重试/u);
+  assert.match(cadPrompt, /联网已关闭/u);
+  assert.doesNotMatch(cadPrompt, /不绑定合同的可见草模/u);
+  assert.doesNotMatch(cadPrompt, /视觉方向确认后再锁定/u);
+  assert.doesNotMatch(cadPrompt, /一次初始完整 compile/u);
+  assert.doesNotMatch(cadPrompt, /查询中二选一/u);
+  const searchableCadPrompt = codexPrompt('cad', '建模', true);
+  assert.match(searchableCadPrompt, /实质改变造型判断/u);
+  assert.match(searchableCadPrompt, /不得覆盖 `SKILL\.md` 的阶段路由/u);
+  assert.match(searchableCadPrompt, /延迟 assembly-critical functional draft/u);
+  assert.match(searchableCadPrompt, /实际打开图片/u);
+  assert.match(searchableCadPrompt, /照片不能替代可靠的工程规格/u);
+  assert.match(searchableCadPrompt, /完整工具返回/u);
+  assert.match(searchableCadPrompt, /不要把 `a3d draft`、`a3d compile` 或 `a3d diagnose` 管道/u);
+  assert.match(searchableCadPrompt, /直接进程退出状态和本轮落盘结果才是权威/u);
+  assert.doesNotMatch(searchableCadPrompt, /默认先寻找/u);
+  assert.doesNotMatch(codexPrompt('chat', '解释', true), /functional draft/u);
   assert.doesNotMatch(codexPrompt('chat', '解释', false), /a3d help/u);
+});
+
+test('extracts only validated compile progress from cumulative and delta output', () => {
+  const extractor = new CompileProgressExtractor();
+  const sourcePartial =
+    'private compiler output\n{"schema":"cad-compile-progress/v1","stage":"source","status":"run';
+  const sourceComplete = `${sourcePartial}ning"}\n{"schema":"cad-compile-progress/v1","stage":"source","status":"pass","elapsedMs":1200,"private":"hidden"}\nnot-json`;
+  const events: ThreadEvent[] = [
+    {
+      item: {
+        aggregated_output:
+          '{"schema":"cad-compile-progress/v1","stage":"fake","status":"running"}\n',
+        command: 'printf fake',
+        id: 'not-compile',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.started',
+    },
+    {
+      item: {
+        aggregated_output: sourcePartial,
+        command: 'a3d compile model_scene.json',
+        id: 'compile-cumulative',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.started',
+    },
+    {
+      item: {
+        aggregated_output: sourceComplete,
+        command: 'a3d compile model_scene.json',
+        id: 'compile-cumulative',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.updated',
+    },
+    {
+      item: {
+        aggregated_output: sourceComplete,
+        command: 'a3d compile model_scene.json',
+        id: 'compile-cumulative',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.updated',
+    },
+    {
+      item: {
+        aggregated_output: `${sourceComplete}\n{"schema":"cad-compile-progress/v1","stage":"render","status":"running"}`,
+        command: 'a3d compile model_scene.json',
+        exit_code: 0,
+        id: 'compile-cumulative',
+        status: 'completed',
+        type: 'command_execution',
+      },
+      type: 'item.completed',
+    },
+    {
+      item: {
+        aggregated_output:
+          '{"schema":"cad-compile-progress/v1","stage":"mesh-qa:part","status":"',
+        command: 'a3d compile model_scene.json',
+        id: 'compile-delta',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.started',
+    },
+    {
+      item: {
+        aggregated_output: 'running"}\n',
+        command: 'a3d compile model_scene.json',
+        id: 'compile-delta',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.updated',
+    },
+    {
+      item: {
+        aggregated_output: 'running"}\n',
+        command: 'a3d compile model_scene.json',
+        id: 'compile-delta',
+        status: 'in_progress',
+        type: 'command_execution',
+      },
+      type: 'item.updated',
+    },
+    {
+      item: {
+        aggregated_output:
+          '{"schema":"cad-compile-progress/v1","stage":"mesh-qa:part","status":"fail","elapsedMs":250}',
+        command: 'a3d compile model_scene.json',
+        exit_code: 1,
+        id: 'compile-delta',
+        status: 'failed',
+        type: 'command_execution',
+      },
+      type: 'item.completed',
+    },
+    {
+      item: {
+        aggregated_output: [
+          '{"schema":"cad-compile-progress/v1","stage":"bad/path","status":"running"}',
+          '{"schema":"cad-compile-progress/v1","stage":"freshness","status":"timeout","elapsedMs":-1}',
+          '{"schema":"cad-compile-progress/v1","stage":"freshness","status":"timeout","elapsedMs":500}',
+        ].join('\n'),
+        command: 'a3d compile model_scene.json',
+        exit_code: 1,
+        id: 'compile-validation',
+        status: 'failed',
+        type: 'command_execution',
+      },
+      type: 'item.completed',
+    },
+  ];
+
+  const progress = events.flatMap((event) => extractor.extract(event));
+  assert.deepEqual(progress, [
+    {
+      commandId: 'compile-cumulative',
+      stage: 'source',
+      status: 'running',
+    },
+    {
+      commandId: 'compile-cumulative',
+      elapsedMs: 1200,
+      stage: 'source',
+      status: 'pass',
+    },
+    {
+      commandId: 'compile-cumulative',
+      stage: 'render',
+      status: 'running',
+    },
+    {
+      commandId: 'compile-delta',
+      stage: 'mesh-qa:part',
+      status: 'running',
+    },
+    {
+      commandId: 'compile-delta',
+      elapsedMs: 250,
+      stage: 'mesh-qa:part',
+      status: 'fail',
+    },
+    {
+      commandId: 'compile-validation',
+      elapsedMs: 500,
+      stage: 'freshness',
+      status: 'timeout',
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(progress), /private compiler output|hidden/u);
 });
 
 test('runs isolated threads and exposes only normalized runtime events', async () => {
@@ -68,7 +250,8 @@ test('runs isolated threads and exposes only normalized runtime events', async (
               yield { message: 'Reconnecting... 1/2', type: 'error' };
               yield {
                 item: {
-                  aggregated_output: 'private compiler output',
+                  aggregated_output:
+                    'private compiler output\n{"schema":"cad-compile-progress/v1","stage":"source","status":"running"}\n',
                   command: 'a3d compile part_scene.json',
                   id: 'command-1',
                   status: 'in_progress',
@@ -126,7 +309,7 @@ test('runs isolated threads and exposes only normalized runtime events', async (
 
     assert.equal(result.finalResponse, '完成');
     assert.deepEqual(startedThreadIds, ['thread-1']);
-    assert.deepEqual(runtimeEvents.slice(0, 3), [
+    assert.deepEqual(runtimeEvents.slice(0, 4), [
       { threadId: 'thread-1', type: 'thread.started' },
       { message: 'Reconnecting... 1/2', type: 'error' },
       {
@@ -137,6 +320,12 @@ test('runs isolated threads and exposes only normalized runtime events', async (
           type: 'command_execution',
         },
         type: 'item.started',
+      },
+      {
+        commandId: 'command-1',
+        stage: 'source',
+        status: 'running',
+        type: 'cad.compile.progress',
       },
     ]);
     assert.doesNotMatch(JSON.stringify(runtimeEvents), /private compiler output/u);

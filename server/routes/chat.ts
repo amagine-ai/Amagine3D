@@ -5,6 +5,7 @@ import {
   agentRunTimeoutsFromEnv,
   isRuntimeProgressEvent,
   type AgentRunTimeouts,
+  type CadCompileProgressStatus,
   type CodexRuntimeLike,
   type RunOutcome,
   RunStopped,
@@ -83,6 +84,52 @@ function commandActivity(command: string): LocalizedText {
     return localizedLabel('Checking workspace files', '正在检查工作区资料');
   }
   return localizedLabel('Running modeling tools', '正在运行建模工具');
+}
+
+function compileStageActivity(stage: string): LocalizedText {
+  if (stage === 'source') {
+    return localizedLabel('Generating CAD geometry', '正在生成 CAD 几何');
+  }
+  if (stage === 'build-check' || stage === 'build-report') {
+    return localizedLabel('Validating the CAD build', '正在检查 CAD 构建');
+  }
+  if (stage === 'render') {
+    return localizedLabel('Rendering the CAD preview', '正在渲染 CAD 预览');
+  }
+  if (stage === 'installation-qa') {
+    return localizedLabel(
+      'Checking component installation',
+      '正在检查组件安装',
+    );
+  }
+  if (stage === 'assembly-qa') {
+    return localizedLabel('Checking the assembly', '正在检查装配关系');
+  }
+  if (stage.startsWith('mesh-qa:')) {
+    return localizedLabel('Checking printable meshes', '正在检查可打印网格');
+  }
+  if (stage.startsWith('step-qa:')) {
+    return localizedLabel('Checking STEP geometry', '正在检查 STEP 几何');
+  }
+  if (stage.startsWith('color-qa') || stage.startsWith('color-assembly-qa')) {
+    return localizedLabel('Checking the print package', '正在检查打印包');
+  }
+  if (stage === 'freshness') {
+    return localizedLabel('Checking artifact freshness', '正在检查产物新鲜度');
+  }
+  return localizedLabel('Running a CAD validation stage', '正在执行 CAD 检查');
+}
+
+function compileProgressText(
+  status: CadCompileProgressStatus,
+  elapsedMs: number | undefined,
+): string {
+  if (elapsedMs === undefined) return status;
+  const duration =
+    elapsedMs < 1_000
+      ? `${String(Math.round(elapsedMs))} ms`
+      : `${(elapsedMs / 1_000).toFixed(elapsedMs < 10_000 ? 2 : 1)} s`;
+  return `${status} · ${duration}`;
 }
 
 function itemActivity(item: RuntimeItem): StepActivity | undefined {
@@ -255,6 +302,8 @@ export function registerChatRoute(
     let activeResponseStepId: string | undefined;
     let lastResponseStepId: string | undefined;
     const assistantItems = new Map<string, string>();
+    const compileCommandsWithProgress = new Set<string>();
+    const compileStageSteps = new Map<string, Map<string, string>>();
 
     const startStep = (
       localizedStepLabel: LocalizedText,
@@ -310,6 +359,30 @@ export function registerChatRoute(
     const observeCodexEvent = (event: RuntimeEvent) => {
       if (isRuntimeProgressEvent(event)) supervisor.observeProgress();
       if (!supervisor.running) return;
+      if (event.type === 'cad.compile.progress') {
+        activeResponseStepId = undefined;
+        compileCommandsWithProgress.add(event.commandId);
+        const stageSteps = compileStageSteps.get(event.commandId) ?? new Map();
+        compileStageSteps.set(event.commandId, stageSteps);
+        let stepId = stageSteps.get(event.stage);
+        if (!stepId) {
+          stepId = startStep(
+            compileStageActivity(event.stage),
+            `cad-compile:${event.commandId}:${event.stage}`,
+          ).id;
+          stageSteps.set(event.stage, stepId);
+        }
+        if (event.status !== 'running') {
+          const content = compileProgressText(event.status, event.elapsedMs);
+          runTurn = appendChatStepText(runTurn, stepId, content);
+          writeEvent(response, {
+            content,
+            stepId,
+            type: 'step_delta',
+          });
+        }
+        return;
+      }
       if (event.type === 'thread.started') {
         activeResponseStepId = undefined;
         startStep(localizedLabel('A3D started', 'A3D 已启动'), 'start');
@@ -328,6 +401,13 @@ export function registerChatRoute(
           appendAssistantText(event.item);
           return;
         }
+        if (
+          event.type === 'item.updated' &&
+          event.item.type === 'command_execution' &&
+          compileCommandsWithProgress.has(event.item.id)
+        ) {
+          return;
+        }
         const activity = itemActivity(event.item);
         if (
           activity &&
@@ -344,6 +424,10 @@ export function registerChatRoute(
           appendAssistantText(event.item);
           lastResponseStepId = activeResponseStepId;
           return;
+        }
+        if (event.item.type === 'command_execution') {
+          compileCommandsWithProgress.delete(event.item.id);
+          compileStageSteps.delete(event.item.id);
         }
         const followUp = completedItemActivity(event.item);
         if (followUp) {

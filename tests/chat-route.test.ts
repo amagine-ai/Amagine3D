@@ -40,12 +40,14 @@ test('streams one native Codex turn without server-side repair prompts', async (
       runCalls += 1;
       assert.equal('webSearchEnabled' in request, false);
       await request.onThreadStarted?.('thread-1');
+      const command =
+        'a3d compile part_scene.json --marker .part.start --intent part_intent.json --source part_build.py';
       const events: RuntimeEvent[] = [
         { threadId: 'thread-1', type: 'thread.started' },
         { type: 'turn.started' },
         {
           item: {
-            command: 'a3d compile part_scene.json --marker .part.start --intent part_intent.json --source part_build.py',
+            command,
             id: 'command-1',
             status: 'in_progress',
             type: 'command_execution',
@@ -53,8 +55,21 @@ test('streams one native Codex turn without server-side repair prompts', async (
           type: 'item.started',
         },
         {
+          commandId: 'command-1',
+          stage: 'source',
+          status: 'running',
+          type: 'cad.compile.progress',
+        },
+        {
+          commandId: 'command-1',
+          elapsedMs: 1_200,
+          stage: 'source',
+          status: 'pass',
+          type: 'cad.compile.progress',
+        },
+        {
           item: {
-            command: 'a3d compile part_scene.json --marker .part.start --intent part_intent.json --source part_build.py',
+            command,
             id: 'command-1',
             status: 'in_progress',
             type: 'command_execution',
@@ -62,11 +77,66 @@ test('streams one native Codex turn without server-side repair prompts', async (
           type: 'item.updated',
         },
         {
+          commandId: 'command-1',
+          stage: 'render',
+          status: 'running',
+          type: 'cad.compile.progress',
+        },
+        {
+          commandId: 'command-1',
+          elapsedMs: 850,
+          stage: 'render',
+          status: 'pass',
+          type: 'cad.compile.progress',
+        },
+        {
+          commandId: 'command-1',
+          stage: 'custom-check',
+          status: 'running',
+          type: 'cad.compile.progress',
+        },
+        {
+          commandId: 'command-1',
+          elapsedMs: 900,
+          stage: 'custom-check',
+          status: 'pass',
+          type: 'cad.compile.progress',
+        },
+        {
+          commandId: 'command-1',
+          stage: 'mesh-qa:part',
+          status: 'running',
+          type: 'cad.compile.progress',
+        },
+        {
+          commandId: 'command-1',
+          elapsedMs: 2_500,
+          stage: 'mesh-qa:part',
+          status: 'fail',
+          type: 'cad.compile.progress',
+        },
+        {
           item: {
-            command: 'a3d compile part_scene.json --marker .part.start --intent part_intent.json --source part_build.py',
-            exitCode: 0,
+            command,
             id: 'command-1',
-            status: 'completed',
+            status: 'in_progress',
+            type: 'command_execution',
+          },
+          type: 'item.updated',
+        },
+        {
+          commandId: 'command-1',
+          elapsedMs: 5_000,
+          stage: 'freshness',
+          status: 'timeout',
+          type: 'cad.compile.progress',
+        },
+        {
+          item: {
+            command,
+            exitCode: 1,
+            id: 'command-1',
+            status: 'failed',
             type: 'command_execution',
           },
           type: 'item.completed',
@@ -131,7 +201,12 @@ test('streams one native Codex turn without server-side repair prompts', async (
         'A3D 已启动',
         'A3D 正在分析请求',
         '正在编译并检查 CAD',
-        'A3D 正在分析执行结果',
+        '正在生成 CAD 几何',
+        '正在渲染 CAD 预览',
+        '正在执行 CAD 检查',
+        '正在检查可打印网格',
+        '正在检查产物新鲜度',
+        '工具执行未成功，A3D 正在尝试修复',
         '正在组织回复',
         '正在整理生成文件',
         '已发现 0 个工作区文件',
@@ -148,19 +223,39 @@ test('streams one native Codex turn without server-side repair prompts', async (
         'A3D started',
         'A3D is analyzing the request',
         'Compiling and validating CAD',
-        'A3D is analyzing the tool result',
+        'Generating CAD geometry',
+        'Rendering the CAD preview',
+        'Running a CAD validation stage',
+        'Checking printable meshes',
+        'Checking artifact freshness',
+        'The tool failed; A3D is trying to repair the issue',
         'Organizing the response',
         'Collecting generated files',
         '0 workspace files discovered',
       ],
     );
-    assert.equal(
-      events
-        .filter((event) => event.type === 'step_delta')
-        .map((event) => event.content)
-        .join(''),
-      '模型完成',
+    const stepEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: 'step' }> =>
+        event.type === 'step',
     );
+    const deltaEvents = events.filter(
+      (event): event is Extract<AgentEvent, { type: 'step_delta' }> =>
+        event.type === 'step_delta',
+    );
+    const progressFor = (label: string) => {
+      const stepId = stepEvents.find(({ step }) => step.label === label)?.step.id;
+      assert.ok(stepId, `Missing step: ${label}`);
+      return deltaEvents
+        .filter((event) => event.stepId === stepId)
+        .map(({ content }) => content)
+        .join('');
+    };
+    assert.equal(progressFor('正在生成 CAD 几何'), 'pass · 1.20 s');
+    assert.equal(progressFor('正在渲染 CAD 预览'), 'pass · 850 ms');
+    assert.equal(progressFor('正在执行 CAD 检查'), 'pass · 900 ms');
+    assert.equal(progressFor('正在检查可打印网格'), 'fail · 2.50 s');
+    assert.equal(progressFor('正在检查产物新鲜度'), 'timeout · 5.00 s');
+    assert.equal(progressFor('正在组织回复'), '模型完成');
     const messages = await readSessionMessages(
       join(stateRoot, 'sessions', `${SESSION_ID}.json`),
     );
