@@ -779,6 +779,132 @@ class CadCompileTests(unittest.TestCase):
                 self.assertLessEqual(len(cad_compile._summary_json(summary)), cad_compile.MAX_SUMMARY_CHARS)
                 self.assertEqual(json.dumps(issue, sort_keys=True), original)
 
+    def test_print_orientation_evidence_projects_direct_selected_export_pose(self) -> None:
+        orientation = {
+            "strategy": "ranked-axis-aligned-v1",
+            "selected": {
+                "name": "x-positive-down",
+                "rotate_degrees_xyz": [0, 90, 0],
+                "print_dimensions_mm": [20.0, 30.0, 40.0],
+                "fits_profile": True,
+                "bed_contact_semantic_face": "x-max",
+                "orientation_metrics": {
+                    "center_inside_contact_bounds": True,
+                    "contact_area_mm2": 120.25,
+                    "overhang_area_mm2": 14.5,
+                    "stability_offset_ratio": 0.03,
+                },
+            },
+            "candidates": [{}, {}, {}],
+        }
+        report = {
+            "part": "housing",
+            "backendData": {"printOrientation": orientation},
+        }
+
+        evidence = cad_compile._print_orientation_evidence(report)
+
+        self.assertEqual(
+            evidence,
+            {
+                "housing": {
+                    "bedContactSemanticFace": "x-max",
+                    "candidateCount": 3,
+                    "centerInsideContactBounds": True,
+                    "contactAreaMm2": 120.25,
+                    "dimensionsMm": [20.0, 30.0, 40.0],
+                    "evidenceRole": "automatic-ranked-export-pose",
+                    "fitsProfile": True,
+                    "name": "x-positive-down",
+                    "overhangAreaMm2": 14.5,
+                    "rankingStrategy": "ranked-axis-aligned-v1",
+                    "rotateDegreesXYZ": [0, 90, 0],
+                    "stabilityOffsetRatio": 0.03,
+                }
+            },
+        )
+        self.assertEqual(
+            cad_compile._report_agent_facts(report)["printOrientationEvidence"],
+            evidence,
+        )
+
+    def test_print_orientation_evidence_collects_multiple_plates_and_survives_summary(self) -> None:
+        def orientation(name: str, rotation: list[int], overhang: float) -> dict:
+            return {
+                "strategy": "assembly-ranked-axis-aligned-v1",
+                "selected": {
+                    "name": name,
+                    "rotate_degrees_xyz": rotation,
+                    "print_dimensions_mm": [10.0, 20.0, 30.0],
+                    "fits_profile": True,
+                    "bed_contact_semantic_face": "z-min",
+                    "orientation_metrics": {
+                        "center_inside_contact_bounds": True,
+                        "contact_area_mm2": 200.0,
+                        "overhang_area_mm2": overhang,
+                        "stability_offset_ratio": 0.01,
+                    },
+                },
+                "candidates": [{}, {}, {}, {}, {}, {}],
+            }
+
+        report = {
+            "backendData": {
+                "printPlates": [
+                    {
+                        "geometry": {
+                            "layout": {
+                                "orientations": {
+                                    "panel": orientation(
+                                        "y-negative-down", [90, 0, 0], 18.0
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "layout": {
+                            "orientations": {
+                                "housing": orientation(
+                                    "x-positive-down", [0, 90, 0], 12.0
+                                )
+                            }
+                        }
+                    },
+                ]
+            }
+        }
+
+        evidence = cad_compile._print_orientation_evidence(report)
+        self.assertEqual(list(evidence), ["housing", "panel"])
+        self.assertEqual(evidence["housing"]["rotateDegreesXYZ"], [0, 90, 0])
+        self.assertEqual(evidence["panel"]["rotateDegreesXYZ"], [90, 0, 0])
+        self.assertEqual(evidence["panel"]["candidateCount"], 6)
+
+        result = {
+            "artifacts": {},
+            "deliveryReady": False,
+            "issues": [],
+            "pass": True,
+            "printOrientationEvidence": evidence,
+            "result": {"path": "/tmp/model_compile-result.json"},
+            "status": "awaiting-visual-review",
+            "visualReviewRequired": True,
+        }
+        summary = cad_compile._agent_summary(result)
+        self.assertEqual(
+            summary["printOrientationEvidence"]["housing"]["rotateDegreesXYZ"],
+            [0, 90, 0],
+        )
+        self.assertEqual(
+            summary["printOrientationEvidence"]["panel"]["overhangAreaMm2"],
+            18.0,
+        )
+        self.assertEqual(
+            summary["printOrientationEvidence"]["panel"]["evidenceRole"],
+            "automatic-ranked-export-pose",
+        )
+
     def test_agent_summary_preserves_errors_and_groups_repeated_warnings(self) -> None:
         result = {
             "artifacts": {

@@ -246,6 +246,33 @@ def _project_summary_value(value: Any, depth: int = 0) -> tuple[Any, bool]:
     return value, False
 
 
+def _project_orientation_record(value: Any) -> tuple[dict[str, Any], bool]:
+    if not isinstance(value, dict):
+        return {}, True
+    keys = (
+        "name",
+        "rotateDegreesXYZ",
+        "bedContactSemanticFace",
+        "dimensionsMm",
+        "fitsProfile",
+        "candidateCount",
+        "rankingStrategy",
+        "evidenceRole",
+        "centerInsideContactBounds",
+        "contactAreaMm2",
+        "stabilityOffsetRatio",
+        "overhangAreaMm2",
+    )
+    projected: dict[str, Any] = {}
+    truncated = any(key not in keys for key in value)
+    for key in keys:
+        if key not in value:
+            continue
+        projected[key], cut = _project_summary_value(value[key])
+        truncated |= cut
+    return projected, truncated
+
+
 def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
     """Project evidence into a bounded decision view, including JSON overhead."""
 
@@ -369,11 +396,31 @@ def _agent_summary(result: dict[str, Any]) -> dict[str, Any]:
 
     for key, path in _path_only_artifacts(result.get("artifacts")).items():
         add(summary["artifacts"], key, path)
-    for key in ("colors", "deliverables", "physicalParts", "repairDelta"):
+    for key in (
+        "colors",
+        "deliverables",
+        "physicalParts",
+        "printOrientationEvidence",
+        "repairDelta",
+    ):
         value = result.get(key)
         if not value:
             continue
-        if key == "deliverables" and isinstance(value, dict):
+        if key == "printOrientationEvidence" and isinstance(value, dict):
+            if not add(summary, key, {}):
+                continue
+            part_names = sorted(name for name in value if isinstance(name, str))
+            diagnostics["truncated"] |= len(part_names) != len(value)
+            for part_name in part_names:
+                if len(part_name) > 120:
+                    diagnostics["truncated"] = True
+                    continue
+                projected, cut = _project_orientation_record(value[part_name])
+                if not projected or not add(summary[key], part_name, projected):
+                    diagnostics["truncated"] = True
+                    continue
+                diagnostics["truncated"] |= cut
+        elif key == "deliverables" and isinstance(value, dict):
             if not add(summary, key, {}):
                 continue
             for name, path in value.items():
@@ -430,6 +477,68 @@ def _thickness_witness(issue: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _selected_orientation_evidence(orientation: Any) -> dict[str, Any]:
+    if not isinstance(orientation, dict):
+        return {}
+    selected = orientation.get("selected")
+    candidates = orientation.get("candidates")
+    if not isinstance(selected, dict) or not isinstance(candidates, list):
+        return {}
+    rotation = selected.get("rotate_degrees_xyz")
+    dimensions = selected.get("print_dimensions_mm", selected.get("dimensions_mm"))
+    metrics = selected.get("orientation_metrics")
+    if (
+        not isinstance(selected.get("name"), str)
+        or not isinstance(rotation, list)
+        or len(rotation) != 3
+        or not isinstance(dimensions, list)
+        or len(dimensions) != 3
+        or not isinstance(metrics, dict)
+    ):
+        return {}
+    return {
+        "bedContactSemanticFace": selected.get("bed_contact_semantic_face"),
+        "candidateCount": len(candidates),
+        "centerInsideContactBounds": metrics.get("center_inside_contact_bounds"),
+        "contactAreaMm2": metrics.get("contact_area_mm2"),
+        "dimensionsMm": dimensions,
+        "evidenceRole": "automatic-ranked-export-pose",
+        "fitsProfile": selected.get("fits_profile"),
+        "name": selected["name"],
+        "overhangAreaMm2": metrics.get("overhang_area_mm2"),
+        "rankingStrategy": orientation.get("strategy"),
+        "rotateDegreesXYZ": rotation,
+        "stabilityOffsetRatio": metrics.get("stability_offset_ratio"),
+    }
+
+
+def _print_orientation_evidence(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    backend = report.get("backendData")
+    if not isinstance(backend, dict):
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    direct = _selected_orientation_evidence(backend.get("printOrientation"))
+    part = report.get("part")
+    if direct and isinstance(part, str) and part:
+        records[part] = direct
+
+    raw_plates = backend.get("printPlates")
+    plates = raw_plates if isinstance(raw_plates, list) else [backend.get("printPlate")]
+    for plate in plates:
+        if not isinstance(plate, dict):
+            continue
+        geometry = plate.get("geometry", plate)
+        layout = geometry.get("layout") if isinstance(geometry, dict) else None
+        orientations = layout.get("orientations") if isinstance(layout, dict) else None
+        if not isinstance(orientations, dict):
+            continue
+        for part_name, orientation in orientations.items():
+            evidence = _selected_orientation_evidence(orientation)
+            if isinstance(part_name, str) and part_name and evidence:
+                records[part_name] = evidence
+    return dict(sorted(records.items()))
+
+
 def _report_agent_facts(report: dict[str, Any]) -> dict[str, Any]:
     """Extract compact delivery facts from a validated full build report."""
 
@@ -465,6 +574,7 @@ def _report_agent_facts(report: dict[str, Any]) -> dict[str, Any]:
         "physicalParts": (
             sorted(str(key) for key in parts) if isinstance(parts, dict) else []
         ),
+        "printOrientationEvidence": _print_orientation_evidence(report),
     }
 
 
@@ -2131,7 +2241,12 @@ def _finish(
         "status": result["status"],
         "visualReviewRequired": True,
     }
-    for key in ("colors", "deliverables", "physicalParts"):
+    for key in (
+        "colors",
+        "deliverables",
+        "physicalParts",
+        "printOrientationEvidence",
+    ):
         if result.get(key):
             compact[key] = result[key]
     return compact
