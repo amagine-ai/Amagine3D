@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -71,6 +72,249 @@ Read $AMAGINE3D_SKILL_DIR/references/multipart-connections.md only for direct fa
 - A photograph establishes envelope, landmarks and uncertainty; use them to define editable BRep controls.
 Choose from geometry requirements, not the product name or input file type.`,
 };
+
+const EVIDENCE_GATE_VERSION = 'v1';
+const SHA256 = /^[a-f0-9]{64}$/u;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MODEL_NAME = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/u;
+
+function inside(root, candidate) {
+  const fromRoot = relative(root, candidate);
+  return fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot);
+}
+
+function workspaceFile(root, value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const path = realpathSync.native(isAbsolute(value) ? value : resolve(root, value));
+    return inside(root, path) && statSync(path).isFile() ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function workspaceDirectory(root, value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const path = realpathSync.native(isAbsolute(value) ? value : resolve(root, value));
+    return inside(root, path) && statSync(path).isDirectory() ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function fileSha256(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function jsonObject(path) {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function bindingPath(binding, root) {
+  if (
+    !binding ||
+    typeof binding !== 'object' ||
+    Array.isArray(binding) ||
+    !SHA256.test(binding.sha256 ?? '')
+  ) {
+    return null;
+  }
+  const path = workspaceFile(root, binding.path);
+  if (!path) return null;
+  try {
+    return fileSha256(path) === binding.sha256 ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function bindingMatches(binding, expectedPath, root) {
+  const path = bindingPath(binding, root);
+  return path !== null && path === expectedPath;
+}
+
+function validArtifactMap(artifacts, root) {
+  if (!artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts)) {
+    return false;
+  }
+  const records = Object.values(artifacts);
+  return records.length > 0 && records.every((record) => bindingPath(record, root));
+}
+
+function parseValueOptions(args, allowed) {
+  const options = new Map();
+  const positional = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (!argument.startsWith('-')) {
+      positional.push(argument);
+      continue;
+    }
+    if (!argument.startsWith('--')) return null;
+    const separator = argument.indexOf('=');
+    const name = separator < 0 ? argument : argument.slice(0, separator);
+    if (!allowed.has(name) || options.has(name)) return null;
+    const value = separator < 0 ? args[++index] : argument.slice(separator + 1);
+    if (typeof value !== 'string' || !value || value.startsWith('--')) return null;
+    options.set(name, value);
+  }
+  return { options, positional };
+}
+
+function draftReplay(root, args) {
+  const parsed = parseValueOptions(args, new Set(['--intent', '--timeout-seconds']));
+  if (!parsed || parsed.positional.length !== 1) return null;
+  const source = workspaceFile(root, parsed.positional[0]);
+  const intentValue = parsed.options.get('--intent');
+  const intent = intentValue === undefined ? null : workspaceFile(root, intentValue);
+  if (!source || (intentValue !== undefined && !intent)) return null;
+  const drafts = workspaceDirectory(root, '.amagine3d-drafts');
+  if (!drafts) return null;
+  let entries;
+  try {
+    entries = readdirSync(drafts, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const resultPath = workspaceFile(root, join(drafts, entry.name, 'draft-result.json'));
+    if (!resultPath) continue;
+    const result = jsonObject(resultPath);
+    if (
+      result?.schema !== 'a3d-draft-result/v1' ||
+      result.status !== 'draft' ||
+      result.deliveryReady !== false ||
+      !UUID.test(result.runId ?? '') ||
+      basename(dirname(resultPath)) !== result.runId ||
+      workspaceFile(root, result.result) !== resultPath ||
+      !bindingMatches(result.source, source, root) ||
+      (intent === null ? result.intent !== undefined : !bindingMatches(result.intent, intent, root)) ||
+      !validArtifactMap(result.artifacts, root) ||
+      !bindingPath(result.geometry, root)
+    ) {
+      continue;
+    }
+    return {
+      bindings: {
+        source: { path: source, sha256: result.source.sha256 },
+        ...(intent ? { intent: { path: intent, sha256: result.intent.sha256 } } : {}),
+      },
+      operation: 'draft',
+      result: resultPath,
+      runId: result.runId,
+    };
+  }
+  return null;
+}
+
+function compileReplay(root, args) {
+  const parsed = parseValueOptions(
+    args,
+    new Set([
+      '--marker',
+      '--intent',
+      '--source',
+      '--output-dir',
+      '--result',
+      '--log',
+      '--compile-timeout-seconds',
+      '--source-timeout-seconds',
+      '--check-timeout-seconds',
+      '--consistency-samples',
+    ]),
+  );
+  if (!parsed || parsed.positional.length !== 1) return null;
+  const source = workspaceFile(root, parsed.options.get('--source'));
+  const intent = workspaceFile(root, parsed.options.get('--intent'));
+  const scene = workspaceFile(root, parsed.positional[0]);
+  const output = workspaceDirectory(root, parsed.options.get('--output-dir') ?? '.');
+  if (!source || !intent || !scene || !output) return null;
+  const intentData = jsonObject(intent);
+  if (!intentData) return null;
+  const model = typeof intentData.part === 'string' && MODEL_NAME.test(intentData.part)
+    ? intentData.part
+    : 'cad';
+  const resultValue = parsed.options.get('--result') ?? `${model}_compile-result.json`;
+  const expectedResult = isAbsolute(resultValue)
+    ? resultValue
+    : resolve(output, resultValue);
+  const resultPath = workspaceFile(root, expectedResult);
+  if (!resultPath || !inside(output, resultPath)) return null;
+  const result = jsonObject(resultPath);
+  if (
+    result?.schema !== 'evidence-cad-compile-result/v1' ||
+    result.pass !== true ||
+    result.status !== 'awaiting-visual-review' ||
+    result.visualReviewRequired !== true ||
+    result.deliveryReady !== false ||
+    !UUID.test(result.runId ?? '') ||
+    !bindingMatches(result.inputBindings?.source, source, root) ||
+    !bindingMatches(result.inputBindings?.intent, intent, root) ||
+    !validArtifactMap(result.artifacts, root)
+  ) {
+    return null;
+  }
+  const profile = bindingPath(result.inputBindings?.profile, root);
+  const reportPath = bindingPath(result.artifacts.buildReport, root);
+  const report = reportPath ? jsonObject(reportPath) : null;
+  if (
+    !profile ||
+    report?.schema !== 'evidence-a3d-build/v1' ||
+    report.runId !== result.runId ||
+    report.pass !== true ||
+    !bindingMatches(report.inputs?.source, source, root) ||
+    !bindingMatches(report.inputs?.intent, intent, root) ||
+    !bindingMatches(report.inputs?.scene, scene, root) ||
+    !bindingMatches(report.inputs?.profile, profile, root) ||
+    workspaceFile(root, result.inputs?.scene) !== scene ||
+    !validArtifactMap(report.artifacts, root)
+  ) {
+    return null;
+  }
+  return {
+    bindings: {
+      intent: { path: intent, sha256: result.inputBindings.intent.sha256 },
+      profile: { path: profile, sha256: result.inputBindings.profile.sha256 },
+      scene: { path: scene, sha256: report.inputs.scene.sha256 },
+      source: { path: source, sha256: result.inputBindings.source.sha256 },
+    },
+    operation: 'compile',
+    result: resultPath,
+    runId: result.runId,
+  };
+}
+
+function admissionReplay(command, args) {
+  if (process.env.AMAGINE3D_EVIDENCE_GATE !== EVIDENCE_GATE_VERSION) return null;
+  const root = process.cwd();
+  try {
+    if (command === 'draft') return draftReplay(root, args);
+    if (command === 'compile') return compileReplay(root, args);
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function rejectReplay(match) {
+  console.error(JSON.stringify({
+    schema: 'a3d-admission-rejection/v1',
+    operation: match.operation,
+    reason: 'completed-inputs-unchanged',
+    matchedRunId: match.runId,
+    matchedResult: match.result,
+    bindings: match.bindings,
+    next: 'Read the persisted result, or change a real source/intent/scene/profile input before retrying.',
+  }, null, 2));
+  process.exit(3);
+}
 
 function help() {
   console.log(`a3d — Amagine3D CAD command line
@@ -367,6 +611,8 @@ if (workspaceCommands.has(command) && args.some((arg) => arg === '--workspace' |
   console.error(`a3d ${command} fixes --workspace to the current session directory.`);
   process.exit(2);
 }
+const replay = admissionReplay(command, args);
+if (replay) rejectReplay(replay);
 
 const scriptArgs = [join(skillRoot, commands[command]), ...args];
 if (workspaceCommands.has(command)) scriptArgs.push('--workspace', process.cwd());

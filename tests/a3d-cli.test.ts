@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +9,173 @@ import { test } from 'node:test';
 
 const execFileAsync = promisify(execFile);
 const A3D = new URL('../bin/a3d.mjs', import.meta.url);
+const POSIX_TRUE = '/usr/bin/true';
+const EVIDENCE_GATE_TEST_OPTIONS = { skip: process.platform === 'win32' };
+
+type EvidenceBinding = { path: string; sha256: string };
+type EvidenceFixture = {
+  args: string[];
+  artifactPath: string;
+  intentPath: string;
+  profilePath?: string;
+  resultPath: string;
+  scenePath?: string;
+  sourcePath: string;
+};
+
+async function evidenceBinding(path: string): Promise<EvidenceBinding> {
+  return {
+    path,
+    sha256: createHash('sha256').update(await readFile(path)).digest('hex'),
+  };
+}
+
+async function invokeWithEvidenceGate(
+  root: string,
+  args: string[],
+  enabled = true,
+) {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    AMAGINE3D_PYTHON: POSIX_TRUE,
+  };
+  if (enabled) environment.AMAGINE3D_EVIDENCE_GATE = 'v1';
+  else delete environment.AMAGINE3D_EVIDENCE_GATE;
+  return execFileAsync(process.execPath, [A3D.pathname, ...args], {
+    cwd: root,
+    env: environment,
+  });
+}
+
+async function expectAdmissionRejection(
+  root: string,
+  fixture: EvidenceFixture,
+  operation: 'compile' | 'draft',
+) {
+  const canonicalResult = await realpath(fixture.resultPath);
+  await assert.rejects(
+    invokeWithEvidenceGate(root, fixture.args),
+    (error: Error & { code?: number; stderr?: string }) => {
+      assert.equal(error.code, 3);
+      const rejection = JSON.parse(error.stderr ?? '{}');
+      assert.equal(rejection.schema, 'a3d-admission-rejection/v1');
+      assert.equal(rejection.operation, operation);
+      assert.equal(rejection.reason, 'completed-inputs-unchanged');
+      assert.equal(rejection.matchedResult, canonicalResult);
+      assert.match(rejection.next, /change a real source\/intent\/scene\/profile input/u);
+      return true;
+    },
+  );
+}
+
+async function createDraftEvidence(root: string): Promise<EvidenceFixture> {
+  const runId = '11111111-1111-4111-8111-111111111111';
+  const sourcePath = join(root, 'model_build.py');
+  const intentPath = join(root, 'model_intent.json');
+  const output = join(root, '.amagine3d-drafts', runId);
+  const artifactPath = join(output, 'draft.step');
+  const geometryPath = join(output, 'draft-geometry.json');
+  const resultPath = join(output, 'draft-result.json');
+  await mkdir(output, { recursive: true });
+  await Promise.all([
+    writeFile(sourcePath, 'print("draft")\n'),
+    writeFile(intentPath, JSON.stringify({ part: 'model' })),
+    writeFile(artifactPath, 'step bytes'),
+    writeFile(geometryPath, JSON.stringify({ schema: 'a3d-draft-geometry/v1' })),
+  ]);
+  await writeFile(resultPath, JSON.stringify({
+    artifacts: { step: await evidenceBinding(artifactPath) },
+    deliveryReady: false,
+    geometry: await evidenceBinding(geometryPath),
+    intent: await evidenceBinding(intentPath),
+    result: resultPath,
+    runId,
+    schema: 'a3d-draft-result/v1',
+    source: await evidenceBinding(sourcePath),
+    status: 'draft',
+  }));
+  return {
+    args: ['draft', 'model_build.py', '--intent', 'model_intent.json'],
+    artifactPath,
+    intentPath,
+    resultPath,
+    sourcePath,
+  };
+}
+
+async function createCompileEvidence(root: string): Promise<EvidenceFixture> {
+  const runId = '22222222-2222-4222-8222-222222222222';
+  const sourcePath = join(root, 'model_build.py');
+  const intentPath = join(root, 'model_intent.json');
+  const scenePath = join(root, 'model_scene.json');
+  const profilePath = join(root, 'model_printer-profile.json');
+  const artifactPath = join(root, 'model.step');
+  const previewPath = join(root, 'model.png');
+  const reportPath = join(root, 'model_build-report.json');
+  const resultPath = join(root, 'model_compile-result.json');
+  await Promise.all([
+    writeFile(sourcePath, 'print("compile")\n'),
+    writeFile(intentPath, JSON.stringify({ part: 'model' })),
+    writeFile(scenePath, JSON.stringify({ parts: [{ representationMaster: 'brep' }] })),
+    writeFile(profilePath, JSON.stringify({ id: 'bbl-a1-0.4-standard' })),
+    writeFile(artifactPath, 'step bytes'),
+    writeFile(previewPath, 'preview bytes'),
+  ]);
+  const inputs = {
+    intent: await evidenceBinding(intentPath),
+    profile: await evidenceBinding(profilePath),
+    scene: await evidenceBinding(scenePath),
+    source: await evidenceBinding(sourcePath),
+  };
+  await writeFile(reportPath, JSON.stringify({
+    artifacts: { step: await evidenceBinding(artifactPath) },
+    inputs,
+    pass: true,
+    runId,
+    schema: 'evidence-a3d-build/v1',
+  }));
+  await writeFile(resultPath, JSON.stringify({
+    artifacts: {
+      buildReport: await evidenceBinding(reportPath),
+      preview: await evidenceBinding(previewPath),
+    },
+    deliveryReady: false,
+    inputBindings: {
+      intent: inputs.intent,
+      profile: inputs.profile,
+      source: inputs.source,
+    },
+    inputs: { scene: scenePath },
+    pass: true,
+    runId,
+    schema: 'evidence-cad-compile-result/v1',
+    status: 'awaiting-visual-review',
+    visualReviewRequired: true,
+  }));
+  return {
+    args: [
+      'compile', 'model_scene.json', '--intent', 'model_intent.json',
+      '--source', 'model_build.py', '--output-dir', '.',
+    ],
+    artifactPath: previewPath,
+    intentPath,
+    profilePath,
+    resultPath,
+    scenePath,
+    sourcePath,
+  };
+}
+
+async function withEvidenceWorkspace(
+  run: (root: string) => Promise<void>,
+): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-a3d-evidence-gate-'));
+  try {
+    await run(root);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}
 
 async function withDiagnostics(
   issues: unknown[],
@@ -27,6 +195,72 @@ async function withDiagnostics(
     await rm(root, { force: true, recursive: true });
   }
 }
+
+test('evidence gate rejects only complete unchanged successful replays', EVIDENCE_GATE_TEST_OPTIONS, async () => {
+  await withEvidenceWorkspace(async (root) => {
+    const draft = await createDraftEvidence(root);
+    await expectAdmissionRejection(root, draft, 'draft');
+
+    const compile = await createCompileEvidence(root);
+    await expectAdmissionRejection(root, compile, 'compile');
+  });
+});
+
+test('any changed draft or compile input restores execution eligibility', EVIDENCE_GATE_TEST_OPTIONS, async () => {
+  await withEvidenceWorkspace(async (root) => {
+    const draft = await createDraftEvidence(root);
+    for (const path of [draft.sourcePath, draft.intentPath]) {
+      const original = await readFile(path, 'utf8');
+      await writeFile(path, `${original}\n`);
+      await invokeWithEvidenceGate(root, draft.args);
+      await writeFile(path, original);
+    }
+
+    const compile = await createCompileEvidence(root);
+    const paths = [
+      compile.sourcePath,
+      compile.intentPath,
+      compile.scenePath!,
+      compile.profilePath!,
+    ];
+    for (const path of paths) {
+      const original = await readFile(path, 'utf8');
+      await writeFile(path, `${original} `);
+      await invokeWithEvidenceGate(root, compile.args);
+      await writeFile(path, original);
+    }
+  });
+});
+
+test('failed malformed or damaged evidence fails open for a real retry', EVIDENCE_GATE_TEST_OPTIONS, async () => {
+  await withEvidenceWorkspace(async (root) => {
+    const draft = await createDraftEvidence(root);
+    const draftResult = JSON.parse(await readFile(draft.resultPath, 'utf8'));
+    await writeFile(draft.resultPath, JSON.stringify({ ...draftResult, status: 'failed' }));
+    await invokeWithEvidenceGate(root, draft.args);
+
+    const compile = await createCompileEvidence(root);
+    const compileResult = await readFile(compile.resultPath, 'utf8');
+    await writeFile(compile.resultPath, '{malformed');
+    await invokeWithEvidenceGate(root, compile.args);
+    await writeFile(compile.resultPath, compileResult);
+
+    const artifact = await readFile(compile.artifactPath);
+    await writeFile(compile.artifactPath, 'corrupt preview');
+    await invokeWithEvidenceGate(root, compile.args);
+    await rm(compile.artifactPath);
+    await invokeWithEvidenceGate(root, compile.args);
+    await writeFile(compile.artifactPath, artifact);
+  });
+});
+
+test('disabled gate and non-draft commands preserve ordinary CLI execution', EVIDENCE_GATE_TEST_OPTIONS, async () => {
+  await withEvidenceWorkspace(async (root) => {
+    const compile = await createCompileEvidence(root);
+    await invokeWithEvidenceGate(root, compile.args, false);
+    await invokeWithEvidenceGate(root, ['intent', 'model_intent.json']);
+  });
+});
 
 test('symbol queries return usable helper signatures without the full catalog', async () => {
   const { stdout } = await execFileAsync(process.execPath, [A3D.pathname, 'capabilities', '--symbol', 'write_scene', '--symbol', 'export_assembly']);
