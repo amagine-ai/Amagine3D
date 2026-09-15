@@ -12,6 +12,7 @@ import {
 
 import { CompileProgressExtractor } from './compile-progress.ts';
 import { normalizeThreadEvent, type RuntimeEvent } from './events.ts';
+import { createToolImageTransport } from './tool-image-transport.ts';
 
 export type RuntimeTaskType = 'cad' | 'chat';
 
@@ -228,6 +229,10 @@ export class CodexRuntime implements CodexRuntimeLike {
     return runtime;
   }
 
+  get toolImageTransport(): 'native' | 'gateway-compatibility' {
+    return this.baseUrl ? 'gateway-compatibility' : 'native';
+  }
+
   async runTurn(request: CodexTurnRequest): Promise<CodexTurnResult> {
     if (!USER_SESSION_ID.test(request.sessionId)) {
       throw new Error('Invalid user session id.');
@@ -235,6 +240,23 @@ export class CodexRuntime implements CodexRuntimeLike {
     if (!this.apiKey) {
       throw new Error('LLM_API_KEY is not configured in .env.');
     }
+    const transport = this.baseUrl
+      ? await createToolImageTransport({ baseUrl: this.baseUrl, apiKey: this.apiKey, signal: request.signal })
+      : undefined;
+    try {
+      return await this.runConnectedTurn(request, {
+        apiKey: transport?.apiKey ?? this.apiKey,
+        baseUrl: transport?.baseUrl ?? this.baseUrl,
+      });
+    } finally {
+      await transport?.close();
+    }
+  }
+
+  private async runConnectedTurn(
+    request: CodexTurnRequest,
+    connection: { apiKey: string; baseUrl: string | undefined },
+  ): Promise<CodexTurnResult> {
     const workingDirectory = join(
       this.workspaceRoot,
       'sessions',
@@ -250,6 +272,8 @@ export class CodexRuntime implements CodexRuntimeLike {
     delete environment.LLM_API_KEY;
     delete environment.CODEX_API_KEY;
     delete environment.OPENAI_API_KEY;
+    delete environment.LLM_BASE_URL;
+    delete environment.OPENAI_BASE_URL;
     delete environment.AMAGINE3D_EVIDENCE_GATE;
     if (request.taskType === 'cad') {
       environment.AMAGINE3D_EVIDENCE_GATE = 'v1';
@@ -317,11 +341,11 @@ export class CodexRuntime implements CodexRuntimeLike {
         },
       },
     };
-    if (this.baseUrl) {
+    if (connection.baseUrl) {
       config.model_provider = 'amagine3d_gateway';
       config.model_providers = {
         amagine3d_gateway: {
-          base_url: this.baseUrl,
+          base_url: connection.baseUrl,
           env_key: 'CODEX_API_KEY',
           name: 'Amagine3D Responses gateway',
           request_max_retries: 2,
@@ -332,8 +356,8 @@ export class CodexRuntime implements CodexRuntimeLike {
       };
     }
     const client = this.clientFactory({
-      apiKey: this.apiKey,
-      ...(this.baseUrl ? { baseUrl: this.baseUrl } : {}),
+      apiKey: connection.apiKey,
+      ...(connection.baseUrl ? { baseUrl: connection.baseUrl } : {}),
       config,
       configOverrides: [
         `permissions.${SESSION_PERMISSION_PROFILE}.filesystem={${JSON.stringify(join(this.workspaceRoot, 'sessions'))}="deny"}`,

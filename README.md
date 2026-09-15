@@ -184,6 +184,26 @@ reports search configuration and an `untested` verification status without makin
 provider calls. Do not expose API keys through client-side environment variables
 or commit `.env`.
 
+Custom Responses gateways configured through either base-URL variable automatically
+use tool-image compatibility transport; no additional setting is required. Typed
+images in tool results are carried in following user image messages, with a tool-data
+provenance marker. Tool text and call IDs remain in their original roles, and existing
+user attachments are unchanged. This avoids gateways treating tool images as plain
+JSON text; it does not establish that the selected model can see images. Verify the
+actual attachment and native `view_image` paths with:
+
+```bash
+npm run doctor -- --vision
+```
+
+Without a custom base URL, native direct transport is unchanged.
+
+The compatibility endpoint is per-turn, loopback-only and authenticated with an
+ephemeral token; the upstream API key stays in the parent runtime. It forwards only
+to the configured Responses endpoint, preserves streaming and upstream errors, and
+closes when the turn finishes or is cancelled. Only request JSON needs buffering
+for image conversion; responses are streamed rather than accumulated.
+
 Each turn runs with `workspace-write` and `approvalPolicy: never`: Codex can
 work freely inside that session's execution directory without UI approval, but
 writes outside it remain sandboxed. Spawned commands receive a minimal shell

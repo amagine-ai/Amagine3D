@@ -46,7 +46,7 @@ const checks: Array<{ detail: string; name: string; ready: boolean }> = [
 try {
   const runtime = await CodexRuntime.create(projectRoot);
   checks.push({
-    detail: `${runtime.modelName}; ${runtime.skills.length} skills`,
+    detail: `${runtime.modelName}; ${runtime.skills.length} skills; tool images: ${runtime.toolImageTransport}`,
     name: 'Amagine3D Agent runtime',
     ready: runtime.runtimeReady && runtime.skillDiagnostics.length === 0,
   });
@@ -55,7 +55,7 @@ try {
   }
   if (process.argv.includes('--vision')) {
     if (!runtime.configured) throw new Error('Vision probe requires a configured API key.');
-    console.log('Vision probe makes two model requests; diagnostic files stay in isolated local sessions.');
+    console.log('Vision probe makes two model diagnostic turns; diagnostic files stay in isolated local sessions.');
     for (const result of await probeVision(runtime, console.log)) {
       checks.push({
         name: `Vision (${result.mode})`,
