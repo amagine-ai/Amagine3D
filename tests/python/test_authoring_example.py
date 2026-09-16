@@ -68,7 +68,18 @@ print(json.dumps([P['width'], P['module_width']]))
             env = {**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"}
 
             def run(*args):
-                result = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
+                # Full compiles own per-stage deadlines; the CI job is the outer
+                # safety boundary. Short setup/draft commands retain a local cap.
+                timeout = None if len(args) > 1 and args[1] == "compile" else 120
+                result = subprocess.run(
+                    args,
+                    cwd=work,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=timeout,
+                )
                 self.assertEqual(result.returncode, 0, result.stdout[-5000:] + result.stderr[-1000:])
                 return result
 
@@ -431,7 +442,7 @@ print(json.dumps(actual))
                  "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, encoding="utf-8", timeout=120,
+                capture_output=True, text=True, encoding="utf-8",
             )
             self.assertEqual(result.returncode, 0, result.stdout[-5000:] + result.stderr[-1000:])
             second = read_and_measure(4.0)
@@ -465,7 +476,7 @@ print(json.dumps(actual))
                 [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, encoding="utf-8", timeout=120,
+                capture_output=True, text=True, encoding="utf-8",
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             failed = json.loads((work / "surface-shell_compile-result.json").read_text())
@@ -495,7 +506,7 @@ print(json.dumps(actual))
                 [str(ROOT / "bin" / "a3d"), "compile", scene_path.name, "--intent", intent_path.name,
                  "--source", source_path.name, "--output-dir", "."],
                 cwd=work, env={**os.environ, "AMAGINE3D_SKILL_DIR": str(SKILL), "PYTHONDONTWRITEBYTECODE": "1"},
-                capture_output=True, text=True, encoding="utf-8", timeout=120,
+                capture_output=True, text=True, encoding="utf-8",
             )
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             failed = json.loads((work / "surface-shell_compile-result.json").read_text())

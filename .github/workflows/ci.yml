@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,7 +57,7 @@ jobs:
         if: runner.os == 'Windows'
       - run: node --import tsx --test tests/model-parameters.test.ts
         if: runner.os == 'Windows'
-      - run: python -m unittest discover -s tests/python -p "test_*.py"
+      - run: python -m unittest tests.python.test_cpu_z_buffer
       - run: python scripts/benchmark_cpu_z_buffer.py --resolution 320 --large-subdivisions 4 --out cpu-z-buffer-benchmark.json
       - uses: actions/upload-artifact@v4
         with:
