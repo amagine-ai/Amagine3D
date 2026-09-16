@@ -134,7 +134,7 @@ export function codexPrompt(
           '项目 CLI 的 evidence gate 只拒绝已有完整成功证据且 source/intent/scene/profile 字节完全相同的 draft 或 compile。遇到 `a3d-admission-rejection/v1` 时读取 matchedResult，或实质修改输入后再运行；缺失、不完整或失败证据仍可重试，门控不决定阶段、几何、拓扑或修复策略。',
           '用原生 view_image 读取最新五视图预览。根据实际看到的轮廓、比例、特征尺度、布局和功能关系给出反馈并修改对应参数；无法识别时说明视觉审查未完成，不要用颜色统计冒充看图。',
           '打印方向、支撑、桥接和免支撑结论必须引用当前 compile 的 `printOrientationEvidence` 与 mesh audit；其中的 rotateDegreesXYZ 才是 STL/3MF 的实际语义旋转。`rotated_xy_90deg=false` 只表示排版时没有额外床面 XY 四分之一转，不能覆盖 selected pose 或机器 warning。',
-          '最终回复前读取本轮最新 `*_compile-result.json`。逐字遵守其中的 `status`、`visualReviewRequired` 和 `deliveryReady`；当 readiness 为 false 时，不得声称已完成、可交付或已完成视觉审查。',
+          '最终回复前读取本轮最新 `*_compile-result.json`，如实保留其中的 `status`、`visualReviewRequired` 和 `deliveryReady`。可以报告实际完成的视觉审查及其范围，但这不改变编译器原始状态，也不证明制造或交付就绪；当 deliveryReady 为 false 时不得声称可交付。',
           '在每个主要阶段或耗时工具调用前，用一句简短中文说明当前目标；只描述用户可理解的工作，不复述 shell 命令或内部推理。',
           '不要为了查询 API 主动阅读 `cad_helpers.py` 等内部实现；先使用公开 `a3d` 帮助、guide 或 capability。只有公开接口和具体报错仍不足以定位问题时，才检查最小范围的内部源码。',
           '每个工具调用都必须独立，不依赖上一次 shell 调用留下的变量或目录状态；一次只完成一个清晰操作。若工具包装出现 JavaScript 语法或引号错误，简化调用并立即重试。',

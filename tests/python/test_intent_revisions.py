@@ -271,6 +271,70 @@ class IntentRevisionTests(unittest.TestCase):
         cad_compile._write_repair_state(result, result_path=path)
         self.assertEqual(result["repairDelta"]["resolved"], [issue_id])
 
+    def test_failed_source_does_not_resolve_a_prior_source_defect(self):
+        source = self.root / "build.py"
+        source.write_text("# fixture\n")
+        audit = self.register(self.path, self.original)
+        problem = {
+            "code": "AUTHORING.INVALID",
+            "check": "authoring",
+            "stage": "source",
+            "severity": "error",
+        }
+        result = {
+            "inputs": {"intent": str(self.path), "source": str(source)},
+            "intentRevision": audit,
+            "model": "part",
+            "issues": [problem],
+            "runId": "one",
+            "stages": [{"name": "source", "status": "fail"}],
+        }
+        path = self.root / "part_compile-result.json"
+        state_path = cad_compile._write_repair_state(result, result_path=path)
+        issue_id = json.loads(state_path.read_text())["failed"][0]["id"]
+
+        result.update(issues=[], runId="two")
+        cad_compile._write_repair_state(result, result_path=path)
+        state = json.loads(state_path.read_text())
+        self.assertEqual(result["repairDelta"]["resolved"], [])
+        self.assertEqual(state["blocked"][0]["id"], issue_id)
+        self.assertEqual(state["blocked"][0]["blockedBy"], "NOT_REEVALUATED")
+
+        result.update(runId="three", stages=[{"name": "source", "status": "pass"}])
+        cad_compile._write_repair_state(result, result_path=path)
+        self.assertEqual(result["repairDelta"]["resolved"], [issue_id])
+
+    def test_restored_build_report_resolves_report_availability_issue(self):
+        source = self.root / "build.py"
+        source.write_text("# fixture\n")
+        audit = self.register(self.path, self.original)
+        problem = {
+            "code": "BUILD.REPORT_MISSING",
+            "check": "build-report",
+            "stage": "build-report",
+            "severity": "error",
+        }
+        result = {
+            "artifacts": {},
+            "inputs": {"intent": str(self.path), "source": str(source)},
+            "intentRevision": audit,
+            "model": "part",
+            "issues": [problem],
+            "runId": "one",
+            "stages": [],
+        }
+        path = self.root / "part_compile-result.json"
+        state_path = cad_compile._write_repair_state(result, result_path=path)
+        issue_id = json.loads(state_path.read_text())["failed"][0]["id"]
+
+        result.update(
+            artifacts={"buildReport": {"path": "part_report.json", "sha256": "0" * 64}},
+            issues=[],
+            runId="two",
+        )
+        cad_compile._write_repair_state(result, result_path=path)
+        self.assertEqual(result["repairDelta"]["resolved"], [issue_id])
+
     def test_cross_revision_regression_survives_parameter_adjustment_and_output_directory(self):
         original = deepcopy(self.original)
         item = original["dimensions_mm"]["x"]

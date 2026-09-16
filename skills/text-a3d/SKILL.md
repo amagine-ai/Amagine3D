@@ -158,8 +158,10 @@ that misses material; repeated compiles do not replace geometric reasoning.
 
 When `pass=true`, status is `awaiting-visual-review`, and `deliveryReady=false`,
 stop compiling and inspect the preview. Before replying, read that result and
-report `visualReviewRequired`; never claim done, ready or review complete while
-`deliveryReady=false`. Match support/bridge claims to `printOrientationEvidence`
+report its readiness flags unchanged. You may describe an actual visual review
+and its scope; that does not establish manufacturing or delivery readiness.
+Never claim the model ready while `deliveryReady=false`.
+Match support/bridge claims to `printOrientationEvidence`
 and current mesh-audit warnings; its automatic ranked export pose is evidence,
 not proof of design correctness or support-free printing. `rotated_xy_90deg=false`
 does not cancel `rotateDegreesXYZ`. If inspection finds a defect, change source first.

@@ -311,27 +311,34 @@ class _DeferredSourceDiagnosticRunner(_PassingRunner):
         )
         if stage != "source":
             return command
+        payload = {
+            "schema": "evidence-cad-source-diagnostics/v1",
+            "runId": env_extra["AMAGINE3D_COMPILE_RUN_ID"],
+            "pass": False,
+            "issues": [
+                {
+                    "check": "checked-cut",
+                    "code": "SOURCE.CUT_MISSED_OWNER",
+                    "expected": {"minimumRemovedMm3": ">0"},
+                    "featureId": "part/opening",
+                    "message": "opening cutter does not intersect its owner",
+                    "observed": {
+                        "removedMm3": 0.0,
+                        "sidecarOnlyEvidence": "details " * 10_000,
+                    },
+                    "partId": "part",
+                    "severity": "error",
+                }
+            ],
+        }
+        Path(env_extra["AMAGINE3D_SOURCE_DIAGNOSTICS_PATH"]).write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
         return CommandResult(
             returncode=1,
             elapsed_ms=command.elapsed_ms,
-            output_tail=json.dumps(
-                {
-                    "schema": "evidence-cad-source-diagnostics/v1",
-                    "pass": False,
-                    "issues": [
-                        {
-                            "check": "checked-cut",
-                            "code": "SOURCE.CUT_MISSED_OWNER",
-                            "expected": {"minimumRemovedMm3": ">0"},
-                            "featureId": "part/opening",
-                            "message": "opening cutter does not intersect its owner",
-                            "observed": {"removedMm3": 0.0},
-                            "partId": "part",
-                            "severity": "error",
-                        }
-                    ],
-                }
-            ),
+            output_tail="truncated source output without structured JSON",
         )
 
 

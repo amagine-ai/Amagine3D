@@ -1127,12 +1127,13 @@ def _json_from_tail(output: str) -> dict[str, Any] | None:
 def _is_deferred_source_failure(
     command: CommandResult,
     report_path: Path,
+    diagnostics: dict[str, Any] | None = None,
 ) -> bool:
     """Allow a checked-operation diagnostic candidate to reach later audits."""
 
     if command.timed_out or command.returncode in {None, 0} or not report_path.is_file():
         return False
-    payload = _json_from_tail(command.output_tail)
+    payload = diagnostics if diagnostics is not None else _json_from_tail(command.output_tail)
     return bool(
         isinstance(payload, dict)
         and payload.get("schema") == SOURCE_DIAGNOSTICS_SCHEMA
@@ -2101,6 +2102,7 @@ def _write_repair_state(
         evaluated_stages = {
             stage.get("name") for stage in result.get("stages", [])
             if isinstance(stage, dict) and stage.get("status") in {"pass", "fail"}
+            and not (stage.get("name") == "source" and stage.get("status") == "fail")
         }
         for artifact, stage in (("sourcePreflight", "source-preflight"), ("intentValidation", "intent-validation"), ("sceneValidation", "scene-validation")):
             if artifact in result.get("artifacts", {}):
@@ -2112,7 +2114,14 @@ def _write_repair_state(
         }
         for issue_id in sorted(disappeared):
             record = previous_records[issue_id]
-            if record.get("stage") not in evaluated_stages:
+            report_check_evaluated = (
+                record.get("stage") == "build-report"
+                and "buildReport" in result.get("artifacts", {})
+                and record.get("code") in {
+                    "BUILD.REPORT_MISSING", "BUILD.REPORT_INVALID", "BUILD.REPORT_STALE",
+                }
+            )
+            if record.get("stage") not in evaluated_stages and not report_check_evaluated:
                 blocked.append({**record, "blockedBy": "NOT_REEVALUATED"})
                 current_blocked.add(issue_id)
         disappeared -= current_blocked
@@ -2480,6 +2489,7 @@ def compile_cad(
     intent_unchanged = "intent" not in changed_inputs
     if source_command.timed_out or source_command.returncode != 0:
         structured_errors = 0
+        source_diagnostics = None
         if source_diagnostics_path.exists():
             try:
                 payload = _load_json(source_diagnostics_path, "source diagnostics")
@@ -2493,6 +2503,7 @@ def compile_cad(
                     raise ValueError("source diagnostics are not bound to this compile attempt")
                 result["artifacts"]["sourceDiagnostics"] = _artifact(source_diagnostics_path)
                 _, structured_errors = _record_structured_issues(result, payload, stage="source", default_code="SOURCE.EXECUTION_FAILED")
+                source_diagnostics = payload
                 if "diagnosticCandidate" in payload and intent_unchanged and not source_command.timed_out:
                     try:
                         candidate = payload["diagnosticCandidate"]
@@ -2523,7 +2534,7 @@ def compile_cad(
                 timeout_code="SOURCE.TIMEOUT",
                 internal_code="INTERNAL.SOURCE_RUNNER_ERROR",
             )
-        if not _is_deferred_source_failure(source_command, report_path):
+        if not _is_deferred_source_failure(source_command, report_path, source_diagnostics):
             return _finish(result, result_path=result_path, log_path=log_path)
     if changed_inputs:
         return _finish(result, result_path=result_path, log_path=log_path)

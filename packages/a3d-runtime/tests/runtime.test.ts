@@ -46,7 +46,10 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.match(cadPrompt, /`rotated_xy_90deg=false` 只表示排版时没有额外床面 XY/u);
   assert.match(cadPrompt, /最新 `\*_compile-result\.json`/u);
   assert.match(cadPrompt, /`status`、`visualReviewRequired` 和 `deliveryReady`/u);
-  assert.match(cadPrompt, /不得声称已完成、可交付或已完成视觉审查/u);
+  assert.match(cadPrompt, /可以报告实际完成的视觉审查及其范围/u);
+  assert.match(cadPrompt, /不改变编译器原始状态/u);
+  assert.match(cadPrompt, /deliveryReady 为 false 时不得声称可交付/u);
+  assert.doesNotMatch(cadPrompt, /不得声称已完成、可交付或已完成视觉审查/u);
   assert.match(cadPrompt, /不要为了查询 API/u);
   assert.match(cadPrompt, /公开 `a3d`/u);
   assert.match(cadPrompt, /不复述 shell 命令/u);

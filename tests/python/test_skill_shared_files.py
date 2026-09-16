@@ -146,11 +146,13 @@ class SharedSkillFileTests(unittest.TestCase):
             "`regressed`",
             "`awaiting-visual-review`",
             "`deliveryReady=false`",
-            "`visualReviewRequired`",
+            "report its readiness flags unchanged",
+            "actual visual review and its scope",
+            "does not establish manufacturing or delivery readiness",
+            "Never claim the model ready while `deliveryReady=false`",
             "direct exit status",
             "`printOrientationEvidence`",
             "mesh-audit warnings",
-            "never claim done, ready or review complete",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, normalized)
