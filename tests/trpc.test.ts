@@ -53,6 +53,7 @@ test('serves the JSON contract through tRPC and removes the old REST API', async
     const health = await client.health.query();
     assert.equal(health.apiVersion, API_VERSION);
     assert.equal(health.runtimeReady, false);
+    assert.equal(health.searchBackend, 'disabled');
     assert.equal(health.webSearchConfigured, false);
     assert.equal(health.webSearchEnabled, false);
     assert.equal(health.webSearchVerification, 'untested');
@@ -102,7 +103,8 @@ test('health reports search configuration without claiming provider verification
         python: { executable: null, ready: false, version: null },
         runtimeError: undefined,
         runtime: {
-          configured, modelName: 'test-model', runtimeReady: true, skills: [],
+          configured, modelName: 'test-model', runtimeReady: true,
+          searchBackend: webSearchEnabled ? 'codex-hosted' : 'disabled', skills: [],
           skillDiagnostics: [], stateRoot: '/unused', workspaceRoot: '/unused', webSearchEnabled,
           async runTurn() { throw new Error('Health must not invoke the provider.'); },
         },
@@ -110,6 +112,10 @@ test('health reports search configuration without claiming provider verification
       const health = await caller.health();
       assert.equal(health.webSearchConfigured, configured);
       assert.equal(health.webSearchEnabled, webSearchEnabled);
+      assert.equal(
+        health.searchBackend,
+        webSearchEnabled ? 'codex-hosted' : 'disabled',
+      );
       assert.equal(health.webSearchVerification, 'untested');
     }
   }

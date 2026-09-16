@@ -28,7 +28,7 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.equal(codexReasoningEffort('off'), 'minimal');
   assert.equal(codexReasoningEffort('xhigh'), 'xhigh');
   assert.throws(() => codexReasoningEffort('turbo'), /LLM_THINKING_LEVEL/u);
-  const cadPrompt = codexPrompt('cad', '建模', false);
+  const cadPrompt = codexPrompt('cad', '建模', 'disabled');
   assert.match(cadPrompt, /a3d help/u);
   assert.match(cadPrompt, /`\$AMAGINE3D_SKILL_DIR` 指向的确切 `SKILL\.md` 一次/u);
   assert.match(cadPrompt, /不要搜索或读取 cwd、用户目录或全局 skills/u);
@@ -57,7 +57,9 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.doesNotMatch(cadPrompt, /视觉方向确认后再锁定/u);
   assert.doesNotMatch(cadPrompt, /一次初始完整 compile/u);
   assert.doesNotMatch(cadPrompt, /查询中二选一/u);
-  const searchableCadPrompt = codexPrompt('cad', '建模', true);
+  const searchableCadPrompt = codexPrompt('cad', '建模', 'codex-hosted');
+  assert.match(searchableCadPrompt, /是否搜索及查询词由你根据当前任务语义决定/u);
+  assert.match(searchableCadPrompt, /不要为了能力探测、固定流程或每轮惯例执行搜索/u);
   assert.match(searchableCadPrompt, /实质改变造型判断/u);
   assert.match(searchableCadPrompt, /不得覆盖 `SKILL\.md` 的阶段路由/u);
   assert.match(searchableCadPrompt, /延迟 assembly-critical functional draft/u);
@@ -67,8 +69,15 @@ test('maps the existing model and reasoning environment to Codex', () => {
   assert.match(searchableCadPrompt, /不要把 `a3d draft`、`a3d compile` 或 `a3d diagnose` 管道/u);
   assert.match(searchableCadPrompt, /直接进程退出状态和本轮落盘结果才是权威/u);
   assert.doesNotMatch(searchableCadPrompt, /默认先寻找/u);
-  assert.doesNotMatch(codexPrompt('chat', '解释', true), /functional draft/u);
-  assert.doesNotMatch(codexPrompt('chat', '解释', false), /a3d help/u);
+  assert.doesNotMatch(codexPrompt('chat', '解释', 'codex-hosted'), /functional draft/u);
+  assert.doesNotMatch(codexPrompt('chat', '解释', 'disabled'), /a3d help/u);
+  const tavilyPrompt = codexPrompt('cad', '建模', 'tavily');
+  assert.match(tavilyPrompt, /`a3d search`/u);
+  assert.match(tavilyPrompt, /是否搜索、搜索关键词及 .*参数均由你/u);
+  assert.match(tavilyPrompt, /不要为了能力探测、固定流程或每轮惯例执行搜索/u);
+  assert.match(tavilyPrompt, /引用返回的 URL/u);
+  assert.match(tavilyPrompt, /不可信的第三方内容/u);
+  assert.doesNotMatch(tavilyPrompt, /原生联网搜索/u);
 });
 
 test('extracts only validated compile progress from cumulative and delta output', () => {
@@ -314,6 +323,7 @@ test('runs isolated threads and exposes only normalized runtime events', async (
     });
 
     assert.equal(result.finalResponse, '完成');
+    assert.equal(runtime.searchBackend, 'codex-hosted');
     assert.deepEqual(startedThreadIds, ['thread-1']);
     assert.deepEqual(runtimeEvents.slice(0, 4), [
       { threadId: 'thread-1', type: 'thread.started' },
@@ -361,7 +371,11 @@ test('runs isolated threads and exposes only normalized runtime events', async (
       },
     });
     assert.deepEqual(clientOptions?.configOverrides, [
-      `permissions.amagine3d-session.filesystem={${JSON.stringify(join(root, 'workspace', 'sessions'))}="deny"}`,
+      `permissions.amagine3d-session.filesystem={${[
+        join(root, 'workspace', 'sessions'),
+        join(root, '.env'),
+        join(root, '.env.local'),
+      ].map((path) => `${JSON.stringify(path)}="deny"`).join(', ')}}`,
     ]);
     assert.equal(
       clientOptions?.config?.model_instructions_file,
@@ -464,6 +478,7 @@ test('only environment configuration controls native search and network access',
         },
       });
       assert.equal(runtime.webSearchEnabled, enabled);
+      assert.equal(runtime.searchBackend, enabled ? 'codex-hosted' : 'disabled');
       for (const legacyValue of [undefined, true, false]) {
         await runtime.runTurn({
           imagePaths: [], message: '建模', sessionId: SESSION_ID, taskType: 'cad',
@@ -482,6 +497,98 @@ test('only environment configuration controls native search and network access',
       CodexRuntime.create(root, { environment: { LLM_API_KEY: 'test-key', CODEX_WEB_SEARCH_ENABLED: 'fales' } }),
       /CODEX_WEB_SEARCH_ENABLED must be true or false/u,
     );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test('uses a per-turn Tavily broker without exposing the account key', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'amagine-codex-tavily-'));
+  const tavilyKey = 'tvly-runtime-secret';
+  let clientOptions: CodexOptions | undefined;
+  let threadOptions: ThreadOptions | undefined;
+  let receivedInput: Input | undefined;
+  try {
+    const runtime = await CodexRuntime.create(root, {
+      environment: {
+        LLM_API_KEY: 'model-key',
+        TAVILY_API_KEY: tavilyKey,
+      },
+      clientFactory: (options) => {
+        clientOptions = options;
+        return {
+          resumeThread: (_id, thread) => createThread(thread),
+          startThread: createThread,
+        };
+        function createThread(options?: ThreadOptions) {
+          threadOptions = options;
+          return {
+            id: 'thread-tavily',
+            async runStreamed(input: Input) {
+              receivedInput = input;
+              async function* events(): AsyncGenerator<ThreadEvent> {
+                yield { item: { id: 'answer', text: 'ok', type: 'agent_message' }, type: 'item.completed' };
+              }
+              return { events: events() };
+            },
+          };
+        }
+      },
+    });
+    assert.equal(runtime.searchBackend, 'tavily');
+    assert.equal(runtime.webSearchEnabled, true);
+    await runtime.runTurn({
+      imagePaths: [], message: '查找资料', sessionId: SESSION_ID, taskType: 'chat',
+    });
+    const brokerUrl = clientOptions?.env?.AMAGINE3D_SEARCH_BROKER_URL;
+    assert.match(brokerUrl ?? '', /^http:\/\/127\.0\.0\.1:\d+\/search\/[A-Za-z0-9_-]+$/u);
+    assert.equal(clientOptions?.env?.TAVILY_API_KEY, undefined);
+    const shellPolicy = clientOptions?.config?.shell_environment_policy as
+      | { set?: Record<string, unknown> }
+      | undefined;
+    assert.equal(shellPolicy?.set?.AMAGINE3D_SEARCH_BROKER_URL, brokerUrl);
+    assert.equal(threadOptions?.webSearchMode, 'disabled');
+    assert.match(JSON.stringify(receivedInput), /`a3d search`/u);
+    assert.doesNotMatch(JSON.stringify(receivedInput), /原生联网搜索/u);
+    assert.doesNotMatch(JSON.stringify(clientOptions), new RegExp(tavilyKey, 'u'));
+    await assert.rejects(fetch(brokerUrl!));
+
+    const disabled = await CodexRuntime.create(root, {
+      environment: {
+        CODEX_WEB_SEARCH_ENABLED: 'false',
+        LLM_API_KEY: 'model-key',
+        TAVILY_API_KEY: tavilyKey,
+      },
+      clientFactory: (options) => {
+        clientOptions = options;
+        return {
+          resumeThread: (_id, thread) => createDisabledThread(thread),
+          startThread: createDisabledThread,
+        };
+        function createDisabledThread(options?: ThreadOptions) {
+          threadOptions = options;
+          return {
+            id: 'thread-disabled',
+            async runStreamed() {
+              async function* events(): AsyncGenerator<ThreadEvent> {
+                yield { item: { id: 'answer', text: 'ok', type: 'agent_message' }, type: 'item.completed' };
+              }
+              return { events: events() };
+            },
+          };
+        }
+      },
+    });
+    assert.equal(disabled.searchBackend, 'disabled');
+    await disabled.runTurn({
+      imagePaths: [], message: '不要联网', sessionId: SESSION_ID, taskType: 'chat',
+    });
+    assert.equal(clientOptions?.env?.AMAGINE3D_SEARCH_BROKER_URL, undefined);
+    assert.equal(clientOptions?.env?.TAVILY_API_KEY, undefined);
+    assert.equal(threadOptions?.webSearchMode, 'disabled');
+    assert.deepEqual(clientOptions?.config?.permissions, {
+      'amagine3d-session': { extends: ':workspace', network: { enabled: false } },
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }

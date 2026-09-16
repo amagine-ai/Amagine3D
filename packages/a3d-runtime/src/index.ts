@@ -30,6 +30,7 @@ export {
   type CodexRuntimeLike,
   type CodexTurnRequest,
   type CodexTurnResult,
+  type RuntimeSearchBackend,
   type RuntimeSkillSummary,
   type RuntimeTaskType,
 } from './runtime.ts';

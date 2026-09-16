@@ -43,7 +43,7 @@ test('vision diagnostic distinguishes image perception, unavailable tools and no
       'wrapped-unrelated', 'wrong-call-id', 'unavailable', 'no-image', 'no-log', 'commands', 'error',
     ] as const) {
       const runtime: CodexRuntimeLike = {
-        configured: true, modelName: 'test-model', runtimeReady: true,
+        configured: true, modelName: 'test-model', runtimeReady: true, searchBackend: 'codex-hosted',
         skillDiagnostics: [], skills: [], stateRoot: join(root, 'state'), webSearchEnabled: true, workspaceRoot: join(root, 'workspace'),
         async runTurn(request) {
           assert.equal('webSearchEnabled' in request, false);

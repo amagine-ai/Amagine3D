@@ -43,6 +43,7 @@ function healthResponse(context: TrpcContext): HealthResponse {
     python,
     ...(runtimeError ? { runtimeError } : {}),
     runtimeReady: Boolean(runtime),
+    searchBackend: runtime?.searchBackend ?? 'disabled',
     skills: runtime ? [...runtime.skills] : [],
     webSearchConfigured: Boolean(runtime?.configured && runtime.runtimeReady),
     webSearchEnabled: runtime?.webSearchEnabled ?? false,

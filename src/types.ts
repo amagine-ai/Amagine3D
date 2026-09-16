@@ -187,7 +187,8 @@ export interface HealthResponse {
   runtimeError?: string;
   runtimeReady: boolean;
   skills: SkillSummary[];
-  /** Native search can be enabled; this does not verify provider tool support. */
+  searchBackend: 'codex-hosted' | 'disabled' | 'tavily';
+  /** Web research can be enabled; health does not invoke its configured backend. */
   webSearchConfigured: boolean;
   webSearchEnabled: boolean;
   webSearchVerification: 'untested';

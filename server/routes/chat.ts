@@ -71,6 +71,9 @@ function commandActivity(command: string): LocalizedText {
   if (/\ba3d\s+compile\b/u.test(command)) {
     return localizedLabel('Compiling and validating CAD', '正在编译并检查 CAD');
   }
+  if (/\ba3d\s+search\b/u.test(command)) {
+    return localizedLabel('Searching web references', '正在搜索网络资料');
+  }
   if (/\ba3d\s+reference\b/u.test(command)) {
     return localizedLabel('Analyzing the reference image', '正在分析参考图');
   }
@@ -134,7 +137,10 @@ function compileProgressText(
 
 function itemActivity(item: RuntimeItem): StepActivity | undefined {
   if (item.type === 'command_execution') {
-    return { localizedLabel: commandActivity(item.command), stage: 'command' };
+    return {
+      localizedLabel: commandActivity(item.command),
+      stage: /\ba3d\s+search\b/u.test(item.command) ? 'web-search' : 'command',
+    };
   }
   if (item.type === 'file_change') {
     return {
@@ -184,10 +190,15 @@ function completedItemActivity(
       (item.exitCode === undefined || item.exitCode === 0);
     return {
       localizedLabel: succeeded
-        ? localizedLabel(
-            'A3D is analyzing the tool result',
-            'A3D 正在分析执行结果',
-          )
+        ? /\ba3d\s+search\b/u.test(item.command)
+          ? localizedLabel(
+              'A3D is analyzing the search results',
+              'A3D 正在分析搜索结果',
+            )
+          : localizedLabel(
+              'A3D is analyzing the tool result',
+              'A3D 正在分析执行结果',
+            )
         : localizedLabel(
             'The tool failed; A3D is trying to repair the issue',
             '工具执行未成功，A3D 正在尝试修复',

@@ -31,6 +31,7 @@ test('streams one native Codex turn without server-side repair prompts', async (
     configured: true,
     modelName: 'openai/test-model',
     runtimeReady: true,
+    searchBackend: 'codex-hosted',
     skillDiagnostics: [],
     skills: [],
     stateRoot,
@@ -142,6 +143,25 @@ test('streams one native Codex turn without server-side repair prompts', async (
           type: 'item.completed',
         },
         {
+          item: {
+            command: 'a3d search "private-query-sentinel"',
+            id: 'search-1',
+            status: 'in_progress',
+            type: 'command_execution',
+          },
+          type: 'item.started',
+        },
+        {
+          item: {
+            command: 'a3d search "private-query-sentinel"',
+            exitCode: 0,
+            id: 'search-1',
+            status: 'completed',
+            type: 'command_execution',
+          },
+          type: 'item.completed',
+        },
+        {
           item: { id: 'answer-1', text: '模', type: 'agent_message' },
           type: 'item.updated',
         },
@@ -189,6 +209,7 @@ test('streams one native Codex turn without server-side repair prompts', async (
     assert.equal(terminal.content, '模型完成');
     const streamedBody = JSON.stringify(events);
     assert.doesNotMatch(streamedBody, /a3d compile/u);
+    assert.doesNotMatch(streamedBody, /private-query-sentinel/u);
     assert.doesNotMatch(streamedBody, /internal compiler output/u);
     assert.deepEqual(
       events
@@ -207,6 +228,8 @@ test('streams one native Codex turn without server-side repair prompts', async (
         '正在检查可打印网格',
         '正在检查产物新鲜度',
         '工具执行未成功，A3D 正在尝试修复',
+        '正在搜索网络资料',
+        'A3D 正在分析搜索结果',
         '正在组织回复',
         '正在整理生成文件',
         '已发现 0 个工作区文件',
@@ -229,6 +252,8 @@ test('streams one native Codex turn without server-side repair prompts', async (
         'Checking printable meshes',
         'Checking artifact freshness',
         'The tool failed; A3D is trying to repair the issue',
+        'Searching web references',
+        'A3D is analyzing the search results',
         'Organizing the response',
         'Collecting generated files',
         '0 workspace files discovered',
@@ -288,6 +313,7 @@ test('does not require Python for a plain Codex chat turn', async () => {
     configured: true,
     modelName: 'openai/test-model',
     runtimeReady: true,
+    searchBackend: 'disabled',
     skillDiagnostics: [],
     skills: [],
     stateRoot: join(root, 'state'),
@@ -339,6 +365,7 @@ test('streams Codex failures without aborting the settled runtime', async () => 
     configured: true,
     modelName: 'openai/test-model',
     runtimeReady: true,
+    searchBackend: 'codex-hosted',
     skillDiagnostics: [],
     skills: [],
     stateRoot: join(root, 'state'),

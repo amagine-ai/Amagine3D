@@ -50,6 +50,11 @@ try {
     name: 'Amagine3D Agent runtime',
     ready: runtime.runtimeReady && runtime.skillDiagnostics.length === 0,
   });
+  checks.push({
+    detail: `${runtime.searchBackend}; provider availability untested`,
+    name: 'Web research backend',
+    ready: true,
+  });
   for (const diagnostic of runtime.skillDiagnostics) {
     console.warn(`Skill warning: ${diagnostic}`);
   }
