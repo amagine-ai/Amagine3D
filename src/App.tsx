@@ -13,18 +13,18 @@ const copy = {
     closeStorage: 'Close storage panel',
     language: 'Language',
     licenses: 'Licenses',
+    navigation: 'Primary navigation',
     openStorage: 'Open storage panel',
     storage: 'Storage',
-    title: 'Smart Hardware Enclosure 3D Design Studio',
   },
   zh: {
     chooseLanguage: '选择语言',
     closeStorage: '关闭存储面板',
     language: '语言',
     licenses: '许可证',
+    navigation: '主导航',
     openStorage: '打开存储面板',
     storage: '存储',
-    title: '智能硬件外壳3D设计工坊',
   },
 } as const;
 
@@ -46,10 +46,7 @@ export function App() {
     <main className={appStyles.page}>
       <header className={appStyles.appBar}>
         <BrandLink />
-        <div className={appStyles.routeTitle}>
-          <span>{t.title}</span>
-        </div>
-        <nav aria-label={t.title}>
+        <nav aria-label={t.navigation}>
           <a className={appStyles.licenseLink} href="/licenses">
             <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
               <path d="M7 3.75h7l3 3V20.25H7z" />

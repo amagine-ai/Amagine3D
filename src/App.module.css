@@ -23,25 +23,6 @@
   backdrop-filter: blur(16px);
 }
 
-.routeTitle {
-  display: none;
-  min-width: 0;
-  justify-items: start;
-  padding-inline-start: var(--space-md);
-  border-inline-start: var(--rule-thin) solid var(--color-rule);
-}
-
-.routeTitle span {
-  overflow: hidden;
-  max-width: 100%;
-  color: var(--color-ink);
-  font-size: var(--text-sm);
-  font-weight: 560;
-  letter-spacing: -0.015em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .appBar nav {
   display: flex;
   align-items: center;
@@ -197,14 +178,6 @@
 }
 
 @media (min-width: 40rem) {
-  .appBar {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .routeTitle {
-    display: grid;
-  }
-
   .appBar nav {
     gap: var(--space-sm);
   }
