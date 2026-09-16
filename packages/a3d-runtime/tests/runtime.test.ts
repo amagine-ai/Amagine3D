@@ -335,11 +335,8 @@ test('runs isolated threads and exposes only normalized runtime events', async (
       },
     ]);
     assert.doesNotMatch(JSON.stringify(runtimeEvents), /private compiler output/u);
-    assert.equal(runtime.toolImageTransport, 'gateway-compatibility');
-    assert.notEqual(clientOptions?.apiKey, 'test-key');
-    assert.ok(clientOptions?.apiKey);
-    assert.match(clientOptions?.baseUrl ?? '', /^http:\/\/127\.0\.0\.1:\d+$/u);
-    assert.equal(clientOptions?.env?.LLM_BASE_URL, undefined);
+    assert.equal(clientOptions?.apiKey, 'test-key');
+    assert.equal(clientOptions?.baseUrl, 'https://gateway.example/v1');
     assert.equal(clientOptions?.env?.LLM_API_KEY, undefined);
     assert.equal(clientOptions?.env?.CODEX_API_KEY, undefined);
     assert.equal(clientOptions?.config?.allow_login_shell, false);
@@ -374,7 +371,7 @@ test('runs isolated threads and exposes only normalized runtime events', async (
     assert.equal(clientOptions?.config?.model_provider, 'amagine3d_gateway');
     assert.deepEqual(clientOptions?.config?.model_providers, {
       amagine3d_gateway: {
-        base_url: clientOptions?.baseUrl,
+        base_url: 'https://gateway.example/v1',
         env_key: 'CODEX_API_KEY',
         name: 'Amagine3D Responses gateway',
         request_max_retries: 2,
@@ -467,14 +464,11 @@ test('only environment configuration controls native search and network access',
         },
       });
       assert.equal(runtime.webSearchEnabled, enabled);
-      assert.equal(runtime.toolImageTransport, 'native');
       for (const legacyValue of [undefined, true, false]) {
         await runtime.runTurn({
           imagePaths: [], message: '建模', sessionId: SESSION_ID, taskType: 'cad',
           ...(legacyValue === undefined ? {} : { threadId: 'thread-search', webSearchEnabled: legacyValue }),
         });
-        assert.equal(clientOptions?.apiKey, 'test-key');
-        assert.equal(clientOptions?.baseUrl, undefined);
         assert.equal(threadOptions?.webSearchMode, enabled ? 'live' : 'disabled');
         assert.deepEqual(clientOptions?.config?.permissions, {
           'amagine3d-session': { extends: ':workspace', network: { enabled } },
