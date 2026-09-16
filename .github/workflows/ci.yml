@@ -9,9 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  node-verify:
+    name: Node verify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,9 +24,48 @@ jobs:
       - run: npm run typecheck
       - run: npm run python:setup
       - run: npm test
-      - run: npm run test:python
       - run: npm run build
       - run: npm audit --audit-level=high
+
+  python-unit:
+    name: Python unit (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit-a, unit-b]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - run: node scripts/setup-python.mjs --quiet
+      - run: node scripts/test-python.mjs --suite ${{ matrix.suite }}
+
+  cad-integration:
+    name: CAD integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [cad-surface, cad-module, cad-basic]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - run: node scripts/setup-python.mjs --quiet
+      - run: node scripts/test-python.mjs --suite ${{ matrix.suite }}
 
   cpu-renderer:
     name: CPU renderer (${{ matrix.os }})
@@ -63,3 +103,24 @@ jobs:
         with:
           name: cpu-z-buffer-benchmark-${{ matrix.os }}
           path: cpu-z-buffer-benchmark.json
+
+  verify:
+    name: verify
+    if: always()
+    needs: [node-verify, python-unit, cad-integration, cpu-renderer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI shard
+        env:
+          NODE_RESULT: ${{ needs.node-verify.result }}
+          PYTHON_RESULT: ${{ needs.python-unit.result }}
+          CAD_RESULT: ${{ needs.cad-integration.result }}
+          CPU_RESULT: ${{ needs.cpu-renderer.result }}
+        run: |
+          printf 'node=%s python=%s cad=%s cpu=%s\n' \
+            "$NODE_RESULT" "$PYTHON_RESULT" "$CAD_RESULT" "$CPU_RESULT"
+          test "$NODE_RESULT" = success
+          test "$PYTHON_RESULT" = success
+          test "$CAD_RESULT" = success
+          test "$CPU_RESULT" = success
