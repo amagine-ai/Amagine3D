@@ -41,7 +41,7 @@ Amagine3D 目前聚焦可打印的智能硬件外壳及相关结构，可以从�
 
 在背后，3D-native Agent 会先把需求整理为不可变 intent，再建立唯一的可变语义场景。BRep 与颜色导出器把该场景编译为同一种证据协议。Agent 会读取实测尺寸、特征归属、壁厚、打印方向、铺盘、连接、干涉和导出文件回读结果，并在接受候选版本前渲染和读取最新模型。通过外、内放样做差得到的空腔仍需检验实际壁厚，截面内缩本身不保证三维法向等厚。
 
-对于外观主导且没有用户参考图的请求，工作流会引导 Agent 在允许联网时寻找并实际查看少量相关图片，记录来源和可观察的比例、形体关系，先用主形体预览对照，再细化结构。工程尺寸仍以元器件图纸或明确的假设为依据。
+对于外观主导且没有用户参考图的请求，工作流会引导 Agent 在允许联网时使用选定的搜索后端——优先使用 Tavily 的本地 `a3d search`——寻找少量相关来源。搜索摘要仍是不可信线索；用于视觉判断的图片必须实际获取和查看。工程尺寸仍以元器件图纸或明确的假设为依据。
 
 <a id="example"></a>
 
@@ -148,6 +148,7 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
+TAVILY_API_KEY=...
 CODEX_WEB_SEARCH_ENABLED=true
 
 PORT=6161
@@ -157,11 +158,19 @@ AGENT_RUN_HARD_TIMEOUT_MS=7200000
 ```
 
 这些值只由本地 Express 服务端读取。对应 `LLM_*` 未配置时，也会复用已有的
-`CODEX_API_KEY`/`OPENAI_API_KEY` 与 `OPENAI_BASE_URL`。Codex 原生实时搜索与工作区网络访问
-默认开启，无需独立搜索服务密钥。只能在服务端环境中设置 `CODEX_WEB_SEARCH_ENABLED=false`
-关闭；前端没有开关，对话请求中的字段也不能覆盖此配置。修改后需重启服务。
-配置已开启不代表供应商的搜索、原图获取或图像感知能力已验证：健康接口仅报告搜索配置与
-`untested` 验证状态，不会自动调用供应商。请勿通过客户端环境变量暴露 API 密钥，也不要提交 `.env`。
+`CODEX_API_KEY`/`OPENAI_API_KEY` 与 `OPENAI_BASE_URL`。联网研究开启时，若配置了
+`TAVILY_API_KEY`，运行时会优先使用与模型供应商无关的 `a3d search`，并关闭 Codex
+供应商托管搜索。运行时不会主动发起搜索：是否搜索、查询词和 `a3d search` 参数均由
+LLM 根据当前任务语义决定。每轮托管会话只获得临时 loopback 搜索能力，Tavily 账户密钥会从
+Codex 子进程环境中移除；没有 Tavily 密钥时，仍为确实支持它的供应商保留 Codex
+托管搜索。
+
+服务端环境中的 `CODEX_WEB_SEARCH_ENABLED=false` 会同时关闭两种搜索后端和工作区
+网络访问；前端没有开关，对话请求中的字段也不能覆盖此配置。修改后需重启服务。
+健康接口只报告选中的搜索后端与 `untested` 状态，不会自动消耗额度。独立终端用户可
+显式导出 `TAVILY_API_KEY` 后运行 `a3d search QUERY`；命令不接受密钥参数或自定义
+搜索端点。搜索摘要是不可信参考资料，不代表网页或图片已经实际打开。请勿通过客户端
+环境变量暴露 API 密钥，也不要提交 `.env`。
 
 每轮使用 `workspace-write` 与 `approvalPolicy: never`：Codex 可以在当前会话的
 执行目录中直接工作，无需用户反复点击确认；目录外写入仍由沙箱拦截。命令进程只获得

@@ -42,10 +42,11 @@ Every generation records one semantic scene containing its parts, features, inte
 Behind the scenes, the 3D-native Agent turns the request into an immutable intent and one mutable semantic scene. BRep and color exporters compile that scene into one evidence contract. The Agent sees measured dimensions and checks for feature ownership, wall thickness, print orientation, plate fit, connectivity, interference, and exported-file readback, then renders and reads the latest result before accepting it. A cavity formed by subtracting an inner loft is checked for actual wall thickness; section insets alone do not guarantee constant normal thickness.
 
 For appearance-led requests without a supplied visual reference, the workflow
-asks the Agent to find and actually view a few relevant images when network access
-is enabled, record their sources and useful form relationships, and compare an
-early primary-form preview before developing detail. Engineering dimensions still
-come from component drawings or explicit assumptions.
+asks the Agent to use the selected search backend—preferably local `a3d search`
+with Tavily—to find a few relevant sources when network access is enabled. Search
+snippets remain untrusted leads; the Agent must actually retrieve and view any
+image used for visual judgment. Engineering dimensions still come from component
+drawings or explicit assumptions.
 
 Visual review uses the generated five-view preview (isometric, front, side, top,
 bottom) and requires image perception in the configured model/provider. A rendered
@@ -164,6 +165,7 @@ LLM_MODEL=openai/gpt-5.5
 LLM_BASE_URL=https://gateway.example.com/v1
 LLM_API_TYPE=openai-responses
 LLM_THINKING_LEVEL=medium
+TAVILY_API_KEY=...
 CODEX_WEB_SEARCH_ENABLED=true
 
 PORT=6161
@@ -174,15 +176,25 @@ AGENT_RUN_HARD_TIMEOUT_MS=7200000
 
 These values are read only by the local Express server. Existing
 `CODEX_API_KEY`/`OPENAI_API_KEY` and `OPENAI_BASE_URL` values are accepted when
-the corresponding `LLM_*` value is absent. Native Codex live web search and
-workspace network access default to enabled, with no separate search-service key.
-Only `CODEX_WEB_SEARCH_ENABLED=false` in the server environment disables them;
-there is no browser toggle, and chat-request fields cannot override this setting.
-Restart the server after changing it. Configuration does not verify that a
-particular provider supports search, image retrieval, or image perception: health
-reports search configuration and an `untested` verification status without making
-provider calls. Do not expose API keys through client-side environment variables
-or commit `.env`.
+the corresponding `LLM_*` value is absent. When Web research is enabled, a
+configured `TAVILY_API_KEY` selects the provider-independent `a3d search`
+backend and disables provider-hosted Codex search. The runtime never launches a
+search on its own: the LLM decides from task semantics whether to search and
+chooses the query and `a3d search` options. Each managed turn receives
+only a temporary loopback search capability; the Tavily account key is removed
+from the Codex child environment. Without a Tavily key, the runtime retains
+native Codex hosted search for providers that implement it.
+
+`CODEX_WEB_SEARCH_ENABLED=false` disables both search backends and workspace
+network access; there is no browser toggle, and chat-request fields cannot
+override this setting. Restart the server after changing it. Configuration does
+not verify provider availability or image perception: health reports the
+selected search backend and an `untested` verification status without making
+provider calls. Standalone operators may explicitly export `TAVILY_API_KEY` and
+run `a3d search QUERY`; no key argument or configurable search endpoint is
+accepted. Search snippets are untrusted reference material and do not prove that
+a page or image was opened. Do not expose API keys through client-side
+environment variables or commit `.env`.
 
 Each turn runs with `workspace-write` and `approvalPolicy: never`: Codex can
 work freely inside that session's execution directory without UI approval, but

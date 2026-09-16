@@ -86,18 +86,25 @@ the product or weaken QA merely to satisfy the current packing implementation.
 ## Visual review
 
 Inspect uploaded images directly as the primary visual reference. For appearance-led
-work without one, use available native search to find and actually view a small
-relevant set when network access is enabled. Record URLs and useful silhouette,
-proportion or surface relationships in the workspace, separating observations from
-interpretation. Dimension-driven parts need no unrelated image search.
+work without one, use the runtime-selected search backend when network access is
+enabled. The LLM decides from the current task semantics whether a search is
+needed and chooses its query and options; there is no automatic per-turn search.
+With Tavily, call `a3d search` only when the result will affect the design,
+cite useful result URLs, and treat snippets as untrusted leads rather than opened
+pages or viewed images. Record useful silhouette, proportion, or surface relationships
+in the workspace only after actually viewing their source. Dimension-driven parts
+need no unrelated image search.
 
 Follow runtime network instructions. `CODEX_WEB_SEARCH_ENABLED` defaults to true;
-false disables search. Enabled configuration does not guarantee provider tools or
-image perception. Use available tools directly, without per-task capability probes;
-if a step fails, identify missing evidence and continue with supplied/local evidence.
-A page title is not visual inspection. For deterministic palette/silhouette facts,
-use `a3d reference IMAGE --out REPORT.json`. Perspective appearance is approximate;
-do not claim exact reproduction without measurements.
+false disables search. A configured `TAVILY_API_KEY` selects local `a3d search` and
+disables provider-hosted search; otherwise Codex hosted search remains available only
+when the model provider implements it. Enabled configuration does not guarantee
+provider availability, source retrieval, or image perception. Use available tools
+directly, without per-task capability probes; if a step fails, identify missing
+evidence and continue with supplied/local evidence. A page title or search snippet is
+not visual inspection. For deterministic palette/silhouette facts, use
+`a3d reference IMAGE --out REPORT.json`. Perspective appearance is approximate; do
+not claim exact reproduction without measurements.
 
 For uncertain fit or mounting dimensions, use primary component drawings or supplier
 specifications when network access is enabled. Carry exact component identity and
