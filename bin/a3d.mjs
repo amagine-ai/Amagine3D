@@ -6,6 +6,8 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'n
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { runSearchCommand } from './a3d-search.mjs';
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const skillRoot = join(projectRoot, 'skills', 'text-a3d');
 const python =
@@ -331,6 +333,7 @@ Usage:
   a3d layout BOUNDS.json --profile PROFILE.json [--max-plates N --spacing-mm N --edge-margin-mm N --out PLAN.json]
   a3d scene SCENE.json
   a3d reference IMAGE [--out REPORT.json]
+  a3d search QUERY [--max-results N] [--search-depth MODE] [--topic TOPIC] [--time-range RANGE] [--answer MODE]
   a3d draft SOURCE.py [--intent INTENT.json] [--timeout-seconds 120]
   a3d measure MODEL.step [--section-z MM] [--section-x MM] [--section-y MM] [--out FILE]
   a3d compare BEFORE AFTER --view front [--out FILE] [--report FILE]
@@ -593,45 +596,49 @@ if (command === 'guide') {
   console.log(guides[topic]);
   process.exit(0);
 }
-if (command === 'diagnose') {
-  diagnose(args);
-  process.exit(0);
-}
-if (!(command in commands)) {
-  console.error(`Unknown a3d command: ${command}`);
-  help();
-  process.exit(2);
-}
-if (!existsSync(python)) {
-  console.error('Managed Python is missing. Run npm run python:setup.');
-  process.exit(2);
-}
-const workspaceCommands = new Set(['compile', 'draft', 'measure', 'compare']);
-if (workspaceCommands.has(command) && args.some((arg) => arg === '--workspace' || arg.startsWith('--workspace='))) {
-  console.error(`a3d ${command} fixes --workspace to the current session directory.`);
-  process.exit(2);
-}
-const replay = admissionReplay(command, args);
-if (replay) rejectReplay(replay);
+if (command === 'search') {
+  process.exitCode = await runSearchCommand(args);
+} else {
+  if (command === 'diagnose') {
+    diagnose(args);
+    process.exit(0);
+  }
+  if (!(command in commands)) {
+    console.error(`Unknown a3d command: ${command}`);
+    help();
+    process.exit(2);
+  }
+  if (!existsSync(python)) {
+    console.error('Managed Python is missing. Run npm run python:setup.');
+    process.exit(2);
+  }
+  const workspaceCommands = new Set(['compile', 'draft', 'measure', 'compare']);
+  if (workspaceCommands.has(command) && args.some((arg) => arg === '--workspace' || arg.startsWith('--workspace='))) {
+    console.error(`a3d ${command} fixes --workspace to the current session directory.`);
+    process.exit(2);
+  }
+  const replay = admissionReplay(command, args);
+  if (replay) rejectReplay(replay);
 
-const scriptArgs = [join(skillRoot, commands[command]), ...args];
-if (workspaceCommands.has(command)) scriptArgs.push('--workspace', process.cwd());
-const child = spawn(python, scriptArgs, {
-  cwd: process.cwd(),
-  env: {
-    ...process.env,
-    PYTHONDONTWRITEBYTECODE: '1',
-    PYTHONNOUSERSITE: '1',
-  },
-  stdio: 'inherit',
-});
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => child.kill(signal));
+  const scriptArgs = [join(skillRoot, commands[command]), ...args];
+  if (workspaceCommands.has(command)) scriptArgs.push('--workspace', process.cwd());
+  const child = spawn(python, scriptArgs, {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      PYTHONNOUSERSITE: '1',
+    },
+    stdio: 'inherit',
+  });
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => child.kill(signal));
+  }
+  child.once('error', (error) => {
+    console.error(error.message);
+    process.exitCode = 2;
+  });
+  child.once('exit', (code, signal) => {
+    process.exitCode = code ?? (signal ? 1 : 0);
+  });
 }
-child.once('error', (error) => {
-  console.error(error.message);
-  process.exitCode = 2;
-});
-child.once('exit', (code, signal) => {
-  process.exitCode = code ?? (signal ? 1 : 0);
-});
