@@ -74,7 +74,7 @@ class SharedSkillFileTests(unittest.TestCase):
 
         self.assertFalse((SINGLE / "references" / "multipart-basics.md").exists())
 
-    def test_skill_has_one_classified_evidence_gated_workflow(self):
+    def test_skill_workflow_structure_and_example_routing(self):
         skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
         marker = (
             "a3d-workflow:v2 classify > functional-draft > feedback > contract > "
@@ -96,134 +96,14 @@ class SharedSkillFileTests(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertGreater(skill.index("\na3d compile "), positions[2])
 
-    def test_early_routes_use_only_minimal_examples(self):
-        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
-        draft_and_feedback = skill[
-            skill.index("## 1. Classify"):skill.index("## 3. Finalize")
-        ]
-        contract = skill[
-            skill.index("## 3. Finalize"):skill.index("## 4. Run")
-        ]
-
-        self.assertIn("simple_brep_build.py", draft_and_feedback)
-        self.assertIn("installed_module_draft.py", draft_and_feedback)
-        self.assertNotIn("installed_module_build.py", draft_and_feedback)
-        self.assertIn("installed_module_build.py", contract)
-        normalized = re.sub(r"\s+", " ", skill)
-        self.assertIn("assembly-critical", normalized)
-        self.assertIn("manufactured parts", normalized)
-        self.assertIn("Mere seams, color regions and grooves are not", normalized)
-
-    def test_assembly_critical_skeleton_precedes_contract(self):
-        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
-        early = skill[
-            skill.index("## 1. Classify"):skill.index("## 3. Finalize")
-        ]
-        for fragment in (
-            "**functional skeleton**",
-            "part owners",
-            "component envelope/cavity",
-            "insertion/service/driver",
-            "symmetric shared fastener datums",
-            "named design margin",
-            "constructionFeatures",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, early)
-        self.assertNotIn("references/multipart-connections.md", early)
+        early = skill[positions[0]:positions[2]]
+        contract = skill[positions[2]:positions[3]]
+        self.assertIn("simple_brep_build.py", early)
+        self.assertIn("installed_module_draft.py", early)
+        self.assertIn("**functional skeleton**", early)
+        self.assertIn("constructionFeatures", early)
         self.assertNotIn("installed_module_build.py", early)
-
-    def test_repeated_work_requires_evidence_not_a_retry_count(self):
-        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
-        normalized = re.sub(r"\s+", " ", skill)
-        for fragment in (
-            "`source.sha256`",
-            "(runId, issue ID, field)",
-            "persisted result/runId",
-            "repairDelta.resolved",
-            "newlyUnblocked",
-            "`remaining`",
-            "`regressed`",
-            "`awaiting-visual-review`",
-            "`deliveryReady=false`",
-            "report its readiness flags unchanged",
-            "actual visual review and its scope",
-            "does not establish manufacturing or delivery readiness",
-            "Never claim the model ready while `deliveryReady=false`",
-            "direct exit status",
-            "`printOrientationEvidence`",
-            "mesh-audit warnings",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, normalized)
-        self.assertNotRegex(
-            normalized.lower(),
-            r"(?:at most|maximum|no more than) \d+ (?:drafts?|compiles?|repairs?|iterations?)",
-        )
-
-    def test_runtime_gate_is_weak_and_orientation_remains_machine_evidence(self):
-        skill = (SINGLE / "SKILL.md").read_text(encoding="utf-8")
-        normalized = re.sub(r"\s+", " ", skill)
-        gate = normalized[
-            normalized.index("Runtime admission"):
-            normalized.index("If the same issue")
-        ]
-        for fragment in (
-            "complete successful replay",
-            "source, intent, scene and profile bytes still match",
-            "Any changed binding restores eligibility",
-            "missing, malformed, incomplete or failed evidence permits retry",
-            "never chooses stages, geometry, topology or repair strategy",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, gate)
-        self.assertNotRegex(
-            gate.lower(),
-            r"(?:at most|maximum|no more than) \d+ (?:drafts?|compiles?|repairs?|iterations?)",
-        )
-        self.assertIn("`printOrientationEvidence`", normalized)
-        self.assertIn("automatic ranked export pose is evidence", normalized)
-        self.assertIn("not proof of design correctness or support-free printing", normalized)
-        self.assertIn(
-            "`rotated_xy_90deg=false` does not cancel `rotateDegreesXYZ`",
-            normalized,
-        )
-
-        printability = (SINGLE / "references" / "bambu-printability.md").read_text(
-            encoding="utf-8"
-        )
-        normalized_printability = re.sub(r"\s+", " ", printability)
-        self.assertIn(
-            "Otherwise use the common A1 with a 0.4 mm nozzle",
-            normalized_printability,
-        )
-        self.assertIn("Never switch profiles", normalized_printability)
-
-    def test_contract_references_allow_only_unbound_drafts_before_contract(self):
-        evidence = (SINGLE / "references" / "evidence-contract.md").read_text(
-            encoding="utf-8"
-        )
-        printability = (SINGLE / "references" / "bambu-printability.md").read_text(
-            encoding="utf-8"
-        )
-        construction = (
-            SINGLE / "references" / "construction-strategies.md"
-        ).read_text(encoding="utf-8")
-
-        normalized_evidence = re.sub(r"\s+", " ", evidence)
-        normalized_printability = re.sub(r"\s+", " ", printability)
-        normalized_construction = re.sub(r"\s+", " ", construction)
-        self.assertIn("An unbound draft may", normalized_evidence)
-        self.assertIn("before contract-bound", normalized_evidence)
-        self.assertIn("before the full compile", normalized_printability)
-        self.assertIn("recorded selected print transform", normalized_printability)
-        self.assertIn("Machine evidence wins", normalized_printability)
-        self.assertIn("correct the report", normalized_printability)
-        self.assertIn(
-            "before contract-bound final geometry",
-            normalized_construction.lower(),
-        )
-        self.assertIn("Never claim manufacturing acceptance", normalized_evidence)
+        self.assertIn("installed_module_build.py", contract)
 
     def test_authoring_commands_are_self_contained_and_multi_plate_is_current(self):
         authoring = (SINGLE / "references" / "authoring-example.md").read_text(

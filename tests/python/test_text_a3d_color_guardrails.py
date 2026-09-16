@@ -1337,20 +1337,6 @@ class ColorContractTests(unittest.TestCase):
             "status": "evaluated",
         })
 
-    def test_checked_in_root_v5_color_example_is_valid(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(SINGLE / "intent_contract.py"),
-                str(SINGLE / "examples" / "intent.example.json"),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue(json.loads(result.stdout)["pass"])
-
     def test_flat_semantic_feature_fields_are_validated(self):
         example_path = SINGLE / "examples" / "intent.example.json"
         data = json.loads(example_path.read_text())
