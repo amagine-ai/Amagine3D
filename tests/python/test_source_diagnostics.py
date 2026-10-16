@@ -79,6 +79,24 @@ class SourceDiagnosticsTests(unittest.TestCase):
 
         self.assertEqual(cad_helpers._DEFERRED_ISSUES, [])
 
+    def test_python_finishing_error_code_distinguishes_empty_selection_from_attempts(self):
+        body = Box(10, 10, 10)
+        with mock.patch.dict(os.environ, {"AMAGINE3D_SOURCE_PHASE": "compile"}):
+            empty_result = cad_helpers.checked_fillet(body, [], 1, "empty-rim")
+            failed_result = cad_helpers.checked_fillet(
+                body, body.edges(), 100, "oversize-rim", allow_reduce=False,
+            )
+
+        empty, failed = cad_helpers._DEFERRED_ISSUES
+        self.assertEqual(empty["code"], "SOURCE.CHECKED_FILLET_FAILED")
+        self.assertEqual(empty["observed"]["selectedEdgeCount"], 0)
+        self.assertEqual(failed["code"], "SOURCE.CHECKED_FILLET_FAILED")
+        self.assertNotIn("selectedEdgeCount", failed["observed"])
+        self.assertEqual(failed["expected"]["requestedMm"], 100)
+        self.assertEqual(len(failed["observed"]["attempts"]), 1)
+        self.assertAlmostEqual(float(empty_result.volume), float(body.volume))
+        self.assertAlmostEqual(float(failed_result.volume), float(body.volume))
+
     def test_deferred_diagnostics_emit_one_structured_issue_bundle(self):
         cad_helpers._DEFERRED_ISSUES.extend(
             [

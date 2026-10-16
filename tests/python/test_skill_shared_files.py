@@ -133,6 +133,29 @@ class SharedSkillFileTests(unittest.TestCase):
                 base = TEXT if relative.startswith("examples/") else PUBLIC
                 self.assertTrue((base / relative).is_file())
 
+    def test_error_guides_are_discoverable_from_runtime_and_links_resolve(self):
+        entry = TEXT / "SKILL.md"
+        guide = PUBLIC / "references" / "error-diagnostics.md"
+        operations = PUBLIC / "references" / "operations"
+        self.assertTrue(guide.is_file())
+        self.assertTrue((operations / "booleans.md").is_file())
+        self.assertTrue((operations / "finishing.md").is_file())
+        self.assertIn("references/error-diagnostics.md", entry.read_text(encoding="utf-8"))
+        self.assertFalse((TEXT / "references" / "error-diagnostics.md").exists())
+
+        for source in (guide, operations / "booleans.md", operations / "finishing.md"):
+            body = source.read_text(encoding="utf-8")
+            for target in re.findall(r"\[[^]]+\]\(([^)#]+\.md)(?:#[^)]*)?\)", body):
+                with self.subTest(source=source.name, target=target):
+                    self.assertTrue((source.parent / target).resolve().is_file())
+
+        boolean_text = (operations / "booleans.md").read_text(encoding="utf-8")
+        finish_text = (operations / "finishing.md").read_text(encoding="utf-8")
+        for fragment in ("observed.booleanWitness", "observed.result.bodyCount", "blockedBy"):
+            self.assertIn(fragment, boolean_text)
+        for fragment in ("observed.selectedEdgeCount", "observed.attempts", "actual.count", "designEvidence"):
+            self.assertIn(fragment, finish_text)
+
     def test_authoring_example_runs_with_separate_skill_and_runtime_roots(self):
         with TemporaryDirectory() as directory:
             workspace = Path(directory)

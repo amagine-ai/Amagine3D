@@ -9,16 +9,16 @@ Read exactly `$AMAGINE3D_SKILL_DIR/SKILL.md` once; never substitute a cwd or glo
 Examples live in `$AMAGINE3D_SKILL_DIR/examples/`; references in `$AMAGINE3D_RUNTIME_DIR/references/`.
 On continuation/compaction use `a3d agent context` and its nextInspect/nextDesignRead; reuse known contracts until capabilityVersion changes.
 Keep editable designs or build123d BRep source and STEP masters in the workspace. Intent owns requirements; source owns controls.
-Ordinary exterior dimensions use nominal ±0.1 mm, checks 0.01 mm precision, unless specified tolerances/fits override them. Never relax targets to pass QA.
+Unless tolerances/fits override them, exterior dimensions use nominal ±0.1 mm and checks 0.01 mm precision. Never relax QA targets.
 
 <!-- a3d-workflow:v2 classify > functional-draft > feedback > contract > compile > evidence-repair -->
 
 ## Draft and review
 
-Prefer DSL for supported geometry, including electronic enclosures. Name the specific unsupported geometry/binding before Python fallback.
-Query only needed contracts in one batch: `a3d agent capabilities '{"designOps":["open_box","hole"]}'` (Python uses symbols).
-Results page by output size, not name count. Follow page.nextRequest with `a3d agent inspect`; do not preload all contracts or references.
-Starter: this apply creates a configurable cube. Full box example: `$AMAGINE3D_SKILL_DIR/examples/open_box.a3d.json`; editing details: `$AMAGINE3D_RUNTIME_DIR/references/parametric-design.md`:
+Prefer DSL, including for enclosures; name unsupported geometry/binding before Python fallback.
+Batch only needed contracts: `a3d agent capabilities '{"designOps":["open_box","hole"]}'` (Python: symbols).
+Results page by output size. Follow page.nextRequest with `a3d agent inspect`; do not preload contracts or references.
+Starter: configurable cube; full: `$AMAGINE3D_SKILL_DIR/examples/open_box.a3d.json`; edit: `$AMAGINE3D_RUNTIME_DIR/references/parametric-design.md`:
 
 Use useful independent controls with bilingual labels/ranges, shared IDs for related geometry, and expressions for derived dimensions. Preserve frozen intent/QA; a range is not a manufacturing guarantee.
 
@@ -32,7 +32,7 @@ Expressions require matching units (`=height - mm(2)`); references use `@body.sh
 For Python, read only `$AMAGINE3D_SKILL_DIR/examples/simple_brep_build.py` or, when assembly changes topology, `$AMAGINE3D_SKILL_DIR/examples/installed_module_draft.py`.
 Use BuildSession with part_names before intent and owned constructionFeatures. Skip Python authoring/intent-writer examples in DSL mode.
 Reserve cavity, openings, support, retention, fastener and insertion/service paths before finishing; keep unknown dimensions reversible.
-For construction decisions that need more detail, read `$AMAGINE3D_RUNTIME_DIR/references/construction-feedback.md`.
+For construction decisions needing detail, read `$AMAGINE3D_RUNTIME_DIR/references/construction-feedback.md`.
 
 ```bash
 a3d agent build '{"phase":"draft","design":"model.a3d.json","revision":"REVISION"}'
@@ -49,12 +49,12 @@ A draft does not establish installation, final dimensions or printability. Repea
 
 After the functional skeleton is stable, declare independent intent, validate and run the first compile before more cosmetic edits. Check LCD support/stop/passage and screw clearance/pilot/engagement now.
 DSL uses `$AMAGINE3D_SKILL_DIR/examples/intent.example.json` for a solid or `$AMAGINE3D_SKILL_DIR/examples/installed_module_intent.json` for collar/screw/component assemblies.
-The assembly JSON pairs with `$AMAGINE3D_SKILL_DIR/examples/installed_module.a3d.json`; read that larger design only when its construction bindings are needed.
+Assembly intent pairs with `$AMAGINE3D_SKILL_DIR/examples/installed_module.a3d.json`; read only when construction bindings are needed.
 Specify independent targets and chosen printer/profile; preserve owners, physical feature bindings and access. Do not copy failed geometry into accepted targets.
 Python final authoring uses `$AMAGINE3D_RUNTIME_DIR/references/authoring-example.md`. Fastening/installation details use multipart-connections.md/installation-checks.md under the runtime references directory when needed.
 Validate before compile: `a3d agent validate '{"design":"model.a3d.json","revision":"REVISION","intent":"model_intent.json"}'` (Python: intent/source/available scene).
 cut/pocket/hole/open_box requirements describe cutters. Each physical part needs solid/separate material in its result chain; observe a pure subtractive final body with zero-offset translate bound to an existing final-body intent feature, then select that result. No additional shape is needed.
-Frozen intent files are immutable, including their bytes. For a legitimate revision use a new file linked to its parent SHA/reason; read `$AMAGINE3D_RUNTIME_DIR/references/evidence-contract.md` only for that revision.
+Frozen intent files are immutable, including their bytes. For revisions, use a new file linked to parent SHA/reason; read `$AMAGINE3D_RUNTIME_DIR/references/evidence-contract.md` then.
 Cosmetic edits retain frozen dimensions and functional targets; compare narrative acceptance with actual controls. Derive installation witnesses from the unchanged component envelope and complete actual path, never reduce them to silence collisions.
 
 ```bash
@@ -62,11 +62,12 @@ a3d agent build '{"phase":"compile","design":"model.a3d.json","revision":"REVISI
 a3d agent build '{"phase":"compile","source":"model_build.py","intent":"model_intent.json","scene":"model_scene.json"}'
 ```
 
-Python scene is a required destination path even when source generates it; DSL generates scene automatically. All task operations accept --args-file.
+Python requires a scene destination even when source generates it; DSL creates one. All task operations accept --args-file.
 
 ## Evidence and conditional details
 
-Read issue IDs, owners, actual/expected and repair hints; use exact report/SHA with agent inspect and page.nextRequest. Do not guess filenames, write report parsers or pipe CAD output through head/tail.
+On failure, read `$AMAGINE3D_RUNTIME_DIR/references/error-diagnostics.md`; load its linked operation guide only as needed. Route request/validation, Boolean or finishing errors by returned evidence, not code prefix alone.
+Read issue IDs, owners, actual/expected and repair hints; use report/SHA with agent inspect and page.nextRequest. Do not guess filenames, write report parsers or pipe CAD output through head/tail.
 Repair owning datums/features; unchanged fully bound success is reused. At pass=true/status=awaiting-visual-review, view the actual preview instead of recompiling.
 Report status, visualReviewRequired, review scope and unresolved warnings accurately; automatic acceptance alone does not prove manufacturing readiness.
 Thin-wall sampling minima/p05 do not prove a false alarm: retain warnings unless a targeted BRep/section check at the risk location establishes the cause.

@@ -701,6 +701,35 @@ export_draft({'body': Box(10, 10, 10)})
         self.assertFalse(rebuilt["reused"])
         self.assertNotEqual(rebuilt["runId"], result["runId"])
 
+    def test_real_finishing_failure_inspect_uses_report_sha_and_preserves_report_bytes(self):
+        (self.root / "model.py").write_text(
+            "from build123d import Box\n"
+            "from build_session import BuildSession\n"
+            "from cad_helpers import checked_fillet\n"
+            "build = BuildSession(__file__, part_names=(\"body\",))\n"
+            "build.add(\"body\", Box(10, 10, 10))\n"
+            "build.finish(\"body\", lambda p: checked_fillet(p, p.edges(), 100, \"round\", allow_reduce=False))\n"
+            "build.export()\n"
+        )
+        failed = self.cli("build", {"phase": "draft", "source": "model.py"})
+        self.assertEqual(failed.returncode, 1, failed.stderr + failed.stdout)
+        result = json.loads(failed.stdout)
+        issue = next(item for item in result["items"] if item.get("code") == "SOURCE.CHECKED_FILLET_FAILED")
+        self.assertIn("id", issue)
+        report = result["report"]
+        path = Path(report["path"])
+        before = path.read_bytes()
+
+        inspected = self.cli("inspect", {
+            "report": report["path"], "sha256": report["sha256"],
+            "issueId": issue["id"], "field": "/observed",
+        })
+        self.assertEqual(inspected.returncode, 0, inspected.stderr + inspected.stdout)
+        detail = json.loads(inspected.stdout)
+        attempts = next(item["value"] for item in detail["items"] if item["field"].endswith("/attempts"))
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(path.read_bytes(), before)
+
     def test_real_compile_keeps_full_evidence_and_binds_string_deliverables(self):
         examples = ROOT / "skills" / "a3d-text" / "examples"
         for name in ("simple_brep_build.py", "simple_brep_intent.py"):
